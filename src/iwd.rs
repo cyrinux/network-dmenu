@@ -58,6 +58,7 @@ fn parse_iwd_networks(
     networks: Vec<String>,
 ) -> Result<(), Box<dyn Error>> {
     let ansi_escape = Regex::new(r"\x1B\[[0-9;]*m.*?\x1B\[0m")?;
+    let full_ansi_escape = Regex::new(r"\x1B\[[0-?]*[ -/]*[@-~]")?;
 
     networks.into_iter().for_each(|network| {
         let line = ansi_escape.replace_all(&network, "").to_string();
@@ -67,6 +68,7 @@ fn parse_iwd_networks(
             let signal = parts.pop().unwrap().trim();
             let security = parts.pop().unwrap().trim();
             let ssid = line[..line.find(security).unwrap()].trim();
+            let ssid = full_ansi_escape.replace_all(ssid, "").to_string();
             let display = format!(
                 "{} {:<25}\t{:<11}\t{}",
                 if connected { "✅" } else { "📶" },
