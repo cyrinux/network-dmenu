@@ -195,7 +195,11 @@ fn action_to_string(action: &ActionType) -> String {
             TailscaleAction::SetEnable(enable) => format_entry(
                 "tailscale",
                 if *enable { "✅" } else { "❌" },
-                "Enable tailscale",
+                if *enable {
+                    "Enable tailscale"
+                } else {
+                    "Disable tailscale"
+                },
             ),
             TailscaleAction::SetShields(enable) => format_entry(
                 "tailscale",
@@ -250,7 +254,11 @@ fn find_selected_action<'a>(
                         == format_entry(
                             "tailscale",
                             if *enable { "✅" } else { "❌" },
-                            "Enable tailscale",
+                            if *enable {
+                                "Enable tailscale"
+                            } else {
+                                "Disable tailscale"
+                            },
                         )
                 }
                 TailscaleAction::SetShields(enable) => {
