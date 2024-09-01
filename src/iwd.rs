@@ -94,7 +94,7 @@ pub fn connect_to_iwd_wifi(
     #[cfg(debug_assertions)]
     println!("Connecting to Wi-Fi network: {ssid} with security {security}");
 
-    if is_known_network(ssid, command_runner)? || security.is_empty() {
+    if is_known_network(ssid, command_runner)? || security == "OPEN" {
         attempt_connection(interface, ssid, None, command_runner)
     } else {
         let password = prompt_for_password(ssid)?;
