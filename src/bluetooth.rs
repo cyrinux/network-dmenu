@@ -15,13 +15,15 @@ pub fn get_paired_bluetooth_devices(
     command_runner: &dyn CommandRunner,
 ) -> Result<Vec<BluetoothAction>, Box<dyn Error>> {
     let output = command_runner.run_command("bluetoothctl", &["devices"])?;
-    let connected_devices = get_connected_devices(command_runner)?;
+    let connected_devices = get_connected_devices(command_runner).unwrap_or_else(|_| vec![]);
 
     if output.status.success() {
-        let devices = parse_bluetooth_devices(&output, &connected_devices)?;
+        let devices =
+            parse_bluetooth_devices(&output, &connected_devices).unwrap_or_else(|_| vec![]);
         Ok(devices)
     } else {
-        Err("Failed to fetch paired Bluetooth devices".into())
+        // Instead of returning an error, return an empty list
+        Ok(vec![])
     }
 }
 
