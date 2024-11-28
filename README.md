@@ -16,7 +16,9 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - Set mullvad exit nodes
 - Customizable actions via a configuration file
 - Bluetooth connect and disconnect to known devices
-- Connect to wifi devices
+- Connect to wifi devices with bare iwd or network-manager
+- Connect to network-manager vpn networks
+- Detect if behind a captive portal and open a browser to connect
 - Execute custom actions
 
 ## Installation
