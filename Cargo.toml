@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "1.6.6"
+version = "1.7.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
@@ -32,3 +32,4 @@ ipaddress = "~0.1"
 reqwest-middleware = "~0.3"
 reqwest-retry = "~0.6"
 tokio = { version = "1", features = ["full"] }
+webbrowser = "1.0.3"

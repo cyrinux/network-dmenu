@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use utils::check_captive_portal;
 
 mod bluetooth;
 mod command;
@@ -21,9 +22,9 @@ use bluetooth::{
 };
 use command::{is_command_installed, RealCommandRunner};
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
-use networkmanager::{connect_to_nm_vpn, disconnect_nm_vpn, get_nm_vpn_networks};
 use networkmanager::{
-    connect_to_nm_wifi, disconnect_nm_wifi, get_nm_wifi_networks, is_nm_connected,
+    connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
+    get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
 };
 use tailscale::{
     check_mullvad, get_mullvad_actions, handle_tailscale_action, is_exit_node_active,
@@ -540,6 +541,7 @@ async fn handle_wifi_action(
                 .arg("connect")
                 .arg(wifi_interface)
                 .status()?;
+            check_captive_portal().await?;
             check_mullvad().await?;
             Ok(status.success())
         }
@@ -549,6 +551,7 @@ async fn handle_wifi_action(
             } else if is_command_installed("iwctl") {
                 connect_to_iwd_wifi(wifi_interface, network, command_runner)?;
             }
+            check_captive_portal().await?;
             check_mullvad().await?;
             Ok(true)
         }
