@@ -21,6 +21,7 @@ use bluetooth::{
 };
 use command::{is_command_installed, RealCommandRunner};
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
+use networkmanager::{connect_to_nm_vpn, disconnect_nm_vpn, get_nm_vpn_networks};
 use networkmanager::{
     connect_to_nm_wifi, disconnect_nm_wifi, get_nm_wifi_networks, is_nm_connected,
 };
@@ -37,6 +38,8 @@ struct Args {
     wifi_interface: String,
     #[arg(long)]
     no_wifi: bool,
+    #[arg(long)]
+    no_vpn: bool,
     #[arg(long)]
     no_bluetooth: bool,
     #[arg(long)]
@@ -68,6 +71,7 @@ enum ActionType {
     Custom(CustomAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
+    Vpn(VpnAction),
     Wifi(WifiAction),
 }
 
@@ -85,6 +89,13 @@ enum WifiAction {
     Connect,
     Disconnect,
     Network(String),
+}
+
+/// Enum representing VPN-related actions.
+#[derive(Debug)]
+enum VpnAction {
+    Connect(String),
+    Disconnect(String),
 }
 
 /// Formats an entry for display in the menu.
@@ -211,6 +222,10 @@ fn action_to_string(action: &ActionType) -> String {
                 },
             ),
         },
+        ActionType::Vpn(vpn_action) => match vpn_action {
+            VpnAction::Connect(network) => format_entry("vpn", "", network),
+            VpnAction::Disconnect(network) => format_entry("vpn", "❌", network),
+        },
         ActionType::Wifi(wifi_action) => match wifi_action {
             WifiAction::Network(network) => format_entry("wifi", "", network),
             WifiAction::Disconnect => format_entry("wifi", "❌", "Disconnect"),
@@ -274,6 +289,10 @@ fn find_selected_action<'a>(
                         )
                 }
             },
+            ActionType::Vpn(vpn_action) => match vpn_action {
+                VpnAction::Connect(network) => action == format_entry("vpn", "", network),
+                VpnAction::Disconnect(network) => action == format_entry("vpn,", "❌", network),
+            },
             ActionType::Wifi(wifi_action) => match wifi_action {
                 WifiAction::Network(network) => action == format_entry("wifi", "", network),
                 WifiAction::Disconnect => action == format_entry("wifi", "❌", "Disconnect"),
@@ -332,6 +351,14 @@ fn get_actions(
         && is_exit_node_active(command_runner)?
     {
         actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
+    }
+
+    if !args.no_vpn && is_command_installed("nmcli") {
+        actions.extend(
+            get_nm_vpn_networks(command_runner)?
+                .into_iter()
+                .map(ActionType::Vpn),
+        );
     }
 
     if !args.no_wifi {
@@ -421,6 +448,31 @@ fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
     }
 }
 
+/// Parses a VPN action string to extract the connection name.
+fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn Error>> {
+    let emoji_pos = action
+        .char_indices()
+        .find(|(_, c)| *c == '✅' || *c == '📶')
+        .map(|(i, _)| i)
+        .ok_or("Emoji not found in action")?;
+
+    let tab_pos = action[emoji_pos..]
+        .char_indices()
+        .find(|(_, c)| *c == '\t')
+        .map(|(i, _)| i + emoji_pos)
+        .ok_or("Tab character not found in action")?;
+
+    let name = action[emoji_pos + tab_pos..].trim();
+
+    #[cfg(debug_assertions)]
+    eprintln!("Failed to connect to VPN network: {name}");
+    let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
+    if parts.is_empty() {
+        return Err("Action format is incorrect".into());
+    }
+    Ok(name)
+}
+
 /// Parses a Wi-Fi action string to extract the SSID and security type.
 fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
     let emoji_pos = action
@@ -440,6 +492,31 @@ fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
     }
     let security = parts[0].trim();
     Ok((ssid, security))
+}
+
+/// Handles a VPN action, such as connecting or disconnecting.
+async fn handle_vpn_action(
+    action: &VpnAction,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    match action {
+        VpnAction::Connect(network) => {
+            if is_command_installed("nmcli") {
+                connect_to_nm_vpn(network, command_runner)?;
+            }
+            check_mullvad().await?;
+            Ok(true)
+        }
+        VpnAction::Disconnect(network) => {
+            let status = if is_command_installed("nmcli") {
+                disconnect_nm_vpn(network, command_runner)?
+            } else {
+                true
+            };
+
+            Ok(status)
+        }
+    }
 }
 
 /// Handles a Wi-Fi action, such as connecting or disconnecting.
@@ -491,6 +568,7 @@ async fn set_action(
         ActionType::Tailscale(mullvad_action) => {
             handle_tailscale_action(mullvad_action, command_runner).await
         }
+        ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
         ActionType::Wifi(wifi_action) => {
             handle_wifi_action(wifi_action, wifi_interface, command_runner).await
         }
@@ -500,11 +578,11 @@ async fn set_action(
     }
 }
 
-/// Sends a notification about the Wi-Fi connection.
-fn notify_connection(ssid: &str) -> Result<(), Box<dyn Error>> {
+/// Sends a notification about the connection.
+fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
     Notification::new()
-        .summary("Wi-Fi")
-        .body(&format!("Connected to {ssid}"))
+        .summary(summary)
+        .body(&format!("Connected to {name}"))
         .show()?;
     Ok(())
 }

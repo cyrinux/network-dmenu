@@ -119,7 +119,7 @@ fn attempt_connection(
     let status = command_runner.run_command("iwctl", &command_args)?.status;
 
     if status.success() {
-        notify_connection(ssid)?;
+        notify_connection("Wi-Fi", ssid)?;
         Ok(true)
     } else {
         #[cfg(debug_assertions)]
