@@ -77,6 +77,30 @@ pub fn convert_network_strength(line: &str) -> String {
     network_strength
 }
 
+/// Prompts for the wifi SSID using `pinentry-gnome3`.
+pub fn prompt_for_ssid() -> Result<String, Box<dyn std::error::Error>> {
+    let mut child = Command::new("pinentry-gnome3")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
+        write!(stdin, "SETDESC Enter SSID\nGETPIN\n")?;
+    }
+
+    let output = child.wait_with_output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let ssid_line = stdout
+        .lines()
+        .find(|line| line.starts_with("D "))
+        .ok_or("SSID not found")?;
+    let ssid = ssid_line.trim_start_matches("D ").trim().to_string();
+
+    Ok(ssid)
+}
+
 /// Prompts the user for a password using `pinentry-gnome3`.
 pub fn prompt_for_password(ssid: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut child = Command::new("pinentry-gnome3")

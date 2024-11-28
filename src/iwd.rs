@@ -87,6 +87,7 @@ fn parse_iwd_networks(
 pub fn connect_to_iwd_wifi(
     interface: &str,
     action: &str,
+    hidden: bool,
     command_runner: &dyn CommandRunner,
 ) -> Result<bool, Box<dyn Error>> {
     let (ssid, security) = parse_wifi_action(action)?;
@@ -94,11 +95,11 @@ pub fn connect_to_iwd_wifi(
     #[cfg(debug_assertions)]
     println!("Connecting to Wi-Fi network: {ssid} with security {security}");
 
-    if is_known_network(ssid, command_runner)? || security == "OPEN" {
-        attempt_connection(interface, ssid, None, command_runner)
+    if is_known_network(ssid, command_runner)? || security == "OPEN" || security == "UNKNOWN" {
+        attempt_connection(interface, ssid, hidden, None, command_runner)
     } else {
         let password = prompt_for_password(ssid)?;
-        attempt_connection(interface, ssid, Some(&password), command_runner)
+        attempt_connection(interface, ssid, hidden, Some(&password), command_runner)
     }
 }
 
@@ -106,10 +107,16 @@ pub fn connect_to_iwd_wifi(
 fn attempt_connection(
     interface: &str,
     ssid: &str,
+    hidden: bool,
     passphrase: Option<&str>,
     command_runner: &dyn CommandRunner,
 ) -> Result<bool, Box<dyn Error>> {
-    let mut command_args: Vec<&str> = vec!["station", interface, "connect", ssid];
+    let mut command_args: Vec<&str> = vec![
+        "station",
+        interface,
+        if hidden { "connect-hidden" } else { "connect" },
+        ssid,
+    ];
 
     if let Some(pwd) = passphrase {
         command_args.push("--passphrase");
@@ -123,7 +130,7 @@ fn attempt_connection(
         Ok(true)
     } else {
         #[cfg(debug_assertions)]
-        eprintln!("Failed to connect to Wi-Fi network: {ssid}");
+        eprintln!("NOOOOO Failed to connect to Wi-Fi network: {ssid}");
         Ok(false)
     }
 }

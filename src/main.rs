@@ -88,6 +88,7 @@ enum SystemAction {
 #[derive(Debug)]
 enum WifiAction {
     Connect,
+    ConnectHidden,
     Disconnect,
     Network(String),
 }
@@ -231,6 +232,7 @@ fn action_to_string(action: &ActionType) -> String {
             WifiAction::Network(network) => format_entry("wifi", "", network),
             WifiAction::Disconnect => format_entry("wifi", "❌", "Disconnect"),
             WifiAction::Connect => format_entry("wifi", "📶", "Connect"),
+            WifiAction::ConnectHidden => format_entry("wifi", "📶", "Connect to hidden network"),
         },
         ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
@@ -298,12 +300,15 @@ fn find_selected_action<'a>(
                 WifiAction::Network(network) => action == format_entry("wifi", "", network),
                 WifiAction::Disconnect => action == format_entry("wifi", "❌", "Disconnect"),
                 WifiAction::Connect => action == format_entry("wifi", "📶", "Connect"),
+                WifiAction::ConnectHidden => {
+                    action == format_entry("wifi", "📶", "Connect to hidden network")
+                }
             },
             ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
                 BluetoothAction::ToggleConnect(device) => action == device,
             },
         })
-        .ok_or("Selected action not found".into())
+        .ok_or(format!("Action not found: {action}").into())
 }
 
 /// Gets the configuration file path.
@@ -369,36 +374,37 @@ fn get_actions(
                     .into_iter()
                     .map(ActionType::Wifi),
             );
+            if is_nm_connected(command_runner, &args.wifi_interface)? {
+                actions.push(ActionType::Wifi(WifiAction::Disconnect));
+            } else {
+                actions.push(ActionType::Wifi(WifiAction::Connect));
+                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
+            }
         } else if is_command_installed("iwctl") {
             actions.extend(
                 get_iwd_networks(&args.wifi_interface, command_runner)?
                     .into_iter()
                     .map(ActionType::Wifi),
             );
-        }
-
-        if is_command_installed("nmcli") {
-            if is_nm_connected(command_runner, &args.wifi_interface)? {
-                actions.push(ActionType::Wifi(WifiAction::Disconnect));
-            } else {
-                actions.push(ActionType::Wifi(WifiAction::Connect));
-            }
-        } else if is_command_installed("iwctl") {
             if is_iwd_connected(command_runner, &args.wifi_interface)? {
                 actions.push(ActionType::Wifi(WifiAction::Disconnect));
             } else {
                 actions.push(ActionType::Wifi(WifiAction::Connect));
+                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
             }
         }
+    }
+
+    if !args.no_wifi
+        && is_command_installed("nmcli")
+        && is_command_installed("nm-connection-editor")
+    {
+        actions.push(ActionType::System(SystemAction::EditConnections));
     }
 
     if !args.no_wifi && is_command_installed("rfkill") {
         actions.push(ActionType::System(SystemAction::RfkillBlock));
         actions.push(ActionType::System(SystemAction::RfkillUnblock));
-    }
-
-    if !args.no_wifi && is_command_installed("nm-connection-editor") {
-        actions.push(ActionType::System(SystemAction::EditConnections));
     }
 
     if !args.no_tailscale && is_command_installed("tailscale") {
@@ -481,11 +487,13 @@ fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
         .find(|(_, c)| *c == '✅' || *c == '📶')
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
+
     let tab_pos = action[emoji_pos..]
         .char_indices()
         .find(|(_, c)| *c == '\t')
         .map(|(i, _)| i + emoji_pos)
         .ok_or("Tab character not found in action")?;
+
     let ssid = action[emoji_pos + 4..tab_pos].trim();
     let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
     if parts.len() < 2 {
@@ -514,7 +522,6 @@ async fn handle_vpn_action(
             } else {
                 true
             };
-
             Ok(status)
         }
     }
@@ -541,15 +548,29 @@ async fn handle_wifi_action(
                 .arg("connect")
                 .arg(wifi_interface)
                 .status()?;
+
             check_captive_portal().await?;
-            check_mullvad().await?;
             Ok(status.success())
+        }
+        WifiAction::ConnectHidden => {
+            let ssid = utils::prompt_for_ssid()?;
+            let network = format_entry("wifi", "📶", &format!("{ssid}\tUNKNOWN\t"));
+            // FIXME: nmcli connect hidden network looks buggy
+            // so we will use iwd directly for the moment
+            // if is_command_installed("nmcli") {
+            //     connect_to_nm_wifi(&network, true, command_runner)?;
+            // } else if is_command_installed("iwctl") {
+            if is_command_installed("iwctl") {
+                connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
+            }
+            check_captive_portal().await?;
+            Ok(true)
         }
         WifiAction::Network(network) => {
             if is_command_installed("nmcli") {
-                connect_to_nm_wifi(network, command_runner)?;
+                connect_to_nm_wifi(network, false, command_runner)?;
             } else if is_command_installed("iwctl") {
-                connect_to_iwd_wifi(wifi_interface, network, command_runner)?;
+                connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
             }
             check_captive_portal().await?;
             check_mullvad().await?;

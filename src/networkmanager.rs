@@ -153,17 +153,32 @@ pub fn connect_to_nm_vpn(
 /// Connects to a Wi-Fi network using NetworkManager.
 pub fn connect_to_nm_wifi(
     action: &str,
+    hidden: bool,
     command_runner: &dyn CommandRunner,
 ) -> Result<bool, Box<dyn Error>> {
     let (ssid, security) = parse_wifi_action(action)?;
     #[cfg(debug_assertions)]
     println!("Connecting to Wi-Fi network: {ssid} with security {security}");
 
-    if is_known_network(ssid, command_runner)? || security.is_empty() {
-        attempt_wifi_connection(ssid, None, command_runner)
-    } else {
-        let password = prompt_for_password(ssid)?;
-        attempt_wifi_connection(ssid, Some(password), command_runner)
+    // Helper function for attempting connection with or without a password
+    let connect = |hidden: bool| -> Result<bool, Box<dyn Error>> {
+        if is_known_network(ssid, command_runner)? || security.is_empty() {
+            attempt_wifi_connection(ssid, hidden, None, command_runner)
+        } else {
+            let password = prompt_for_password(ssid)?;
+            attempt_wifi_connection(ssid, hidden, Some(password), command_runner)
+        }
+    };
+
+    // Main connection logic
+    match connect(hidden) {
+        Ok(true) => Ok(true),
+        Err(_) if hidden => {
+            // Retry with password if the first attempt failed and the network is hidden
+            let password = prompt_for_password(ssid)?;
+            attempt_wifi_connection(ssid, true, Some(password), command_runner)
+        }
+        result => result, // Return the original result for non-hidden networks
     }
 }
 
@@ -194,12 +209,27 @@ fn attempt_vpn_connection(
 
 fn attempt_wifi_connection(
     ssid: &str,
+    hidden: bool,
     password: Option<String>,
     command_runner: &dyn CommandRunner,
 ) -> Result<bool, Box<dyn Error>> {
     let command = match password {
-        Some(ref pwd) => vec!["device", "wifi", "connect", ssid, "password", pwd],
-        None => vec!["device", "wifi", "connect", ssid],
+        Some(ref pwd) => vec![
+            "device",
+            "wifi",
+            "connect",
+            ssid,
+            "password",
+            pwd,
+            if hidden { "hidden yes" } else { "" },
+        ],
+        None => vec![
+            "device",
+            "wifi",
+            "connect",
+            ssid,
+            if hidden { "hidden yes" } else { "" },
+        ],
     };
 
     let status = command_runner.run_command("nmcli", &command)?.status;
