@@ -102,10 +102,10 @@ fn parse_vpn_lines(actions: &mut Vec<VpnAction>, vpn_lines: Vec<String>) {
         let parts: Vec<&str> = line.split(':').collect();
         if parts.len() == 3 {
             let in_use = parts[0].trim();
-            let typ = parts[1].trim();
+            let _type = parts[1].trim();
             let name = parts[2].trim();
-            if !name.is_empty() && (typ == "vpn" || typ == "wireguard") {
-                let display = format!("{}\t{}", if in_use == "yes" { "✅" } else { "📶" }, name,);
+            if !name.is_empty() && (_type == "vpn" || _type == "wireguard") {
+                let display = format!("{} {:<25}", if in_use == "yes" { "✅" } else { "📶" }, name);
                 if in_use == "yes" {
                     actions.push(VpnAction::Disconnect(display));
                 } else {

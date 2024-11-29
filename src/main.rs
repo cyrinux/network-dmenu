@@ -469,14 +469,13 @@ fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn Error>> {
         .map(|(i, _)| i + emoji_pos)
         .ok_or("Tab character not found in action")?;
 
-    let name = action[emoji_pos + tab_pos..].trim();
-
-    #[cfg(debug_assertions)]
-    eprintln!("Failed to connect to VPN network: {name}");
+    let name = action[emoji_pos + 4..tab_pos].trim();
+    println!("name: {name}");
     let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
-    if parts.is_empty() {
+    if parts.len() < 2 {
         return Err("Action format is incorrect".into());
     }
+    let _type = parts[0].trim();
     Ok(name)
 }
 
