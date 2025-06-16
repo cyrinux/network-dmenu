@@ -105,7 +105,7 @@ fn parse_vpn_lines(actions: &mut Vec<VpnAction>, vpn_lines: Vec<String>) {
             let typ = parts[1].trim();
             let name = parts[2].trim();
             if !name.is_empty() && (typ == "vpn" || typ == "wireguard") {
-                let display = format!("{}\t{}", if in_use == "yes" { "✅" } else { "📶" }, name,);
+                let display = format!("{} {}", if in_use == "yes" { "✅" } else { "📶" }, name);
                 if in_use == "yes" {
                     actions.push(VpnAction::Disconnect(display));
                 } else {
