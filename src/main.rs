@@ -456,27 +456,20 @@ fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
 }
 
 /// Parses a VPN action string to extract the connection name.
-fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn Error>> {
+fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
     let emoji_pos = action
         .char_indices()
         .find(|(_, c)| *c == '✅' || *c == '📶')
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
-    let tab_pos = action[emoji_pos..]
-        .char_indices()
-        .find(|(_, c)| *c == '\t')
-        .map(|(i, _)| i + emoji_pos)
-        .ok_or("Tab character not found in action")?;
+    let name_start = emoji_pos + action[emoji_pos..].chars().next().unwrap().len_utf8();
+    let name = action[name_start..].trim();
 
-    let name = action[emoji_pos + tab_pos..].trim();
-
-    #[cfg(debug_assertions)]
-    eprintln!("Failed to connect to VPN network: {name}");
-    let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
-    if parts.is_empty() {
-        return Err("Action format is incorrect".into());
+    if name.is_empty() {
+        return Err("No name found after emoji".into());
     }
+
     Ok(name)
 }
 
