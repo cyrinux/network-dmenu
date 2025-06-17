@@ -1,616 +1,673 @@
-use crate::command::CommandRunner;
 use clap::Parser;
-use dirs::config_dir;
-use notify_rust::Notification;
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use utils::check_captive_portal;
+use std::process;
+use tracing::{debug, error, info};
 
-mod bluetooth;
+// Import modules
 mod command;
+mod config;
+mod constants;
+mod errors;
+mod parsers;
+mod services;
+mod types;
+mod utils;
+
+// Legacy modules for backward compatibility
+mod bluetooth;
 mod iwd;
 mod networkmanager;
 mod tailscale;
-mod utils;
 
-use bluetooth::{
-    get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
-};
-use command::{is_command_installed, RealCommandRunner};
-use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
-use networkmanager::{
-    connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
-    get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
-};
-use tailscale::{
-    check_mullvad, get_mullvad_actions, handle_tailscale_action, is_exit_node_active,
-    is_tailscale_enabled, TailscaleAction,
-};
+use crate::config::ConfigManager;
+use crate::errors::{NetworkMenuError, Result};
+use crate::services::{ActionType, NetworkServiceManager};
+use crate::types::{ActionContext, Config};
 
-/// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value = "wlan0")]
+    /// WiFi interface to use
+    #[arg(long, default_value = "wlan0")]
     wifi_interface: String,
+
+    /// Disable WiFi functionality
     #[arg(long)]
     no_wifi: bool,
+
+    /// Disable VPN functionality
     #[arg(long)]
     no_vpn: bool,
+
+    /// Disable Bluetooth functionality
     #[arg(long)]
     no_bluetooth: bool,
+
+    /// Disable Tailscale functionality
     #[arg(long)]
     no_tailscale: bool,
+
+    /// Verbose logging
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Configuration file path
+    #[arg(long)]
+    config: Option<String>,
 }
 
-/// Configuration structure for the application.
-#[derive(Debug, Deserialize, Serialize)]
-struct Config {
-    #[serde(default)]
-    actions: Vec<CustomAction>,
-    #[serde(default)]
-    exclude_exit_node: Vec<String>,
-    dmenu_cmd: String,
-    dmenu_args: String,
-}
-
-/// Custom action structure for user-defined actions.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct CustomAction {
-    display: String,
-    cmd: String,
-}
-
-/// Enum representing different types of actions that can be performed.
-#[derive(Debug)]
-enum ActionType {
-    Bluetooth(BluetoothAction),
-    Custom(CustomAction),
-    System(SystemAction),
-    Tailscale(TailscaleAction),
-    Vpn(VpnAction),
-    Wifi(WifiAction),
-}
-
-/// Enum representing system-related actions.
-#[derive(Debug)]
-enum SystemAction {
-    EditConnections,
-    RfkillBlock,
-    RfkillUnblock,
-}
-
-/// Enum representing Wi-Fi-related actions.
-#[derive(Debug)]
-enum WifiAction {
-    Connect,
-    ConnectHidden,
-    Disconnect,
-    Network(String),
-}
-
-/// Enum representing VPN-related actions.
-#[derive(Debug)]
-enum VpnAction {
-    Connect(String),
-    Disconnect(String),
-}
-
-/// Formats an entry for display in the menu.
-pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
-    if icon.is_empty() {
-        format!("{action:<10}- {text}")
-    } else {
-        format!("{action:<10}- {icon} {text}")
-    }
-}
-
-/// Returns the default configuration as a string.
-fn get_default_config() -> &'static str {
-    r#"
-dmenu_cmd = "dmenu"
-dmenu_args = "--no-multi"
-
-exclude_exit_node = ["exit1", "exit2"]
-
-[[actions]]
-display = "🛡️ Example"
-cmd = "notify-send 'hello' 'world'"
-"#
-}
-
-/// Main function for the application.
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
+    let result = run().await;
+    
+    match result {
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
-
-    create_default_config_if_missing()?;
-
-    let config = get_config()?; // Load the configuration once
-
-    check_required_commands(&config)?;
-
-    let command_runner = RealCommandRunner;
-    let actions = get_actions(&args, &config, &command_runner)?; // Use the loaded config
-    let action = select_action_from_menu(&config, &actions)?;
-
-    if !action.is_empty() {
-        let selected_action = find_selected_action(&action, &actions)?;
-        let connected_devices = get_connected_devices(&command_runner)?;
-
-        set_action(
-            &args.wifi_interface,
-            selected_action,
-            &connected_devices,
-            &command_runner,
-        )
-        .await?;
+    
+    // Initialize logging
+    init_logging(args.verbose);
+    
+    info!("Starting network-dmenu v{}", env!("CARGO_PKG_VERSION"));
+    debug!("Args: {:?}", args);
+    
+    // Load configuration
+    let config_manager = ConfigManager::new()?;
+    let mut config = config_manager.load().await?;
+    
+    // Apply command line overrides to config
+    apply_args_to_config(&mut config, &args);
+    
+    // Create service manager with basic services
+    let mut service_manager = NetworkServiceManager::new();
+    
+    // Add services based on enabled flags
+    if config.wifi.enabled {
+        service_manager = service_manager.add_service(
+            Box::new(services::wifi_service::WifiService::new())
+        );
     }
-
-    debug_tailscale_status_if_installed()?;
-
+    
+    if config.vpn.enabled {
+        service_manager = service_manager.add_service(
+            Box::new(services::vpn_service::VpnService::new())
+        );
+    }
+    
+    if config.tailscale.enabled {
+        service_manager = service_manager.add_service(
+            Box::new(services::tailscale_service::TailscaleService::new())
+        );
+    }
+    
+    if config.bluetooth.enabled {
+        service_manager = service_manager.add_service(
+            Box::new(services::bluetooth_service::BluetoothService::new())
+        );
+    }
+    
+    // Always add system service
+    service_manager = service_manager.add_service(
+        Box::new(services::system_service::SystemService::new())
+    );
+    
+    service_manager.initialize().await?;
+    
+    // Create action context
+    let context = ActionContext::new(config.clone())
+        .with_wifi_interface(args.wifi_interface);
+    
+    // Get all available actions
+    let actions = service_manager.get_all_actions(&context).await?;
+    
+    if actions.is_empty() {
+        info!("No actions available");
+        return Ok(());
+    }
+    
+    info!("Found {} available actions", actions.len());
+    
+    // Display menu and get user selection
+    let selected_action = display_menu(&config, &actions).await?;
+    
+    if let Some(action) = selected_action {
+        info!("Executing action: {:?}", action);
+        
+        // Execute the selected action
+        match execute_action(action, &context).await {
+            Ok(_) => {
+                info!("Action executed successfully");
+                
+                // Check for captive portal if enabled
+                if config.tailscale.check_captive_portal {
+                    if let Err(e) = crate::utils::check_captive_portal().await {
+                        debug!("Captive portal check failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Action execution failed: {}", e);
+                return Err(e);
+            }
+        }
+    } else {
+        info!("No action selected");
+    }
+    
     Ok(())
 }
 
-/// Checks if required commands are installed.
-fn check_required_commands(config: &Config) -> Result<(), Box<dyn Error>> {
-    if !is_command_installed("pinentry-gnome3") || !is_command_installed(&config.dmenu_cmd) {
-        panic!("pinentry-gnome3 or dmenu command missing");
-    }
-    Ok(())
+fn init_logging(verbose: bool) {
+    let level = if verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+    
+    tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_target(false)
+        .init();
 }
 
-/// Selects an action from the menu using dmenu.
-fn select_action_from_menu(
-    config: &Config,
-    actions: &[ActionType],
-) -> Result<String, Box<dyn Error>> {
-    let mut child = Command::new(&config.dmenu_cmd)
-        .args(config.dmenu_args.split_whitespace())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
-
-    {
-        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
-        let actions_display = actions
-            .iter()
-            .map(action_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        write!(stdin, "{actions_display}")?;
+fn apply_args_to_config(config: &mut Config, args: &Args) {
+    if args.no_wifi {
+        config.wifi.enabled = false;
     }
-
-    let output = child.wait_with_output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    if args.no_vpn {
+        config.vpn.enabled = false;
+    }
+    if args.no_bluetooth {
+        config.bluetooth.enabled = false;
+    }
+    if args.no_tailscale {
+        config.tailscale.enabled = false;
+    }
 }
 
-/// Converts an action to a string for display.
-fn action_to_string(action: &ActionType) -> String {
+async fn display_menu(config: &Config, actions: &[ActionType]) -> Result<Option<ActionType>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    
+    // Create menu entries
+    let menu_entries: Vec<String> = actions
+        .iter()
+        .map(|action| format_action_for_menu(action))
+        .collect();
+    
+    if menu_entries.is_empty() {
+        return Ok(None);
+    }
+    
+    // Create dmenu command
+    let mut cmd = Command::new(&config.dmenu_cmd);
+    cmd.args(&config.dmenu_args);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    
+    debug!("Launching dmenu: {} {:?}", config.dmenu_cmd, config.dmenu_args);
+    
+    // Start dmenu process
+    let mut child = cmd.spawn()
+        .map_err(|e| NetworkMenuError::command_failed(&config.dmenu_cmd, e.to_string()))?;
+    
+    // Write menu entries to dmenu stdin
+    if let Some(stdin) = child.stdin.take() {
+        let mut stdin = stdin;
+        for entry in &menu_entries {
+            writeln!(stdin, "{}", entry)
+                .map_err(|e| NetworkMenuError::command_failed("dmenu stdin", e.to_string()))?;
+        }
+    }
+    
+    // Wait for dmenu to finish and get output
+    let output = child.wait_with_output()
+        .map_err(|e| NetworkMenuError::command_failed("dmenu wait", e.to_string()))?;
+    
+    if !output.status.success() {
+        debug!("dmenu cancelled or failed");
+        return Ok(None);
+    }
+    
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    
+    debug!("Selected menu item: {}", selected);
+    
+    // Find the corresponding action
+    for (i, entry) in menu_entries.iter().enumerate() {
+        if entry == &selected {
+            return Ok(Some(actions[i].clone()));
+        }
+    }
+    
+    debug!("Selected menu item not found in actions list");
+    Ok(None)
+}
+
+fn format_action_for_menu(action: &ActionType) -> String {
+    use crate::services::*;
+    
     match action {
-        ActionType::Custom(custom_action) => format_entry("action", "", &custom_action.display),
-        ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock => format_entry("system", "❌", "Radio wifi rfkill block"),
-            SystemAction::RfkillUnblock => {
-                format_entry("system", "📶", "Radio wifi rfkill unblock")
-            }
-            SystemAction::EditConnections => format_entry("system", "📶", "Edit connections"),
-        },
-        ActionType::Tailscale(mullvad_action) => match mullvad_action {
-            TailscaleAction::SetExitNode(node) => node.to_string(),
-            TailscaleAction::DisableExitNode => {
-                format_entry("tailscale", "❌", "Disable exit-node")
-            }
-            TailscaleAction::SetEnable(enable) => format_entry(
-                "tailscale",
-                if *enable { "✅" } else { "❌" },
-                if *enable {
-                    "Enable tailscale"
-                } else {
-                    "Disable tailscale"
-                },
-            ),
-            TailscaleAction::SetShields(enable) => format_entry(
-                "tailscale",
-                if *enable { "🛡️" } else { "🛡️" },
-                if *enable {
-                    "Shields up"
-                } else {
-                    "Shields down"
-                },
-            ),
+        ActionType::Wifi(wifi_action) => match wifi_action {
+            WifiAction::Connect(ssid) => format!("📶 Connect to {}", ssid),
+            WifiAction::ConnectHidden => "📶 Connect to Hidden Network".to_string(),
+            WifiAction::Disconnect => "📶 Disconnect WiFi".to_string(),
+            WifiAction::Scan => "📶 Scan for Networks".to_string(),
+            WifiAction::ForgetNetwork(ssid) => format!("🗑️ Forget {}", ssid),
         },
         ActionType::Vpn(vpn_action) => match vpn_action {
-            VpnAction::Connect(network) => format_entry("vpn", "", network),
-            VpnAction::Disconnect(network) => format_entry("vpn", "❌", network),
+            VpnAction::Connect(name) => format!("🔒 Connect {}", name),
+            VpnAction::Disconnect(name) => format!("🔒 Disconnect {}", name),
+            VpnAction::Toggle(name) => format!("🔒 Toggle {}", name),
         },
-        ActionType::Wifi(wifi_action) => match wifi_action {
-            WifiAction::Network(network) => format_entry("wifi", "", network),
-            WifiAction::Disconnect => format_entry("wifi", "❌", "Disconnect"),
-            WifiAction::Connect => format_entry("wifi", "📶", "Connect"),
-            WifiAction::ConnectHidden => format_entry("wifi", "📶", "Connect to hidden network"),
+        ActionType::Tailscale(ts_action) => match ts_action {
+            TailscaleAction::Enable => "🟢 Enable Tailscale".to_string(),
+            TailscaleAction::Disable => "🔴 Disable Tailscale".to_string(),
+            TailscaleAction::SetExitNode(node) => format!("🚪 Exit via {}", node),
+            TailscaleAction::DisableExitNode => "🚪 Disable Exit Node".to_string(),
+            TailscaleAction::SetShields(true) => "🛡️ Shields Up".to_string(),
+            TailscaleAction::SetShields(false) => "🛡️ Shields Down".to_string(),
+            TailscaleAction::Netcheck => "🔍 Tailscale Netcheck".to_string(),
         },
-        ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
-            BluetoothAction::ToggleConnect(device) => device.to_string(),
+        ActionType::Bluetooth(bt_action) => match bt_action {
+            BluetoothAction::Connect(addr) => format!("🔵 Connect {}", addr),
+            BluetoothAction::Disconnect(addr) => format!("🔵 Disconnect {}", addr),
+            BluetoothAction::Pair(addr) => format!("🔵 Pair {}", addr),
+            BluetoothAction::Unpair(addr) => format!("🔵 Unpair {}", addr),
+            BluetoothAction::Trust(addr) => format!("🔵 Trust {}", addr),
+            BluetoothAction::Scan => "🔵 Scan for Devices".to_string(),
         },
+        ActionType::System(sys_action) => match sys_action {
+            SystemAction::EditConnections => "⚙️ Edit Connections".to_string(),
+            SystemAction::RfkillBlock => "📵 Block WiFi".to_string(),
+            SystemAction::RfkillUnblock => "📶 Unblock WiFi".to_string(),
+            SystemAction::RestartNetworkManager => "🔄 Restart NetworkManager".to_string(),
+            SystemAction::ShowNetworks => "📋 Show Networks".to_string(),
+        },
+        ActionType::Custom(custom_action) => custom_action.display.clone(),
     }
 }
 
-/// Finds the selected action from the action list.
-fn find_selected_action<'a>(
-    action: &str,
-    actions: &'a [ActionType],
-) -> Result<&'a ActionType, Box<dyn Error>> {
-    actions
-        .iter()
-        .find(|a| match a {
-            ActionType::Custom(custom_action) => {
-                format_entry("action", "", &custom_action.display) == action
-            }
-            ActionType::System(system_action) => match system_action {
-                SystemAction::RfkillBlock => {
-                    action == format_entry("system", "❌", "Radio wifi rfkill block")
-                }
-                SystemAction::RfkillUnblock => {
-                    action == format_entry("system", "📶", "Radio wifi rfkill unblock")
-                }
-                SystemAction::EditConnections => {
-                    action == format_entry("system", "📶", "Edit connections")
-                }
-            },
-            ActionType::Tailscale(mullvad_action) => match mullvad_action {
-                TailscaleAction::SetExitNode(node) => action == node,
-                TailscaleAction::DisableExitNode => {
-                    action == format_entry("tailscale", "❌", "Disable exit-node")
-                }
-                TailscaleAction::SetEnable(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            if *enable { "✅" } else { "❌" },
-                            if *enable {
-                                "Enable tailscale"
-                            } else {
-                                "Disable tailscale"
-                            },
-                        )
-                }
-                TailscaleAction::SetShields(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            "🛡️",
-                            if *enable {
-                                "Shields up"
-                            } else {
-                                "Shields down"
-                            },
-                        )
-                }
-            },
-            ActionType::Vpn(vpn_action) => match vpn_action {
-                VpnAction::Connect(network) => action == format_entry("vpn", "", network),
-                VpnAction::Disconnect(network) => action == format_entry("vpn,", "❌", network),
-            },
-            ActionType::Wifi(wifi_action) => match wifi_action {
-                WifiAction::Network(network) => action == format_entry("wifi", "", network),
-                WifiAction::Disconnect => action == format_entry("wifi", "❌", "Disconnect"),
-                WifiAction::Connect => action == format_entry("wifi", "📶", "Connect"),
-                WifiAction::ConnectHidden => {
-                    action == format_entry("wifi", "📶", "Connect to hidden network")
-                }
-            },
-            ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
-                BluetoothAction::ToggleConnect(device) => action == device,
-            },
-        })
-        .ok_or(format!("Action not found: {action}").into())
-}
-
-/// Gets the configuration file path.
-fn get_config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let config_dir = config_dir().ok_or("Failed to find config directory")?;
-    Ok(config_dir.join("network-dmenu").join("config.toml"))
-}
-
-/// Creates a default configuration file if it doesn't exist.
-fn create_default_config_if_missing() -> Result<(), Box<dyn Error>> {
-    let config_path = get_config_path()?;
-
-    if !config_path.exists() {
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        fs::write(&config_path, get_default_config())?;
-    }
-    Ok(())
-}
-
-/// Reads and returns the configuration.
-fn get_config() -> Result<Config, Box<dyn Error>> {
-    let config_path = get_config_path()?;
-    let config_content = fs::read_to_string(config_path)?;
-    let config = toml::from_str(&config_content)?;
-    Ok(config)
-}
-
-/// Retrieves the list of actions based on the command-line arguments and configuration.
-fn get_actions(
-    args: &Args,
-    config: &Config, // Change to reference
-    command_runner: &dyn CommandRunner,
-) -> Result<Vec<ActionType>, Box<dyn Error>> {
-    let mut actions = config
-        .actions
-        .clone() // Clone the actions vector
-        .into_iter()
-        .map(ActionType::Custom)
-        .collect::<Vec<_>>();
-
-    if !args.no_tailscale
-        && is_command_installed("tailscale")
-        && is_exit_node_active(command_runner)?
-    {
-        actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
-    }
-
-    if !args.no_vpn && is_command_installed("nmcli") {
-        actions.extend(
-            get_nm_vpn_networks(command_runner)?
-                .into_iter()
-                .map(ActionType::Vpn),
-        );
-    }
-
-    if !args.no_wifi {
-        if is_command_installed("nmcli") {
-            actions.extend(
-                get_nm_wifi_networks(command_runner)?
-                    .into_iter()
-                    .map(ActionType::Wifi),
-            );
-            if is_nm_connected(command_runner, &args.wifi_interface)? {
-                actions.push(ActionType::Wifi(WifiAction::Disconnect));
-            } else {
-                actions.push(ActionType::Wifi(WifiAction::Connect));
-                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
-            }
-        } else if is_command_installed("iwctl") {
-            actions.extend(
-                get_iwd_networks(&args.wifi_interface, command_runner)?
-                    .into_iter()
-                    .map(ActionType::Wifi),
-            );
-            if is_iwd_connected(command_runner, &args.wifi_interface)? {
-                actions.push(ActionType::Wifi(WifiAction::Disconnect));
-            } else {
-                actions.push(ActionType::Wifi(WifiAction::Connect));
-                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
-            }
-        }
-    }
-
-    if !args.no_wifi
-        && is_command_installed("nmcli")
-        && is_command_installed("nm-connection-editor")
-    {
-        actions.push(ActionType::System(SystemAction::EditConnections));
-    }
-
-    if !args.no_wifi && is_command_installed("rfkill") {
-        actions.push(ActionType::System(SystemAction::RfkillBlock));
-        actions.push(ActionType::System(SystemAction::RfkillUnblock));
-    }
-
-    if !args.no_tailscale && is_command_installed("tailscale") {
-        actions.push(ActionType::Tailscale(TailscaleAction::SetEnable(
-            !is_tailscale_enabled(command_runner)?,
-        )));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(false)));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(true)));
-        actions.extend(
-            get_mullvad_actions(command_runner, &config.exclude_exit_node)
-                .into_iter()
-                .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
-        );
-    }
-
-    if !args.no_bluetooth && is_command_installed("bluetoothctl") {
-        actions.extend(
-            get_paired_bluetooth_devices(command_runner)?
-                .into_iter()
-                .map(ActionType::Bluetooth),
-        );
-    }
-
-    Ok(actions)
-}
-
-/// Handles a custom action by executing its command.
-fn handle_custom_action(action: &CustomAction) -> Result<bool, Box<dyn Error>> {
-    let status = Command::new("sh").arg("-c").arg(&action.cmd).status()?;
-    Ok(status.success())
-}
-
-/// Handles a system action.
-fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
+async fn execute_action(action: ActionType, context: &ActionContext) -> Result<()> {
+    use crate::command::RealCommandRunner;
+    use crate::services::*;
+    
+    let command_runner = RealCommandRunner::new();
+    
     match action {
-        SystemAction::RfkillBlock => {
-            let status = Command::new("rfkill").arg("block").arg("wlan").status()?;
-            Ok(status.success())
+        ActionType::Wifi(wifi_action) => {
+            execute_wifi_action(wifi_action, context, &command_runner).await
         }
-        SystemAction::RfkillUnblock => {
-            let status = Command::new("rfkill").arg("unblock").arg("wlan").status()?;
-            Ok(status.success())
+        ActionType::Vpn(vpn_action) => {
+            execute_vpn_action(vpn_action, context, &command_runner).await
         }
-        SystemAction::EditConnections => {
-            let status = Command::new("nm-connection-editor").status()?;
-            Ok(status.success())
+        ActionType::Tailscale(ts_action) => {
+            execute_tailscale_action(ts_action, context, &command_runner).await
+        }
+        ActionType::Bluetooth(bt_action) => {
+            execute_bluetooth_action(bt_action, context, &command_runner).await
+        }
+        ActionType::System(sys_action) => {
+            execute_system_action(sys_action, context, &command_runner).await
+        }
+        ActionType::Custom(custom_action) => {
+            execute_custom_action(custom_action, context, &command_runner).await
         }
     }
 }
 
-/// Parses a VPN action string to extract the connection name.
-fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
-    let emoji_pos = action
-        .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
-        .map(|(i, _)| i)
-        .ok_or("Emoji not found in action")?;
-
-    let name_start = emoji_pos + action[emoji_pos..].chars().next().unwrap().len_utf8();
-    let name = action[name_start..].trim();
-
-    if name.is_empty() {
-        return Err("No name found after emoji".into());
-    }
-
-    Ok(name)
-}
-
-/// Parses a Wi-Fi action string to extract the SSID and security type.
-fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
-    let emoji_pos = action
-        .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
-        .map(|(i, _)| i)
-        .ok_or("Emoji not found in action")?;
-
-    let tab_pos = action[emoji_pos..]
-        .char_indices()
-        .find(|(_, c)| *c == '\t')
-        .map(|(i, _)| i + emoji_pos)
-        .ok_or("Tab character not found in action")?;
-
-    let ssid = action[emoji_pos + 4..tab_pos].trim();
-    let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
-    if parts.len() < 2 {
-        return Err("Action format is incorrect".into());
-    }
-    let security = parts[0].trim();
-    Ok((ssid, security))
-}
-
-/// Handles a VPN action, such as connecting or disconnecting.
-async fn handle_vpn_action(
-    action: &VpnAction,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
+async fn execute_wifi_action(
+    action: services::WifiAction,
+    context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    use crate::constants::commands;
+    use crate::services::WifiAction;
+    
     match action {
-        VpnAction::Connect(network) => {
-            if is_command_installed("nmcli") {
-                connect_to_nm_vpn(network, command_runner)?;
+        WifiAction::Connect(ssid) => {
+            info!("Connecting to WiFi network: {}", ssid);
+            let output = command_runner
+                .run_command(commands::NMCLI, &[
+                    "device", "wifi", "connect", ssid.as_ref()
+                ])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Connected to {}", ssid), true)?;
             }
-            check_mullvad().await?;
-            Ok(true)
-        }
-        VpnAction::Disconnect(network) => {
-            let status = if is_command_installed("nmcli") {
-                disconnect_nm_vpn(network, command_runner)?
-            } else {
-                true
-            };
-            Ok(status)
-        }
-    }
-}
-
-/// Handles a Wi-Fi action, such as connecting or disconnecting.
-async fn handle_wifi_action(
-    action: &WifiAction,
-    wifi_interface: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    match action {
-        WifiAction::Disconnect => {
-            let status = if is_command_installed("nmcli") {
-                disconnect_nm_wifi(wifi_interface, command_runner)?
-            } else {
-                disconnect_iwd_wifi(wifi_interface, command_runner)?
-            };
-            Ok(status)
-        }
-        WifiAction::Connect => {
-            let status = Command::new("nmcli")
-                .arg("device")
-                .arg("connect")
-                .arg(wifi_interface)
-                .status()?;
-
-            check_captive_portal().await?;
-            Ok(status.success())
         }
         WifiAction::ConnectHidden => {
-            let ssid = utils::prompt_for_ssid()?;
-            let network = format_entry("wifi", "📶", &format!("{ssid}\tUNKNOWN\t"));
-            // FIXME: nmcli connect hidden network looks buggy
-            // so we will use iwd directly for the moment
-            // if is_command_installed("nmcli") {
-            //     connect_to_nm_wifi(&network, true, command_runner)?;
-            // } else if is_command_installed("iwctl") {
-            if is_command_installed("iwctl") {
-                connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
+            info!("Connecting to hidden WiFi network");
+            let ssid = crate::utils::prompt_for_ssid()
+                .map_err(|e| NetworkMenuError::network_error(format!("Failed to get SSID: {}", e)))?;
+            let password = crate::utils::prompt_for_password(&ssid)
+                .map_err(|e| NetworkMenuError::network_error(format!("Failed to get password: {}", e)))?;
+            
+            let output = command_runner
+                .run_command(commands::NMCLI, &[
+                    "device", "wifi", "connect", &ssid,
+                    "password", &password, "hidden", "yes"
+                ])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Connected to {}", ssid), true)?;
             }
-            check_captive_portal().await?;
-            Ok(true)
         }
-        WifiAction::Network(network) => {
-            if is_command_installed("nmcli") {
-                connect_to_nm_wifi(network, false, command_runner)?;
-            } else if is_command_installed("iwctl") {
-                connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
+        WifiAction::Disconnect => {
+            info!("Disconnecting WiFi");
+            let interface = context.wifi_interface.as_ref().map(|s| s.as_ref()).unwrap_or("wlan0");
+            let output = command_runner
+                .run_command(commands::NMCLI, &[
+                    "device", "wifi", "disconnect", interface
+                ])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("WiFi disconnected", false)?;
             }
-            check_captive_portal().await?;
-            check_mullvad().await?;
-            Ok(true)
+        }
+        WifiAction::Scan => {
+            info!("Scanning for WiFi networks");
+            let _ = command_runner
+                .run_command(commands::NMCLI, &["device", "wifi", "rescan"])
+                .await;
+        }
+        WifiAction::ForgetNetwork(ssid) => {
+            info!("Forgetting WiFi network: {}", ssid);
+            let output = command_runner
+                .run_command(commands::NMCLI, &["connection", "delete", ssid.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Forgot network {}", ssid), false)?;
+            }
         }
     }
-}
-
-/// Sets and handles the selected action.
-async fn set_action(
-    wifi_interface: &str,
-    action: &ActionType,
-    connected_devices: &[String],
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    match action {
-        ActionType::Custom(custom_action) => handle_custom_action(custom_action),
-        ActionType::System(system_action) => handle_system_action(system_action),
-        ActionType::Tailscale(mullvad_action) => {
-            handle_tailscale_action(mullvad_action, command_runner).await
-        }
-        ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
-        ActionType::Wifi(wifi_action) => {
-            handle_wifi_action(wifi_action, wifi_interface, command_runner).await
-        }
-        ActionType::Bluetooth(bluetooth_action) => {
-            handle_bluetooth_action(bluetooth_action, connected_devices, command_runner)
-        }
-    }
-}
-
-/// Sends a notification about the connection.
-fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
-    Notification::new()
-        .summary(summary)
-        .body(&format!("Connected to {name}"))
-        .show()?;
+    
     Ok(())
 }
 
-/// Prints the Tailscale status if the command is installed (for debugging).
-fn debug_tailscale_status_if_installed() -> Result<(), Box<dyn Error>> {
-    #[cfg(debug_assertions)]
-    {
-        if is_command_installed("tailscale") {
-            Command::new("tailscale").arg("status").status()?;
+async fn execute_vpn_action(
+    action: services::VpnAction,
+    _context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    use crate::constants::commands;
+    use crate::services::VpnAction;
+    
+    match action {
+        VpnAction::Connect(name) => {
+            info!("Connecting to VPN: {}", name);
+            let output = command_runner
+                .run_command(commands::NMCLI, &["connection", "up", name.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("VPN {} connected", name), true)?;
+            }
+        }
+        VpnAction::Disconnect(name) => {
+            info!("Disconnecting VPN: {}", name);
+            let output = command_runner
+                .run_command(commands::NMCLI, &["connection", "down", name.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("VPN {} disconnected", name), false)?;
+            }
+        }
+        VpnAction::Toggle(name) => {
+            info!("Toggling VPN: {}", name);
+            let output = command_runner
+                .run_command(commands::NMCLI, &["connection", "up", name.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("VPN {} toggled", name), true)?;
+            }
         }
     }
+    
+    Ok(())
+}
+
+async fn execute_tailscale_action(
+    action: services::TailscaleAction,
+    _context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    use crate::constants::commands;
+    use crate::services::TailscaleAction;
+    
+    match action {
+        TailscaleAction::Enable => {
+            info!("Enabling Tailscale");
+            let output = command_runner
+                .run_command(commands::TAILSCALE, &["up"])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("Tailscale enabled", true)?;
+            }
+        }
+        TailscaleAction::Disable => {
+            info!("Disabling Tailscale");
+            let output = command_runner
+                .run_command(commands::TAILSCALE, &["down"])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("Tailscale disabled", false)?;
+            }
+        }
+        TailscaleAction::SetExitNode(node) => {
+            info!("Setting Tailscale exit node: {}", node);
+            let output = command_runner
+                .run_command(commands::TAILSCALE, &["set", "--exit-node", node.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Exit node set to {}", node), true)?;
+            }
+        }
+        TailscaleAction::DisableExitNode => {
+            info!("Disabling Tailscale exit node");
+            let output = command_runner
+                .run_command(commands::TAILSCALE, &["set", "--exit-node="])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("Exit node disabled", false)?;
+            }
+        }
+        TailscaleAction::SetShields(enabled) => {
+            info!("Setting Tailscale shields: {}", enabled);
+            let arg = if enabled { "--shields-up" } else { "--shields-up=false" };
+            
+            let output = command_runner
+                .run_command(commands::TAILSCALE, &["set", arg])
+                .await?;
+            
+            if output.status.success() {
+                let status = if enabled { "up" } else { "down" };
+                notify_connection(&format!("Shields {}", status), enabled)?;
+            }
+        }
+        TailscaleAction::Netcheck => {
+            info!("Running Tailscale netcheck");
+            let _ = command_runner
+                .run_command(commands::TAILSCALE, &["netcheck"])
+                .await;
+        }
+    }
+    
+    Ok(())
+}
+
+async fn execute_bluetooth_action(
+    action: services::BluetoothAction,
+    _context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    use crate::constants::commands;
+    use crate::services::BluetoothAction;
+    
+    match action {
+        BluetoothAction::Connect(addr) => {
+            info!("Connecting to Bluetooth device: {}", addr);
+            let output = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["connect", addr.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Bluetooth device {} connected", addr), true)?;
+            }
+        }
+        BluetoothAction::Disconnect(addr) => {
+            info!("Disconnecting Bluetooth device: {}", addr);
+            let output = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["disconnect", addr.as_ref()])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection(&format!("Bluetooth device {} disconnected", addr), false)?;
+            }
+        }
+        BluetoothAction::Pair(addr) => {
+            info!("Pairing with Bluetooth device: {}", addr);
+            let _ = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["pair", addr.as_ref()])
+                .await;
+        }
+        BluetoothAction::Unpair(addr) => {
+            info!("Unpairing Bluetooth device: {}", addr);
+            let _ = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["remove", addr.as_ref()])
+                .await;
+        }
+        BluetoothAction::Trust(addr) => {
+            info!("Trusting Bluetooth device: {}", addr);
+            let _ = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["trust", addr.as_ref()])
+                .await;
+        }
+        BluetoothAction::Scan => {
+            info!("Scanning for Bluetooth devices");
+            let _ = command_runner
+                .run_command(commands::BLUETOOTHCTL, &["scan", "on"])
+                .await;
+        }
+    }
+    
+    Ok(())
+}
+
+async fn execute_system_action(
+    action: services::SystemAction,
+    _context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    use crate::constants::commands;
+    use crate::services::SystemAction;
+    
+    match action {
+        SystemAction::EditConnections => {
+            info!("Opening network connection editor");
+            let _ = command_runner
+                .run_command(commands::NM_CONNECTION_EDITOR, &[])
+                .await;
+        }
+        SystemAction::RfkillBlock => {
+            info!("Blocking WiFi with rfkill");
+            let output = command_runner
+                .run_command(commands::RFKILL, &["block", "wifi"])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("WiFi blocked", false)?;
+            }
+        }
+        SystemAction::RfkillUnblock => {
+            info!("Unblocking WiFi with rfkill");
+            let output = command_runner
+                .run_command(commands::RFKILL, &["unblock", "wifi"])
+                .await?;
+            
+            if output.status.success() {
+                notify_connection("WiFi unblocked", true)?;
+            }
+        }
+        SystemAction::RestartNetworkManager => {
+            info!("Restarting NetworkManager");
+            let _ = command_runner
+                .run_command("systemctl", &["restart", "NetworkManager"])
+                .await;
+        }
+        SystemAction::ShowNetworks => {
+            info!("Showing network information");
+            let _ = command_runner
+                .run_command("nmcli", &["device", "status"])
+                .await;
+        }
+    }
+    
+    Ok(())
+}
+
+async fn execute_custom_action(
+    action: services::CustomAction,
+    _context: &ActionContext,
+    command_runner: &dyn crate::command::CommandRunner,
+) -> Result<()> {
+    info!("Executing custom action: {}", action.display);
+    
+    if action.confirm {
+        debug!("Confirmation dialogs not yet implemented, executing anyway");
+    }
+    
+    let args: Vec<&str> = action.args.iter().map(|s| s.as_str()).collect();
+    let output = command_runner
+        .run_command(&action.command, &args)
+        .await?;
+    
+    if output.status.success() {
+        info!("Custom action completed successfully");
+    } else {
+        debug!("Custom action failed with exit code: {:?}", output.status.code());
+    }
+    
+    Ok(())
+}
+
+fn notify_connection(message: &str, connected: bool) -> Result<()> {
+    use notify_rust::Notification;
+    
+    let summary = if connected {
+        "Network Connected"
+    } else {
+        "Network Disconnected"
+    };
+    
+    if let Err(e) = Notification::new()
+        .summary(summary)
+        .body(message)
+        .show()
+    {
+        debug!("Failed to show notification: {}", e);
+    }
+    
     Ok(())
 }
