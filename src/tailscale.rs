@@ -79,17 +79,36 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .build();
 
     // Make a request and handle retries automatically
-    let response = client
+    let response = match client
         .get("https://am.i.mullvad.net/connected")
         .send()
-        .await?
-        .text()
-        .await?;
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("Mullvad check request error: {}", e);
+            return Ok(());
+        }
+    };
 
-    Notification::new()
+    let text = match response.text().await {
+        Ok(text) => text,
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("Mullvad check response error: {}", e);
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = Notification::new()
         .summary("Connected Status")
-        .body(response.trim())
-        .show()?;
+        .body(text.trim())
+        .show()
+    {
+        #[cfg(debug_assertions)]
+        eprintln!("Mullvad notification error: {}", e);
+    }
 
     Ok(())
 }
@@ -270,7 +289,8 @@ pub async fn handle_tailscale_action(
             let status = command_runner
                 .run_command("tailscale", &["set", "--exit-node="])?
                 .status;
-            check_mullvad().await?;
+            // Ignore errors from mullvad check
+            let _ = check_mullvad().await;
             Ok(status.success())
         }
         TailscaleAction::SetEnable(enable) => {
@@ -281,10 +301,12 @@ pub async fn handle_tailscale_action(
         }
         TailscaleAction::SetExitNode(node) => {
             if set_exit_node(node) {
-                check_mullvad().await?;
+                // Ignore errors from mullvad check
+                let _ = check_mullvad().await;
                 Ok(true)
             } else {
-                check_mullvad().await?;
+                // Ignore errors from mullvad check
+                let _ = check_mullvad().await;
                 Ok(false)
             }
         }

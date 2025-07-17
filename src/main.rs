@@ -506,7 +506,8 @@ async fn handle_vpn_action(
             if is_command_installed("nmcli") {
                 connect_to_nm_vpn(network, command_runner)?;
             }
-            check_mullvad().await?;
+            // Ignore errors from mullvad check
+            let _ = check_mullvad().await;
             Ok(true)
         }
         VpnAction::Disconnect(network) => {
@@ -542,7 +543,12 @@ async fn handle_wifi_action(
                 .arg(wifi_interface)
                 .status()?;
 
-            check_captive_portal().await?;
+            // Only check for captive portal if connection was successful
+            if status.success() {
+                // Ignore errors from captive portal check
+                let _ = check_captive_portal().await;
+            }
+
             Ok(status.success())
         }
         WifiAction::ConnectHidden => {
@@ -550,24 +556,40 @@ async fn handle_wifi_action(
             let network = format_entry("wifi", "📶", &format!("{ssid}\tUNKNOWN\t"));
             // FIXME: nmcli connect hidden network looks buggy
             // so we will use iwd directly for the moment
-            // if is_command_installed("nmcli") {
-            //     connect_to_nm_wifi(&network, true, command_runner)?;
-            // } else if is_command_installed("iwctl") {
-            if is_command_installed("iwctl") {
-                connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
-            }
-            check_captive_portal().await?;
-            Ok(true)
+            let connection_result = if is_command_installed("iwctl") {
+                let result = connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
+                if result {
+                    // Ignore errors from captive portal check
+                    let _ = check_captive_portal().await;
+                }
+                result
+            } else {
+                false
+            };
+
+            Ok(connection_result)
         }
         WifiAction::Network(network) => {
-            if is_command_installed("nmcli") {
-                connect_to_nm_wifi(network, false, command_runner)?;
+            let connection_result = if is_command_installed("nmcli") {
+                // For NetworkManager, we ensure connection is complete before checking captive portal
+                let result = connect_to_nm_wifi(network, false, command_runner)?;
+                // Only check for captive portal if connection was successful
+                if result {
+                    // Ignore errors from captive portal check
+                    let _ = check_captive_portal().await;
+                }
+                result
             } else if is_command_installed("iwctl") {
-                connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
-            }
-            check_captive_portal().await?;
-            check_mullvad().await?;
-            Ok(true)
+                let result = connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
+                // For IWD, we check after connection attempt
+                let _ = check_captive_portal().await;
+                result
+            } else {
+                false
+            };
+            // Ignore errors from mullvad check
+            let _ = check_mullvad().await;
+            Ok(connection_result)
         }
     }
 }

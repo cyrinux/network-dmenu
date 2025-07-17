@@ -213,24 +213,16 @@ fn attempt_wifi_connection(
     password: Option<String>,
     command_runner: &dyn CommandRunner,
 ) -> Result<bool, Box<dyn Error>> {
-    let command = match password {
-        Some(ref pwd) => vec![
-            "device",
-            "wifi",
-            "connect",
-            ssid,
-            "password",
-            pwd,
-            if hidden { "hidden yes" } else { "" },
-        ],
-        None => vec![
-            "device",
-            "wifi",
-            "connect",
-            ssid,
-            if hidden { "hidden yes" } else { "" },
-        ],
+    let mut command = match password {
+        Some(ref pwd) => vec!["device", "wifi", "connect", ssid, "password", pwd],
+        None => vec!["device", "wifi", "connect", ssid],
     };
+
+    // Add hidden parameter only if needed
+    if hidden {
+        command.push("hidden");
+        command.push("yes");
+    }
 
     let status = command_runner.run_command("nmcli", &command)?.status;
 

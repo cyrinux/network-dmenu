@@ -14,6 +14,9 @@ const TIMEOUT_DURATION: Duration = Duration::from_secs(5);
 /// Detects a captive portal by making an HTTP request to a known URL.
 /// If a captive portal is detected, it notifies the user and opens the portal in a web browser.
 pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
+    // Wait for the connection to stabilize before checking for captive portal
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
     // Create a retry policy with exponential backoff
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
 
@@ -29,28 +32,48 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
     )
     .await;
 
+    // Handle connection errors gracefully
     let response = match response_result {
         Ok(Ok(resp)) => resp,
         Ok(Err(e)) => {
-            return Err(Box::new(e));
+            #[cfg(debug_assertions)]
+            eprintln!("Captive portal check error: {}", e);
+            // Return Ok instead of propagating the error
+            return Ok(());
         }
         Err(e) => {
-            return Err(Box::new(e));
+            #[cfg(debug_assertions)]
+            eprintln!("Captive portal check timeout: {}", e);
+            // Return Ok instead of propagating the error
+            return Ok(());
         }
     };
 
-    let response_text = response.text().await?;
+    // Try to get response text, but handle errors gracefully
+    let response_text = match response.text().await {
+        Ok(text) => text,
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("Failed to read captive portal response: {}", e);
+            return Ok(());
+        }
+    };
 
     if response_text.trim() != EXPECTED_RESPONSE {
         // Show notification
-        Notification::new()
+        if let Err(e) = Notification::new()
             .summary("Captive Portal Detected")
             .body("Opening captive portal in your default browser.")
-            .show()?;
+            .show()
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("Failed to show notification: {}", e);
+        }
 
         // Open web browser
         if let Err(e) = webbrowser::open(DETECT_CAPTIVE_PORTAL_URL) {
-            return Err(Box::new(e));
+            #[cfg(debug_assertions)]
+            eprintln!("Failed to open browser: {}", e);
         }
     }
 
