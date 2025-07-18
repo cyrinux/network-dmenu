@@ -456,7 +456,7 @@ fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
 }
 
 /// Parses a VPN action string to extract the connection name.
-fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
+pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
     let emoji_pos = action
         .char_indices()
         .find(|(_, c)| *c == '✅' || *c == '📶')
@@ -474,10 +474,10 @@ fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
 }
 
 /// Parses a Wi-Fi action string to extract the SSID and security type.
-fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
+pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
     let emoji_pos = action
         .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
+        .find(|(_, c)| *c == '✅' || *c == '📶' || *c == '❌')
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
@@ -618,7 +618,7 @@ async fn set_action(
 }
 
 /// Sends a notification about the connection.
-fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
+pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
     Notification::new()
         .summary(summary)
         .body(&format!("Connected to {name}"))
@@ -635,4 +635,288 @@ fn debug_tailscale_status_if_installed() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_entry_with_icon() {
+        let result = format_entry("wifi", "📶", "Connect to network");
+        assert_eq!(result, "wifi      - 📶 Connect to network");
+    }
+
+    #[test]
+    fn test_format_entry_without_icon() {
+        let result = format_entry("system", "", "Edit connections");
+        assert_eq!(result, "system    - Edit connections");
+    }
+
+    #[test]
+    fn test_format_entry_empty_text() {
+        let result = format_entry("test", "🔥", "");
+        assert_eq!(result, "test      - 🔥 ");
+    }
+
+    #[test]
+    fn test_format_entry_long_action() {
+        let result = format_entry("verylongaction", "🎯", "Some text");
+        assert_eq!(result, "verylongaction- 🎯 Some text");
+    }
+
+    #[test]
+    fn test_get_default_config() {
+        let config = get_default_config();
+        assert!(config.contains("dmenu_cmd = \"dmenu\""));
+        assert!(config.contains("dmenu_args = \"--no-multi\""));
+        assert!(config.contains("exclude_exit_node = [\"exit1\", \"exit2\"]"));
+        assert!(config.contains("[[actions]]"));
+        assert!(config.contains("display = \"🛡️ Example\""));
+        assert!(config.contains("cmd = \"notify-send 'hello' 'world'\""));
+    }
+
+    #[test]
+    fn test_action_to_string_bluetooth() {
+        let action =
+            ActionType::Bluetooth(BluetoothAction::ToggleConnect("Device Name".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "Device Name");
+    }
+
+    #[test]
+    fn test_action_to_string_custom() {
+        let custom_action = CustomAction {
+            display: "Custom Action".to_string(),
+            cmd: "echo test".to_string(),
+        };
+        let action = ActionType::Custom(custom_action);
+        let result = action_to_string(&action);
+        assert_eq!(result, "action    - Custom Action");
+    }
+
+    #[test]
+    fn test_action_to_string_system_rfkill_block() {
+        let action = ActionType::System(SystemAction::RfkillBlock);
+        let result = action_to_string(&action);
+        assert_eq!(result, "system    - ❌ Radio wifi rfkill block");
+    }
+
+    #[test]
+    fn test_action_to_string_system_rfkill_unblock() {
+        let action = ActionType::System(SystemAction::RfkillUnblock);
+        let result = action_to_string(&action);
+        assert_eq!(result, "system    - 📶 Radio wifi rfkill unblock");
+    }
+
+    #[test]
+    fn test_action_to_string_system_edit_connections() {
+        let action = ActionType::System(SystemAction::EditConnections);
+        let result = action_to_string(&action);
+        assert_eq!(result, "system    - 📶 Edit connections");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_set_exit_node() {
+        let action =
+            ActionType::Tailscale(TailscaleAction::SetExitNode("exit-node-name".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "exit-node-name");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_disable_exit_node() {
+        let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - ❌ Disable exit-node");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_enable() {
+        let action = ActionType::Tailscale(TailscaleAction::SetEnable(true));
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - ✅ Enable tailscale");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_disable() {
+        let action = ActionType::Tailscale(TailscaleAction::SetEnable(false));
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - ❌ Disable tailscale");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_shields_up() {
+        let action = ActionType::Tailscale(TailscaleAction::SetShields(true));
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - 🛡️ Shields up");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_shields_down() {
+        let action = ActionType::Tailscale(TailscaleAction::SetShields(false));
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - 🛡️ Shields down");
+    }
+
+    #[test]
+    fn test_action_to_string_vpn_connect() {
+        let action = ActionType::Vpn(VpnAction::Connect("VPN Network".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "vpn       - VPN Network");
+    }
+
+    #[test]
+    fn test_action_to_string_vpn_disconnect() {
+        let action = ActionType::Vpn(VpnAction::Disconnect("VPN Network".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "vpn       - ❌ VPN Network");
+    }
+
+    #[test]
+    fn test_action_to_string_wifi_network() {
+        let action = ActionType::Wifi(WifiAction::Network("WiFi Network".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "wifi      - WiFi Network");
+    }
+
+    #[test]
+    fn test_action_to_string_wifi_disconnect() {
+        let action = ActionType::Wifi(WifiAction::Disconnect);
+        let result = action_to_string(&action);
+        assert_eq!(result, "wifi      - ❌ Disconnect");
+    }
+
+    #[test]
+    fn test_action_to_string_wifi_connect() {
+        let action = ActionType::Wifi(WifiAction::Connect);
+        let result = action_to_string(&action);
+        assert_eq!(result, "wifi      - 📶 Connect");
+    }
+
+    #[test]
+    fn test_action_to_string_wifi_connect_hidden() {
+        let action = ActionType::Wifi(WifiAction::ConnectHidden);
+        let result = action_to_string(&action);
+        assert_eq!(result, "wifi      - 📶 Connect to hidden network");
+    }
+
+    #[test]
+    fn test_find_selected_action_success() {
+        let actions = vec![
+            ActionType::Wifi(WifiAction::Connect),
+            ActionType::System(SystemAction::RfkillBlock),
+        ];
+
+        let result = find_selected_action("wifi      - 📶 Connect", &actions);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            ActionType::Wifi(WifiAction::Connect) => (),
+            _ => panic!("Expected WiFi Connect action"),
+        }
+    }
+
+    #[test]
+    fn test_find_selected_action_not_found() {
+        let actions = vec![
+            ActionType::Wifi(WifiAction::Connect),
+            ActionType::System(SystemAction::RfkillBlock),
+        ];
+
+        let result = find_selected_action("nonexistent action", &actions);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Action not found"));
+    }
+
+    #[test]
+    fn test_get_config_path() {
+        let path = get_config_path();
+        assert!(path.is_ok());
+        let path_buf = path.unwrap();
+        assert!(path_buf.to_string_lossy().contains("network-dmenu"));
+        assert!(path_buf.to_string_lossy().ends_with("config.toml"));
+    }
+
+    #[test]
+    fn test_parse_vpn_action_connect() {
+        let line = "vpn       - 📶 TestVPN";
+        let result = parse_vpn_action(line);
+        assert!(result.is_ok());
+
+        let name = result.unwrap();
+        assert_eq!(name, "TestVPN");
+    }
+
+    #[test]
+    fn test_parse_vpn_action_disconnect() {
+        let line = "vpn       - 📶 TestVPN";
+        let result = parse_vpn_action(line);
+        assert!(result.is_ok());
+
+        let name = result.unwrap();
+        assert_eq!(name, "TestVPN");
+    }
+
+    #[test]
+    fn test_parse_vpn_action_invalid() {
+        let line = "invalid line";
+        let result = parse_vpn_action(line);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_wifi_action_network() {
+        let line = "wifi      - 📶 TestNetwork	WPA2	";
+        let result = parse_wifi_action(line);
+        assert!(result.is_ok());
+
+        let (ssid, security) = result.unwrap();
+        assert_eq!(ssid, "TestNetwork");
+        assert_eq!(security, "WPA2");
+    }
+
+    #[test]
+    fn test_parse_wifi_action_disconnect() {
+        let line = "wifi      - ❌ Disconnect	WPA2	";
+        let result = parse_wifi_action(line);
+        assert!(result.is_ok());
+
+        let (ssid, _security) = result.unwrap();
+        assert_eq!(ssid, "Disconnect");
+    }
+
+    #[test]
+    fn test_parse_wifi_action_connect() {
+        let line = "wifi      - 📶 Connect	WPA2	";
+        let result = parse_wifi_action(line);
+        assert!(result.is_ok());
+
+        let (ssid, _security) = result.unwrap();
+        assert_eq!(ssid, "Connect");
+    }
+
+    #[test]
+    fn test_parse_wifi_action_connect_hidden() {
+        let line = "wifi      - 📶 Connect to hidden network	WPA2	";
+        let result = parse_wifi_action(line);
+        assert!(result.is_ok());
+
+        let (ssid, _security) = result.unwrap();
+        assert_eq!(ssid, "Connect to hidden network");
+    }
+
+    #[test]
+    fn test_parse_wifi_action_invalid() {
+        let line = "invalid line";
+        let result = parse_wifi_action(line);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_debug_tailscale_status_if_installed() {
+        // This function should not panic and should return Ok(())
+        let result = debug_tailscale_status_if_installed();
+        assert!(result.is_ok());
+    }
 }

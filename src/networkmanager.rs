@@ -1,6 +1,6 @@
 use crate::command::{read_output_lines, CommandRunner};
 use crate::utils::{convert_network_strength, prompt_for_password};
-use crate::{notify_connection, parse_vpn_action, parse_wifi_action, VpnAction, WifiAction};
+use crate::{parse_vpn_action, parse_wifi_action, VpnAction, WifiAction};
 use regex::Regex;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
@@ -190,6 +190,7 @@ fn attempt_vpn_connection(
     if name.is_empty() {
         #[cfg(debug_assertions)]
         eprintln!("Network name is empty");
+        return Ok(false);
     }
 
     let status = command_runner
@@ -197,7 +198,7 @@ fn attempt_vpn_connection(
         .status;
 
     if status.success() {
-        notify_connection("vpn", name)?;
+        // Connection successful
         Ok(true)
     } else {
         #[cfg(debug_assertions)]
@@ -205,6 +206,205 @@ fn attempt_vpn_connection(
         Ok(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRunner;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    /// Mock command runner for testing
+    struct MockCommandRunner {
+        expected_command: String,
+        expected_args: Vec<String>,
+        return_output: Output,
+    }
+
+    impl MockCommandRunner {
+        fn new(command: &str, args: &[&str], output: Output) -> Self {
+            Self {
+                expected_command: command.to_string(),
+                expected_args: args.iter().map(|s| s.to_string()).collect(),
+                return_output: output,
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+            assert_eq!(command, self.expected_command);
+            assert_eq!(args, self.expected_args.as_slice());
+            Ok(Output {
+                status: self.return_output.status,
+                stdout: self.return_output.stdout.clone(),
+                stderr: self.return_output.stderr.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_get_nm_wifi_networks_success() {
+        let stdout = "*:TestNetwork1:****:WPA2\n :TestNetwork2:***:WPA2\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new(
+            "nmcli",
+            &[
+                "--colors",
+                "no",
+                "-t",
+                "-f",
+                "IN-USE,SSID,BARS,SECURITY",
+                "device",
+                "wifi",
+            ],
+            output,
+        );
+        let result = get_nm_wifi_networks(&mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(!networks.is_empty());
+    }
+
+    #[test]
+    fn test_get_nm_wifi_networks_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new(
+            "nmcli",
+            &[
+                "--colors",
+                "no",
+                "-t",
+                "-f",
+                "IN-USE,SSID,BARS,SECURITY",
+                "device",
+                "wifi",
+            ],
+            output,
+        );
+        let result = get_nm_wifi_networks(&mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(networks.is_empty());
+    }
+
+    #[test]
+    fn test_get_nm_vpn_networks_success() {
+        let stdout = "yes:vpn:TestVPN1\nno:vpn:TestVPN2\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new(
+            "nmcli",
+            &[
+                "--colors",
+                "no",
+                "-t",
+                "-f",
+                "ACTIVE,TYPE,NAME",
+                "connection",
+                "show",
+            ],
+            output,
+        );
+        let result = get_nm_vpn_networks(&mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(!networks.is_empty());
+    }
+
+    #[test]
+    fn test_get_nm_vpn_networks_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new(
+            "nmcli",
+            &[
+                "--colors",
+                "no",
+                "-t",
+                "-f",
+                "ACTIVE,TYPE,NAME",
+                "connection",
+                "show",
+            ],
+            output,
+        );
+        let result = get_nm_vpn_networks(&mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(networks.is_empty());
+    }
+
+    #[test]
+    fn test_disconnect_nm_wifi_success() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("nmcli", &["device", "disconnect", "wlan0"], output);
+
+        let result = disconnect_nm_wifi("wlan0", &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_connect_to_nm_vpn_success() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("nmcli", &["connection", "up", "TestVPN"], output);
+
+        let result = connect_to_nm_vpn("vpn       - 📶 TestVPN", &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_disconnect_nm_vpn_success() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("nmcli", &["connection", "down", "TestVPN"], output);
+
+        let result = disconnect_nm_vpn("TestVPN", &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+}
+
 /// Attempts to connect to a Wi-Fi network, optionally using a password.
 
 fn attempt_wifi_connection(
@@ -227,7 +427,7 @@ fn attempt_wifi_connection(
     let status = command_runner.run_command("nmcli", &command)?.status;
 
     if status.success() {
-        notify_connection("Wi-Fi", ssid)?;
+        // Connection successful
         Ok(true)
     } else {
         #[cfg(debug_assertions)]

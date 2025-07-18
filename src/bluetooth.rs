@@ -130,3 +130,313 @@ pub fn get_connected_devices(
         .collect();
     Ok(mac_addresses)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRunner;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    /// Mock command runner for testing
+    struct MockCommandRunner {
+        expected_command: String,
+        expected_args: Vec<String>,
+        return_output: Output,
+    }
+
+    impl MockCommandRunner {
+        fn new(command: &str, args: &[&str], output: Output) -> Self {
+            Self {
+                expected_command: command.to_string(),
+                expected_args: args.iter().map(|s| s.to_string()).collect(),
+                return_output: output,
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+            assert_eq!(command, self.expected_command);
+            assert_eq!(args, self.expected_args.as_slice());
+            Ok(Output {
+                status: self.return_output.status,
+                stdout: self.return_output.stdout.clone(),
+                stderr: self.return_output.stderr.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_extract_device_address_valid() {
+        let device = "bluetooth - ✅ Test Device Name         - AA:BB:CC:DD:EE:FF";
+        let result = extract_device_address(device);
+        assert_eq!(result, Some("AA:BB:CC:DD:EE:FF".to_string()));
+    }
+
+    #[test]
+    fn test_extract_device_address_invalid() {
+        let device = "invalid device string";
+        let result = extract_device_address(device);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_device_address_no_address() {
+        let device = "bluetooth - Device Name";
+        let result = extract_device_address(device);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_bluetooth_device_valid() {
+        let line = "Device AA:BB:CC:DD:EE:FF Test Device".to_string();
+        let connected_devices = vec![];
+        let result = parse_bluetooth_device(line, &connected_devices);
+
+        assert!(result.is_some());
+        if let Some(BluetoothAction::ToggleConnect(device_str)) = result {
+            assert!(device_str.contains("Test Device"));
+            assert!(device_str.contains("AA:BB:CC:DD:EE:FF"));
+            assert!(device_str.contains("bluetooth"));
+        }
+    }
+
+    #[test]
+    fn test_parse_bluetooth_device_connected() {
+        let line = "Device AA:BB:CC:DD:EE:FF Test Device".to_string();
+        let connected_devices = vec!["AA:BB:CC:DD:EE:FF".to_string()];
+        let result = parse_bluetooth_device(line, &connected_devices);
+
+        assert!(result.is_some());
+        if let Some(BluetoothAction::ToggleConnect(device_str)) = result {
+            assert!(device_str.contains("✅"));
+        }
+    }
+
+    #[test]
+    fn test_parse_bluetooth_device_invalid_format() {
+        let line = "Invalid line format".to_string();
+        let connected_devices = vec![];
+        let result = parse_bluetooth_device(line, &connected_devices);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_bluetooth_device_no_name() {
+        let line = "Device AA:BB:CC:DD:EE:FF".to_string();
+        let connected_devices = vec![];
+        let result = parse_bluetooth_device(line, &connected_devices);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_bluetooth_devices_success() {
+        let stdout =
+            b"Device AA:BB:CC:DD:EE:FF Test Device 1\nDevice 11:22:33:44:55:66 Test Device 2\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+        let connected_devices = vec!["AA:BB:CC:DD:EE:FF".to_string()];
+
+        let result = parse_bluetooth_devices(&output, &connected_devices);
+        assert!(result.is_ok());
+
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_bluetooth_devices_empty() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let connected_devices = vec![];
+
+        let result = parse_bluetooth_devices(&output, &connected_devices);
+        assert!(result.is_ok());
+
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_get_connected_devices_success() {
+        let stdout = b"Device AA:BB:CC:DD:EE:FF\nDevice 11:22:33:44:55:66\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("bluetoothctl", &["info"], output);
+        let result = get_connected_devices(&mock_runner);
+
+        assert!(result.is_ok());
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0], "AA:BB:CC:DD:EE:FF");
+        assert_eq!(devices[1], "11:22:33:44:55:66");
+    }
+
+    #[test]
+    fn test_get_connected_devices_no_devices() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("bluetoothctl", &["info"], output);
+        let result = get_connected_devices(&mock_runner);
+
+        assert!(result.is_ok());
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_get_connected_devices_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("bluetoothctl", &["info"], output);
+        let result = get_connected_devices(&mock_runner);
+
+        // Function returns Ok with empty vec on failure, not an error
+        assert!(result.is_ok());
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_bluetooth_devices_function() {
+        let stdout =
+            b"Device AA:BB:CC:DD:EE:FF Test Device 1\nDevice 11:22:33:44:55:66 Test Device 2\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+        let connected_devices = vec!["AA:BB:CC:DD:EE:FF".to_string()];
+
+        let result = parse_bluetooth_devices(&output, &connected_devices);
+        assert!(result.is_ok());
+
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_bluetooth_devices_with_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let connected_devices = vec![];
+
+        let result = parse_bluetooth_devices(&output, &connected_devices);
+        assert!(result.is_ok());
+        let devices = result.unwrap();
+        assert_eq!(devices.len(), 0);
+    }
+
+    #[test]
+    fn test_connect_to_bluetooth_device_connect() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let device = "bluetooth - Test Device           - AA:BB:CC:DD:EE:FF";
+        let connected_devices = vec![];
+        let mock_runner =
+            MockCommandRunner::new("bluetoothctl", &["connect", "AA:BB:CC:DD:EE:FF"], output);
+
+        let result = connect_to_bluetooth_device(device, &connected_devices, &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_connect_to_bluetooth_device_disconnect() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let device = "bluetooth - ✅ Test Device           - AA:BB:CC:DD:EE:FF";
+        let connected_devices = vec!["AA:BB:CC:DD:EE:FF".to_string()];
+        let mock_runner =
+            MockCommandRunner::new("bluetoothctl", &["disconnect", "AA:BB:CC:DD:EE:FF"], output);
+
+        let result = connect_to_bluetooth_device(device, &connected_devices, &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_connect_to_bluetooth_device_no_address() {
+        let device = "invalid device string";
+        let connected_devices = vec![];
+
+        // Create a mock that should never be called
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let mock_runner = MockCommandRunner::new("never_called", &[], output);
+
+        let result = connect_to_bluetooth_device(device, &connected_devices, &mock_runner);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_connect_to_bluetooth_device_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let device = "bluetooth - Test Device           - AA:BB:CC:DD:EE:FF";
+        let connected_devices = vec![];
+        let mock_runner =
+            MockCommandRunner::new("bluetoothctl", &["connect", "AA:BB:CC:DD:EE:FF"], output);
+
+        let result = connect_to_bluetooth_device(device, &connected_devices, &mock_runner);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_handle_bluetooth_action_toggle_connect() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let device_str = "bluetooth - Test Device           - AA:BB:CC:DD:EE:FF";
+        let action = BluetoothAction::ToggleConnect(device_str.to_string());
+        let connected_devices = vec![];
+        let mock_runner =
+            MockCommandRunner::new("bluetoothctl", &["connect", "AA:BB:CC:DD:EE:FF"], output);
+
+        let result = handle_bluetooth_action(&action, &connected_devices, &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+}

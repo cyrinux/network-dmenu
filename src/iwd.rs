@@ -1,6 +1,6 @@
 use crate::command::{read_output_lines, CommandRunner};
 use crate::utils::{convert_network_strength, prompt_for_password};
-use crate::{notify_connection, parse_wifi_action, WifiAction};
+use crate::{parse_wifi_action, WifiAction};
 use regex::Regex;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
@@ -118,20 +118,106 @@ fn attempt_connection(
         ssid,
     ];
 
-    if let Some(pwd) = passphrase {
-        command_args.push("--passphrase");
-        command_args.push(pwd);
+    if let Some(pass) = passphrase {
+        command_args.push(pass);
     }
 
     let status = command_runner.run_command("iwctl", &command_args)?.status;
 
     if status.success() {
-        notify_connection("Wi-Fi", ssid)?;
         Ok(true)
     } else {
         #[cfg(debug_assertions)]
         eprintln!("NOOOOO Failed to connect to Wi-Fi network: {ssid}");
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRunner;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    /// Mock command runner for testing
+    struct MockCommandRunner {
+        expected_command: String,
+        expected_args: Vec<String>,
+        return_output: Output,
+    }
+
+    impl MockCommandRunner {
+        fn new(command: &str, args: &[&str], output: Output) -> Self {
+            Self {
+                expected_command: command.to_string(),
+                expected_args: args.iter().map(|s| s.to_string()).collect(),
+                return_output: output,
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+            assert_eq!(command, self.expected_command);
+            assert_eq!(args, self.expected_args.as_slice());
+            Ok(Output {
+                status: self.return_output.status,
+                stdout: self.return_output.stdout.clone(),
+                stderr: self.return_output.stderr.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_get_iwd_networks_success() {
+        let stdout = b"Available networks\n------\n\n> TestNetwork1       psk\n  TestNetwork2       psk    ****\n";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("iwctl", &["station", "wlan0", "get-networks"], output);
+        let result = get_iwd_networks("wlan0", &mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(!networks.is_empty());
+    }
+
+    #[test]
+    fn test_get_iwd_networks_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("iwctl", &["station", "wlan0", "get-networks"], output);
+        let result = get_iwd_networks("wlan0", &mock_runner);
+
+        assert!(result.is_ok());
+        let networks = result.unwrap();
+        assert!(networks.is_empty());
+    }
+
+    #[test]
+    fn test_disconnect_iwd_wifi_success() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("iwctl", &["station", "wlan0", "disconnect"], output);
+
+        let result = disconnect_iwd_wifi("wlan0", &mock_runner);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 }
 

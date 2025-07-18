@@ -336,3 +336,439 @@ pub fn is_tailscale_enabled(command_runner: &dyn CommandRunner) -> Result<bool, 
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRunner;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    /// Mock command runner for testing with multiple command support
+    struct MockCommandRunner {
+        responses: Vec<(String, Vec<String>, Output)>,
+        call_count: std::cell::RefCell<usize>,
+    }
+
+    impl MockCommandRunner {
+        fn new(command: &str, args: &[&str], output: Output) -> Self {
+            Self {
+                responses: vec![(
+                    command.to_string(),
+                    args.iter().map(|s| s.to_string()).collect(),
+                    output,
+                )],
+                call_count: std::cell::RefCell::new(0),
+            }
+        }
+
+        fn with_multiple_calls(responses: Vec<(&str, &[&str], Output)>) -> Self {
+            Self {
+                responses: responses
+                    .into_iter()
+                    .map(|(cmd, args, output)| {
+                        (
+                            cmd.to_string(),
+                            args.iter().map(|s| s.to_string()).collect(),
+                            output,
+                        )
+                    })
+                    .collect(),
+                call_count: std::cell::RefCell::new(0),
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+            let mut count = self.call_count.borrow_mut();
+            if *count < self.responses.len() {
+                let (expected_cmd, expected_args, output) = &self.responses[*count];
+                assert_eq!(command, expected_cmd);
+                assert_eq!(args, expected_args.as_slice());
+                *count += 1;
+                Ok(Output {
+                    status: output.status,
+                    stdout: output.stdout.clone(),
+                    stderr: output.stderr.clone(),
+                })
+            } else {
+                panic!("Unexpected command call: {} {:?}", command, args);
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_node_name() {
+        let line = "100.100.100.100  node-name.ts.net  active; exit node;";
+        let result = extract_node_name(line);
+        assert_eq!(result, "node-name.ts.net");
+    }
+
+    #[test]
+    fn test_extract_node_name_empty() {
+        let line = "";
+        let result = extract_node_name(line);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_extract_node_name_single_word() {
+        let line = "single";
+        let result = extract_node_name(line);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_extract_short_name() {
+        let node_name = "test-node.mullvad.ts.net";
+        let result = extract_short_name(node_name);
+        assert_eq!(result, "test-node");
+    }
+
+    #[test]
+    fn test_extract_short_name_no_dots() {
+        let node_name = "simple-name";
+        let result = extract_short_name(node_name);
+        assert_eq!(result, "simple-name");
+    }
+
+    #[test]
+    fn test_extract_node_ip_valid() {
+        let action = "mullvad   - Germany        - 192.168.1.1    node.mullvad.ts.net";
+        let result = extract_node_ip(action);
+        assert_eq!(result, Some("192.168.1.1"));
+    }
+
+    #[test]
+    fn test_extract_node_ip_invalid() {
+        let action = "no ip address here";
+        let result = extract_node_ip(action);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_node_ip_multiple_ips() {
+        let action = "192.168.1.1 and 10.0.0.1";
+        let result = extract_node_ip(action);
+        assert_eq!(result, Some("192.168.1.1")); // Should return first match
+    }
+
+    #[test]
+    fn test_get_flag_known_country() {
+        assert_eq!(get_flag("Germany"), "🇩🇪");
+        assert_eq!(get_flag("USA"), "🇺🇸");
+        assert_eq!(get_flag("Japan"), "🇯🇵");
+    }
+
+    #[test]
+    fn test_get_flag_unknown_country() {
+        assert_eq!(get_flag("Unknown Country"), "❓");
+        assert_eq!(get_flag(""), "❓");
+    }
+
+    #[test]
+    fn test_parse_mullvad_line() {
+        let regex = Regex::new(r"\s{2,}").unwrap();
+        let line = "192.168.1.1  node.mullvad.ts.net  Germany  offline";
+        let active_exit_node = "";
+
+        let result = parse_mullvad_line(line, &regex, active_exit_node);
+        assert!(result.contains("mullvad"));
+        assert!(result.contains("Germany"));
+        assert!(result.contains("192.168.1.1"));
+        assert!(result.contains("node.mullvad.ts.net"));
+    }
+
+    #[test]
+    fn test_parse_mullvad_line_active() {
+        let regex = Regex::new(r"\s{2,}").unwrap();
+        let line = "192.168.1.1  node.mullvad.ts.net  Germany  active";
+        let active_exit_node = "node.mullvad.ts.net";
+
+        let result = parse_mullvad_line(line, &regex, active_exit_node);
+        assert!(result.contains("✅"));
+    }
+
+    #[test]
+    fn test_parse_exit_node_line() {
+        let regex = Regex::new(r"\s{2,}").unwrap();
+        let line = "10.0.0.1  test-node.ts.net  offline";
+        let active_exit_node = "";
+
+        let result = parse_exit_node_line(line, &regex, active_exit_node);
+        assert!(result.contains("exit-node"));
+        assert!(result.contains("test-node"));
+        assert!(result.contains("10.0.0.1"));
+        assert!(result.contains("🌿"));
+    }
+
+    #[test]
+    fn test_parse_exit_node_line_active() {
+        let regex = Regex::new(r"\s{2,}").unwrap();
+        let line = "10.0.0.1  test-node.ts.net  active";
+        let active_exit_node = "test-node.ts.net";
+
+        let result = parse_exit_node_line(line, &regex, active_exit_node);
+        assert!(result.contains("✅"));
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_success() {
+        let stdout = "100.65.216.68       au-adl-wg-301.mullvad.ts.net               Australia          Adelaide               -\n100.110.43.2        raspberrypi.allosaurus-godzilla.ts.net     -                  -                      -\n";
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+        ]);
+        let exclude_nodes = vec![];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_with_exclusions() {
+        let stdout = "100.65.216.68       au-adl-wg-301.mullvad.ts.net               Australia          Adelaide               -\n100.110.43.2        excluded.ts.net                            -                  -                      -\n";
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+        ]);
+        let exclude_nodes = vec!["excluded.ts.net".to_string()];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert_eq!(result.len(), 1); // Only the non-excluded node should be present
+        assert!(result[0].contains("au-adl-wg-301.mullvad.ts.net"));
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_command_failure() {
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+        ]);
+        let exclude_nodes = vec![];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_is_exit_node_active_true() {
+        let stdout = b"100.100.100.100  active; exit node;";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_exit_node_active(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_is_exit_node_active_false() {
+        let stdout = b"100.100.100.100  active;";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_exit_node_active(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_exit_node_active_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_exit_node_active(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false on command failure
+    }
+
+    #[test]
+    fn test_is_tailscale_enabled_true() {
+        let stdout = b"Tailscale is running normally";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_tailscale_enabled(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_is_tailscale_enabled_false() {
+        let stdout = b"Tailscale is stopped";
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_tailscale_enabled(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_tailscale_enabled_command_failure() {
+        let output = Output {
+            status: ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
+        let result = is_tailscale_enabled(&mock_runner);
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false on command failure
+    }
+
+    #[tokio::test]
+    async fn test_check_mullvad_success() {
+        // This test verifies the function doesn't panic
+        // In a real test environment, we'd mock the HTTP client
+        let result = check_mullvad().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tailscale_action_disable_exit_node() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["set", "--exit-node="], output);
+        let action = TailscaleAction::DisableExitNode;
+
+        let result = handle_tailscale_action(&action, &mock_runner).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tailscale_action_set_enable_true() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["up"], output);
+        let action = TailscaleAction::SetEnable(true);
+
+        let result = handle_tailscale_action(&action, &mock_runner).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tailscale_action_set_enable_false() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::new("tailscale", &["down"], output);
+        let action = TailscaleAction::SetEnable(false);
+
+        let result = handle_tailscale_action(&action, &mock_runner).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tailscale_action_set_shields_true() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("tailscale", &["set", "--shields-up", "true"], output);
+        let action = TailscaleAction::SetShields(true);
+
+        let result = handle_tailscale_action(&action, &mock_runner).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tailscale_action_set_shields_false() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        let mock_runner =
+            MockCommandRunner::new("tailscale", &["set", "--shields-up", "false"], output);
+        let action = TailscaleAction::SetShields(false);
+
+        let result = handle_tailscale_action(&action, &mock_runner).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+}
