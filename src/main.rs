@@ -27,8 +27,8 @@ use networkmanager::{
     get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
 };
 use tailscale::{
-    check_mullvad, get_mullvad_actions, handle_tailscale_action, is_exit_node_active,
-    is_tailscale_enabled, TailscaleAction,
+    check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions, handle_tailscale_action, is_exit_node_active,
+    is_tailscale_enabled, is_tailscale_lock_enabled, TailscaleAction,
 };
 
 /// Command-line arguments structure for the application.
@@ -223,6 +223,25 @@ fn action_to_string(action: &ActionType) -> String {
                     "Shields down"
                 },
             ),
+            TailscaleAction::ShowLockStatus => {
+                format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+            }
+            TailscaleAction::ListLockedNodes => {
+                format_entry("tailscale", "📋", "List Locked Nodes")
+            }
+            TailscaleAction::SignLockedNode(node_key) => {
+                // Try to find the hostname for this node key from locked nodes
+                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                    if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
+                        format_entry("tailscale", "✅", &format!("Sign Node: {} - {} ({})",
+                            extract_short_hostname(&node.hostname), node.machine_name, &node_key[..8]))
+                    } else {
+                        format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                    }
+                } else {
+                    format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                }
+            }
         },
         ActionType::Vpn(vpn_action) => match vpn_action {
             VpnAction::Connect(network) => format_entry("vpn", "", network),
@@ -290,6 +309,25 @@ fn find_selected_action<'a>(
                                 "Shields down"
                             },
                         )
+                }
+                TailscaleAction::ShowLockStatus => {
+                    action == format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+                }
+                TailscaleAction::ListLockedNodes => {
+                    action == format_entry("tailscale", "📋", "List Locked Nodes")
+                }
+                TailscaleAction::SignLockedNode(node_key) => {
+                    // Try to find the hostname for this node key from locked nodes
+                    if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                        if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
+                            action == format_entry("tailscale", "✅", &format!("Sign Node: {} - {} ({})",
+                                extract_short_hostname(&node.hostname), node.machine_name, &node_key[..8]))
+                        } else {
+                            action == format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                        }
+                    } else {
+                        action == format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                    }
                 }
             },
             ActionType::Vpn(vpn_action) => match vpn_action {
@@ -418,6 +456,19 @@ fn get_actions(
                 .into_iter()
                 .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
         );
+
+        // Add Tailscale Lock actions
+        actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
+        if is_tailscale_lock_enabled(command_runner).unwrap_or(false) {
+            actions.push(ActionType::Tailscale(TailscaleAction::ListLockedNodes));
+
+            // Add individual sign node actions for each locked node
+            if let Ok(locked_nodes) = get_locked_nodes(command_runner) {
+                for node in locked_nodes {
+                    actions.push(ActionType::Tailscale(TailscaleAction::SignLockedNode(node.node_key)));
+                }
+            }
+        }
     }
 
     if !args.no_bluetooth && is_command_installed("bluetoothctl") {
@@ -918,5 +969,26 @@ mod tests {
         // This function should not panic and should return Ok(())
         let result = debug_tailscale_status_if_installed();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_show_lock_status() {
+        let action = ActionType::Tailscale(TailscaleAction::ShowLockStatus);
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - 🔒 Show Tailscale Lock Status");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_list_locked_nodes() {
+        let action = ActionType::Tailscale(TailscaleAction::ListLockedNodes);
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - 📋 List Locked Nodes");
+    }
+
+    #[test]
+    fn test_action_to_string_tailscale_sign_locked_node() {
+        let action = ActionType::Tailscale(TailscaleAction::SignLockedNode("abcd1234".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "tailscale - ✅ Sign Node: abcd1234");
     }
 }

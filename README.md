@@ -14,6 +14,7 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - Enable or disable Tailscale
 - Set Tailscale exit nodes
 - Set mullvad exit nodes
+- **Tailscale Lock management - view lock status and sign new locked nodes**
 - Customizable actions via a configuration file
 - Bluetooth connect and disconnect to known devices
 - Connect to wifi devices with bare iwd or network-manager
@@ -60,6 +61,21 @@ network-dmenu
 ```
 
 Select an action from the menu. The corresponding command will be executed.
+
+### Tailscale Lock
+
+When Tailscale Lock is enabled on your tailnet, network-dmenu provides additional functionality to manage locked nodes:
+
+- **🔒 Show Tailscale Lock Status**: Displays the current lock status and trusted signing keys
+- **📋 List Locked Nodes**: Shows all nodes that are locked out and cannot connect
+- **✅ Sign Node**: Sign individual locked nodes to allow them to connect to your tailnet
+
+These actions will only appear in the menu when:
+1. Tailscale is installed and running
+2. Tailscale Lock is enabled on your tailnet
+3. For signing actions: there are locked nodes that need to be signed
+
+When you sign a node, you'll receive a notification confirming success or failure. The signing process uses your local Tailscale Lock key to authorize the node.
 
 ## Dependencies
 

@@ -208,7 +208,6 @@ fn attempt_vpn_connection(
 }
 
 /// Attempts to connect to a Wi-Fi network, optionally using a password.
-
 fn attempt_wifi_connection(
     ssid: &str,
     hidden: bool,

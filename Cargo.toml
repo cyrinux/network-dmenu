@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "1.7.4"
+version = "1.7.7"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
@@ -29,10 +29,10 @@ clap = { version = "4", features = [
   "std",
 ], default-features = false }
 ipaddress = "~0.1"
-reqwest-middleware = "~0.3"
-reqwest-retry = "~0.6"
 tokio = { version = "1", features = ["full"] }
 webbrowser = "1.0.3"
+reqwest-middleware = "0.4.2"
+reqwest-retry = "0.7.0"
 
 [dev-dependencies]
 mockall = "0.12"

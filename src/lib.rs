@@ -25,8 +25,8 @@ pub use networkmanager::{
     is_nm_connected,
 };
 pub use tailscale::{
-    get_mullvad_actions, handle_tailscale_action, is_exit_node_active, is_tailscale_enabled,
-    TailscaleAction,
+    extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key, handle_tailscale_action,
+    is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled, TailscaleAction,
 };
 pub use utils::{
     check_captive_portal, convert_network_strength, prompt_for_password, prompt_for_ssid,
