@@ -88,23 +88,23 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .await
     {
         Ok(resp) => resp,
-        Err(e) => {
+        Err(_e) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check request error: {}", e);
+            eprintln!("Mullvad check request error: {}", _e);
             return Ok(());
         }
     };
 
     let text = match response.text().await {
         Ok(text) => text,
-        Err(e) => {
+        Err(_e) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check response error: {}", e);
+            eprintln!("Mullvad check response error: {}", _e);
             return Ok(());
         }
     };
 
-    if let Err(e) = Notification::new()
+    if let Err(_e) = Notification::new()
         .summary("Connected Status")
         .body(text.trim())
         .show()
@@ -366,42 +366,45 @@ pub async fn handle_tailscale_action(
                 }
             }
         }
-        TailscaleAction::ListLockedNodes => {
-            match get_locked_nodes(command_runner) {
-                Ok(nodes) => {
-                    if nodes.is_empty() {
-                        let _ = Notification::new()
-                            .summary("Tailscale Lock")
-                            .body("No locked nodes found")
-                            .timeout(5000)
-                            .show();
-                    } else {
-                        let node_list = nodes.iter()
-                            .map(|node| format!("{} - {} - {} ({})",
+        TailscaleAction::ListLockedNodes => match get_locked_nodes(command_runner) {
+            Ok(nodes) => {
+                if nodes.is_empty() {
+                    let _ = Notification::new()
+                        .summary("Tailscale Lock")
+                        .body("No locked nodes found")
+                        .timeout(5000)
+                        .show();
+                } else {
+                    let node_list = nodes
+                        .iter()
+                        .map(|node| {
+                            format!(
+                                "{} - {} - {} ({})",
                                 extract_short_hostname(&node.hostname),
                                 node.ip_addresses,
                                 node.machine_name,
-                                &node.node_key[..8]))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let _ = Notification::new()
-                            .summary("Locked Nodes")
-                            .body(&format!("Locked nodes:\n{}", node_list))
-                            .timeout(10000)
-                            .show();
-                    }
-                    Ok(true)
-                }
-                Err(_) => {
+                                &node.node_key[..8]
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     let _ = Notification::new()
-                        .summary("Tailscale Lock Error")
-                        .body("Failed to get locked nodes")
-                        .timeout(5000)
+                        .summary("Locked Nodes")
+                        .body(&format!("Locked nodes:\n{}", node_list))
+                        .timeout(10000)
                         .show();
-                    Ok(false)
                 }
+                Ok(true)
             }
-        }
+            Err(_) => {
+                let _ = Notification::new()
+                    .summary("Tailscale Lock Error")
+                    .body("Failed to get locked nodes")
+                    .timeout(5000)
+                    .show();
+                Ok(false)
+            }
+        },
     }
 }
 
@@ -426,7 +429,9 @@ pub struct LockedNode {
 }
 
 /// Checks if Tailscale lock is enabled.
-pub fn is_tailscale_lock_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
+pub fn is_tailscale_lock_enabled(
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("tailscale", &["lock"])?;
 
     if output.status.success() {
@@ -437,7 +442,9 @@ pub fn is_tailscale_lock_enabled(command_runner: &dyn CommandRunner) -> Result<b
 }
 
 /// Gets the list of locked out nodes.
-pub fn get_locked_nodes(command_runner: &dyn CommandRunner) -> Result<Vec<LockedNode>, Box<dyn Error>> {
+pub fn get_locked_nodes(
+    command_runner: &dyn CommandRunner,
+) -> Result<Vec<LockedNode>, Box<dyn Error>> {
     let output = command_runner.run_command("tailscale", &["lock"])?;
 
     if !output.status.success() {
@@ -514,7 +521,10 @@ pub fn get_signing_key(command_runner: &dyn CommandRunner) -> Result<String, Box
 }
 
 /// Signs a locked node using its node key and the current signing key.
-pub fn sign_locked_node(node_key: &str, command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
+pub fn sign_locked_node(
+    node_key: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
     // Get the signing key first
     let signing_key = get_signing_key(command_runner)?;
 
@@ -525,11 +535,12 @@ pub fn sign_locked_node(node_key: &str, command_runner: &dyn CommandRunner) -> R
         format!("nodekey:{}", node_key)
     };
 
-    let output = command_runner.run_command("tailscale", &["lock", "sign", &formatted_node_key, &signing_key])?;
+    let output = command_runner.run_command(
+        "tailscale",
+        &["lock", "sign", &formatted_node_key, &signing_key],
+    )?;
     Ok(output.status.success())
 }
-
-
 
 /// Extracts a short hostname for display.
 pub fn extract_short_hostname(hostname: &str) -> String {
@@ -544,6 +555,7 @@ mod tests {
     use std::process::{ExitStatus, Output};
 
     /// Mock command runner for testing with multiple command support
+    #[derive(Debug)]
     struct MockCommandRunner {
         responses: Vec<(String, Vec<String>, Output)>,
         call_count: std::cell::RefCell<usize>,
@@ -1011,7 +1023,10 @@ mod tests {
         assert_eq!(node.hostname, "us-atl-wg-302.mullvad.ts.net.");
         assert_eq!(node.ip_addresses, "100.117.10.73,fd7a:115c:a1e0::cc01:a51");
         assert_eq!(node.machine_name, "ncqp5kyPF311CNTRL");
-        assert_eq!(node.node_key, "38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48");
+        assert_eq!(
+            node.node_key,
+            "38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48"
+        );
     }
 
     #[test]
@@ -1023,7 +1038,10 @@ mod tests {
 
     #[test]
     fn test_extract_short_hostname() {
-        assert_eq!(extract_short_hostname("us-atl-wg-302.mullvad.ts.net."), "us-atl-wg-302");
+        assert_eq!(
+            extract_short_hostname("us-atl-wg-302.mullvad.ts.net."),
+            "us-atl-wg-302"
+        );
         assert_eq!(extract_short_hostname("localhost"), "localhost");
         assert_eq!(extract_short_hostname("example.com"), "example");
     }
@@ -1077,7 +1095,10 @@ mod tests {
         let result = get_signing_key(&mock_runner);
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30");
+        assert_eq!(
+            result.unwrap(),
+            "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30"
+        );
     }
 
     #[test]
@@ -1129,7 +1150,10 @@ mod tests {
         // Test just the get_signing_key function for now
         let signing_key_result = get_signing_key(&mock_runner);
         assert!(signing_key_result.is_ok());
-        assert_eq!(signing_key_result.unwrap(), "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30");
+        assert_eq!(
+            signing_key_result.unwrap(),
+            "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30"
+        );
     }
 
     #[tokio::test]

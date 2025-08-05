@@ -1,5 +1,5 @@
-use network_dmenu::tailscale::*;
 use network_dmenu::command::RealCommandRunner;
+use network_dmenu::tailscale::*;
 
 fn main() {
     let command_runner = RealCommandRunner;
@@ -26,7 +26,8 @@ fn main() {
                     } else {
                         println!("📋 Found {} locked node(s):", nodes.len());
                         for (i, node) in nodes.iter().enumerate() {
-                            println!("  {}. {} - {} - {} ({}...)",
+                            println!(
+                                "  {}. {} - {} - {} ({}...)",
                                 i + 1,
                                 extract_short_hostname(&node.hostname),
                                 node.ip_addresses,
@@ -43,7 +44,8 @@ fn main() {
                         println!("  • 🔒 Show Tailscale Lock Status");
                         println!("  • 📋 List Locked Nodes");
                         for node in &nodes {
-                            println!("  • ✅ Sign Node: {} ({}...)",
+                            println!(
+                                "  • ✅ Sign Node: {} ({}...)",
                                 extract_short_hostname(&node.hostname),
                                 &node.node_key[..8]
                             );
@@ -56,8 +58,10 @@ fn main() {
                                 println!("  Your signing key: {}", signing_key);
                                 println!("  Manual command example:");
                                 if let Some(first_node) = nodes.first() {
-                                    println!("    tailscale lock sign nodekey:{} {}",
-                                        first_node.node_key, signing_key);
+                                    println!(
+                                        "    tailscale lock sign nodekey:{} {}",
+                                        first_node.node_key, signing_key
+                                    );
                                 }
                             }
                             Err(e) => {

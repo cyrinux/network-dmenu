@@ -35,15 +35,15 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
     // Handle connection errors gracefully
     let response = match response_result {
         Ok(Ok(resp)) => resp,
-        Ok(Err(e)) => {
+        Ok(Err(_e)) => {
             #[cfg(debug_assertions)]
-            eprintln!("Captive portal check error: {}", e);
+            eprintln!("Captive portal check error: {}", _e);
             // Return Ok instead of propagating the error
             return Ok(());
         }
-        Err(e) => {
+        Err(_e) => {
             #[cfg(debug_assertions)]
-            eprintln!("Captive portal check timeout: {}", e);
+            eprintln!("Captive portal check timeout: {}", _e);
             // Return Ok instead of propagating the error
             return Ok(());
         }
@@ -52,16 +52,16 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
     // Try to get response text, but handle errors gracefully
     let response_text = match response.text().await {
         Ok(text) => text,
-        Err(e) => {
+        Err(_e) => {
             #[cfg(debug_assertions)]
-            eprintln!("Failed to read captive portal response: {}", e);
+            eprintln!("Failed to read captive portal response: {}", _e);
             return Ok(());
         }
     };
 
     if response_text.trim() != EXPECTED_RESPONSE {
         // Show notification
-        if let Err(e) = Notification::new()
+        if let Err(_e) = Notification::new()
             .summary("Captive Portal Detected")
             .body("Opening captive portal in your default browser.")
             .show()
@@ -71,9 +71,9 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
         }
 
         // Open web browser
-        if let Err(e) = webbrowser::open(DETECT_CAPTIVE_PORTAL_URL) {
+        if let Err(_e) = webbrowser::open(DETECT_CAPTIVE_PORTAL_URL) {
             #[cfg(debug_assertions)]
-            eprintln!("Failed to open browser: {}", e);
+            eprintln!("Failed to open browser: {}", _e);
         }
     }
 

@@ -1,5 +1,0 @@
-- use dbus instead of spawning shell if possible
-- list in specific menu known network ssid, eg: iwctl known-networks list
-- add alt-d for network deletion
-- add tailscale netcheck
-- parse tailscale info from json `tailscale status --json`

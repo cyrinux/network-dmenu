@@ -188,6 +188,7 @@ mod tests {
     use std::process::{ExitStatus, Output};
 
     /// Mock command runner for testing
+    #[derive(Debug)]
     struct MockCommandRunner {
         expected_command: String,
         expected_args: Vec<String>,

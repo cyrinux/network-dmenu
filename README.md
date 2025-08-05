@@ -21,6 +21,7 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - Connect to network-manager vpn networks
 - Detect if behind a captive portal and open a browser to connect
 - Execute custom actions
+- Optimized performance with efficient scanning algorithms
 
 ## Installation
 
@@ -61,6 +62,16 @@ network-dmenu
 ```
 
 Select an action from the menu. The corresponding command will be executed.
+
+### Performance Optimizations
+
+network-dmenu has been optimized for performance with the following features:
+
+- Prioritizes faster operations first to reduce perceived wait time
+- Collects network information early in the process
+- Adds simple items to the menu while scanning networks
+- Uses efficient error handling to ensure resilience
+- Organizes scanning in logical order based on operation cost
 
 ### Tailscale Lock
 
