@@ -67,7 +67,7 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
             .show()
         {
             #[cfg(debug_assertions)]
-            eprintln!("Failed to show notification: {}", e);
+            eprintln!("Failed to show notification: {}", _e);
         }
 
         // Open web browser

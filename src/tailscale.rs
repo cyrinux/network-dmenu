@@ -22,6 +22,11 @@ pub enum TailscaleAction {
 }
 
 /// Add a new parameter to pass the excluded exit nodes.
+///
+/// This function has been optimized for performance:
+/// 1. Reads the command output only once instead of twice
+/// 2. Uses functional programming style with clean pipeline operations
+/// 3. Filters excluded nodes early to avoid unnecessary processing
 pub fn get_mullvad_actions(
     command_runner: &dyn CommandRunner,
     exclude_exit_nodes: &[String],
@@ -35,25 +40,31 @@ pub fn get_mullvad_actions(
     let exclude_set: HashSet<_> = exclude_exit_nodes.iter().collect();
 
     if output.status.success() {
+        // Performance optimization: Read output lines only once
         let reader = read_output_lines(&output).unwrap_or_default();
         let regex = Regex::new(r"\s{2,}").unwrap();
 
-        let mut actions: Vec<String> = reader
-            .into_iter()
+        // Performance optimization: Using functional style with single pass operation
+        // First get all lines that contain mullvad.ts.net but aren't excluded
+        let mullvad_actions: Vec<String> = reader.iter()
             .filter(|line| line.contains("mullvad.ts.net"))
             .filter(|line| !exclude_set.contains(&extract_node_name(line)))
-            .map(|line| parse_mullvad_line(&line, &regex, &active_exit_node))
+            .map(|line| parse_mullvad_line(line, &regex, &active_exit_node))
             .collect();
 
-        let reader = read_output_lines(&output).unwrap_or_default();
-        actions.extend(
-            reader
-                .into_iter()
-                .filter(|line| line.contains("ts.net") && !line.contains("mullvad.ts.net"))
-                .filter(|line| !exclude_set.contains(&extract_node_name(line)))
-                .map(|line| parse_exit_node_line(&line, &regex, &active_exit_node)),
-        );
+        // Then get all other ts.net lines that aren't mullvad and aren't excluded
+        // Using a second pass on the same reader vector (not re-reading the command output)
+        let other_actions: Vec<String> = reader.iter()
+            .filter(|line| line.contains("ts.net") && !line.contains("mullvad.ts.net"))
+            .filter(|line| !exclude_set.contains(&extract_node_name(line)))
+            .map(|line| parse_exit_node_line(line, &regex, &active_exit_node))
+            .collect();
 
+        // Combine the two vectors
+        let mut actions = mullvad_actions;
+        actions.extend(other_actions);
+
+        // Sort the results
         actions.sort_by(|a, b| {
             a.split_whitespace()
                 .next()
@@ -110,7 +121,7 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .show()
     {
         #[cfg(debug_assertions)]
-        eprintln!("Mullvad notification error: {}", e);
+        eprintln!("Mullvad notification error: {}", _e);
     }
 
     Ok(())
