@@ -207,6 +207,116 @@ fn attempt_vpn_connection(
     }
 }
 
+/// Attempts to connect to a Wi-Fi network, optionally using a password.
+
+fn attempt_wifi_connection(
+    ssid: &str,
+    hidden: bool,
+    password: Option<String>,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    let mut command = match password {
+        Some(ref pwd) => vec!["device", "wifi", "connect", ssid, "password", pwd],
+        None => vec!["device", "wifi", "connect", ssid],
+    };
+
+    // Add hidden parameter only if needed
+    if hidden {
+        command.push("hidden");
+        command.push("yes");
+    }
+
+    let status = command_runner.run_command("nmcli", &command)?.status;
+
+    if status.success() {
+        // Connection successful
+        Ok(true)
+    } else {
+        #[cfg(debug_assertions)]
+        eprintln!("Failed to connect to Wi-Fi network: {ssid}");
+        Ok(false)
+    }
+}
+
+/// Disconnects from a VPN network.
+pub fn disconnect_nm_vpn(
+    name: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    let status = command_runner
+        .run_command("nmcli", &["connection", "down", name])?
+        .status;
+    Ok(status.success())
+}
+/// Disconnects from a Wi-Fi network.
+pub fn disconnect_nm_wifi(
+    interface: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    let status = command_runner
+        .run_command("nmcli", &["device", "disconnect", interface])?
+        .status;
+    Ok(status.success())
+}
+
+/// Checks if NetworkManager is currently connected to a network.
+pub fn is_nm_connected(
+    command_runner: &dyn CommandRunner,
+    interface: &str,
+) -> Result<bool, Box<dyn Error>> {
+    let output = command_runner.run_command(
+        "nmcli",
+        &[
+            "--colors",
+            "no",
+            "-t",
+            "-f",
+            "DEVICE,STATE",
+            "device",
+            "status",
+        ],
+    )?;
+    let reader = read_output_lines(&output)?;
+    for line in reader {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() == 2 && parts[0].trim() == interface && parts[1].trim() == "connected" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Checks if a Wi-Fi network is known (i.e., previously connected).
+pub fn is_known_network(
+    ssid: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    // Run the `nmcli connection show` command
+    let output = command_runner.run_command("nmcli", &["--colors", "no", "connection", "show"])?;
+
+    // Check if the command executed successfully
+    if output.status.success() {
+        // Create a buffered reader for the command output
+        let reader = BufReader::new(output.stdout.as_slice());
+
+        // Create a regex pattern to match the SSID exactly
+        let ssid_pattern = format!(r"^\s*{}\s+", regex::escape(ssid));
+        let re = Regex::new(&ssid_pattern)?;
+
+        // Iterate over each line in the output
+        for line in reader.lines() {
+            let line = line?;
+
+            // Check if the line matches the SSID pattern
+            if re.is_match(&line) {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,114 +513,4 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
-}
-
-/// Attempts to connect to a Wi-Fi network, optionally using a password.
-
-fn attempt_wifi_connection(
-    ssid: &str,
-    hidden: bool,
-    password: Option<String>,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    let mut command = match password {
-        Some(ref pwd) => vec!["device", "wifi", "connect", ssid, "password", pwd],
-        None => vec!["device", "wifi", "connect", ssid],
-    };
-
-    // Add hidden parameter only if needed
-    if hidden {
-        command.push("hidden");
-        command.push("yes");
-    }
-
-    let status = command_runner.run_command("nmcli", &command)?.status;
-
-    if status.success() {
-        // Connection successful
-        Ok(true)
-    } else {
-        #[cfg(debug_assertions)]
-        eprintln!("Failed to connect to Wi-Fi network: {ssid}");
-        Ok(false)
-    }
-}
-
-/// Disconnects from a VPN network.
-pub fn disconnect_nm_vpn(
-    name: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    let status = command_runner
-        .run_command("nmcli", &["connection", "down", name])?
-        .status;
-    Ok(status.success())
-}
-/// Disconnects from a Wi-Fi network.
-pub fn disconnect_nm_wifi(
-    interface: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    let status = command_runner
-        .run_command("nmcli", &["device", "disconnect", interface])?
-        .status;
-    Ok(status.success())
-}
-
-/// Checks if NetworkManager is currently connected to a network.
-pub fn is_nm_connected(
-    command_runner: &dyn CommandRunner,
-    interface: &str,
-) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command(
-        "nmcli",
-        &[
-            "--colors",
-            "no",
-            "-t",
-            "-f",
-            "DEVICE,STATE",
-            "device",
-            "status",
-        ],
-    )?;
-    let reader = read_output_lines(&output)?;
-    for line in reader {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() == 2 && parts[0].trim() == interface && parts[1].trim() == "connected" {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Checks if a Wi-Fi network is known (i.e., previously connected).
-pub fn is_known_network(
-    ssid: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    // Run the `nmcli connection show` command
-    let output = command_runner.run_command("nmcli", &["--colors", "no", "connection", "show"])?;
-
-    // Check if the command executed successfully
-    if output.status.success() {
-        // Create a buffered reader for the command output
-        let reader = BufReader::new(output.stdout.as_slice());
-
-        // Create a regex pattern to match the SSID exactly
-        let ssid_pattern = format!(r"^\s*{}\s+", regex::escape(ssid));
-        let re = Regex::new(&ssid_pattern)?;
-
-        // Iterate over each line in the output
-        for line in reader.lines() {
-            let line = line?;
-
-            // Check if the line matches the SSID pattern
-            if re.is_match(&line) {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
 }

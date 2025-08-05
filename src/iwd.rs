@@ -133,6 +133,53 @@ fn attempt_connection(
     }
 }
 
+/// Disconnects from a Wi-Fi network.
+pub fn disconnect_iwd_wifi(
+    interface: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    let status = command_runner
+        .run_command("iwctl", &["station", interface, "disconnect"])?
+        .status;
+    Ok(status.success())
+}
+
+/// Checks if IWD is currently connected to a network.
+pub fn is_iwd_connected(
+    command_runner: &dyn CommandRunner,
+    interface: &str,
+) -> Result<bool, Box<dyn Error>> {
+    let output = command_runner.run_command("iwctl", &["station", interface, "show"])?;
+    if output.status.success() {
+        for line in read_output_lines(&output)? {
+            if line.contains("Connected") {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Checks if a Wi-Fi network is known (i.e., previously connected).
+pub fn is_known_network(
+    ssid: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    let output = command_runner.run_command("iwctl", &["known-networks", "list"])?;
+    if output.status.success() {
+        let reader = BufReader::new(output.stdout.as_slice());
+        let ssid_pattern = format!(r"\b{}\b", regex::escape(ssid));
+        let re = Regex::new(&ssid_pattern)?;
+        for line in reader.lines() {
+            let line = line?;
+            if re.is_match(&line) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,51 +266,4 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
-}
-
-/// Disconnects from a Wi-Fi network.
-pub fn disconnect_iwd_wifi(
-    interface: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    let status = command_runner
-        .run_command("iwctl", &["station", interface, "disconnect"])?
-        .status;
-    Ok(status.success())
-}
-
-/// Checks if IWD is currently connected to a network.
-pub fn is_iwd_connected(
-    command_runner: &dyn CommandRunner,
-    interface: &str,
-) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command("iwctl", &["station", interface, "show"])?;
-    if output.status.success() {
-        for line in read_output_lines(&output)? {
-            if line.contains("Connected") {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-/// Checks if a Wi-Fi network is known (i.e., previously connected).
-pub fn is_known_network(
-    ssid: &str,
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command("iwctl", &["known-networks", "list"])?;
-    if output.status.success() {
-        let reader = BufReader::new(output.stdout.as_slice());
-        let ssid_pattern = format!(r"\b{}\b", regex::escape(ssid));
-        let re = Regex::new(&ssid_pattern)?;
-        for line in reader.lines() {
-            let line = line?;
-            if re.is_match(&line) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
