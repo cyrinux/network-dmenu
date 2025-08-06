@@ -46,7 +46,8 @@ pub fn get_mullvad_actions(
 
         // Performance optimization: Using functional style with single pass operation
         // First get all lines that contain mullvad.ts.net but aren't excluded
-        let mullvad_actions: Vec<String> = reader.iter()
+        let mullvad_actions: Vec<String> = reader
+            .iter()
             .filter(|line| line.contains("mullvad.ts.net"))
             .filter(|line| !exclude_set.contains(&extract_node_name(line)))
             .map(|line| parse_mullvad_line(line, &regex, &active_exit_node))
@@ -54,7 +55,8 @@ pub fn get_mullvad_actions(
 
         // Then get all other ts.net lines that aren't mullvad and aren't excluded
         // Using a second pass on the same reader vector (not re-reading the command output)
-        let other_actions: Vec<String> = reader.iter()
+        let other_actions: Vec<String> = reader
+            .iter()
             .filter(|line| line.contains("ts.net") && !line.contains("mullvad.ts.net"))
             .filter(|line| !exclude_set.contains(&extract_node_name(line)))
             .map(|line| parse_exit_node_line(line, &regex, &active_exit_node))
@@ -289,10 +291,13 @@ pub fn is_exit_node_active(command_runner: &dyn CommandRunner) -> Result<bool, B
     Ok(false)
 }
 
-/// Handles a Tailscale action.
+/// Handles a tailscale action, executing the appropriate command.
+///
+/// If `notification_sender` is None, no notifications will be sent.
 pub async fn handle_tailscale_action(
     action: &TailscaleAction,
     command_runner: &dyn CommandRunner,
+    notification_sender: Option<&dyn NotificationSender>,
 ) -> Result<bool, Box<dyn Error>> {
     if !is_command_installed("tailscale") {
         return Ok(false);
@@ -341,38 +346,42 @@ pub async fn handle_tailscale_action(
             let output = command_runner.run_command("tailscale", &["lock"])?;
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let _ = Notification::new()
-                    .summary("Tailscale Lock Status")
-                    .body(&stdout)
-                    .timeout(10000)
-                    .show();
+                if let Some(sender) = notification_sender {
+                    let _ = sender.send_notification("Tailscale Lock Status", &stdout, 10000);
+                }
             }
             Ok(output.status.success())
         }
         TailscaleAction::SignLockedNode(node_key) => {
             match sign_locked_node(node_key, command_runner) {
                 Ok(true) => {
-                    let _ = Notification::new()
-                        .summary("Tailscale Lock")
-                        .body(&format!("Successfully signed node: {}", &node_key[..8]))
-                        .timeout(5000)
-                        .show();
+                    if let Some(sender) = notification_sender {
+                        let _ = sender.send_notification(
+                            "Tailscale Lock",
+                            &format!("Successfully signed node: {}", &node_key[..8]),
+                            5000,
+                        );
+                    }
                     Ok(true)
                 }
                 Ok(false) => {
-                    let _ = Notification::new()
-                        .summary("Tailscale Lock Error")
-                        .body(&format!("Failed to sign node: {}", &node_key[..8]))
-                        .timeout(5000)
-                        .show();
+                    if let Some(sender) = notification_sender {
+                        let _ = sender.send_notification(
+                            "Tailscale Lock Error",
+                            &format!("Failed to sign node: {}", &node_key[..8]),
+                            5000,
+                        );
+                    }
                     Ok(false)
                 }
                 Err(e) => {
-                    let _ = Notification::new()
-                        .summary("Tailscale Lock Error")
-                        .body(&format!("Error signing node {}: {}", &node_key[..8], e))
-                        .timeout(5000)
-                        .show();
+                    if let Some(sender) = notification_sender {
+                        let _ = sender.send_notification(
+                            "Tailscale Lock Error",
+                            &format!("Error signing node {}: {}", &node_key[..8], e),
+                            5000,
+                        );
+                    }
                     Ok(false)
                 }
             }
@@ -380,11 +389,13 @@ pub async fn handle_tailscale_action(
         TailscaleAction::ListLockedNodes => match get_locked_nodes(command_runner) {
             Ok(nodes) => {
                 if nodes.is_empty() {
-                    let _ = Notification::new()
-                        .summary("Tailscale Lock")
-                        .body("No locked nodes found")
-                        .timeout(5000)
-                        .show();
+                    if let Some(sender) = notification_sender {
+                        let _ = sender.send_notification(
+                            "Tailscale Lock",
+                            "No locked nodes found",
+                            5000,
+                        );
+                    }
                 } else {
                     let node_list = nodes
                         .iter()
@@ -399,20 +410,24 @@ pub async fn handle_tailscale_action(
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    let _ = Notification::new()
-                        .summary("Locked Nodes")
-                        .body(&format!("Locked nodes:\n{}", node_list))
-                        .timeout(10000)
-                        .show();
+                    if let Some(sender) = notification_sender {
+                        let _ = sender.send_notification(
+                            "Locked Nodes",
+                            &format!("Locked nodes:\n{}", node_list),
+                            10000,
+                        );
+                    }
                 }
                 Ok(true)
             }
             Err(_) => {
-                let _ = Notification::new()
-                    .summary("Tailscale Lock Error")
-                    .body("Failed to get locked nodes")
-                    .timeout(5000)
-                    .show();
+                if let Some(sender) = notification_sender {
+                    let _ = sender.send_notification(
+                        "Tailscale Lock Error",
+                        "Failed to get locked nodes",
+                        5000,
+                    );
+                }
                 Ok(false)
             }
         },
@@ -556,6 +571,70 @@ pub fn sign_locked_node(
 /// Extracts a short hostname for display.
 pub fn extract_short_hostname(hostname: &str) -> String {
     hostname.split('.').next().unwrap_or(hostname).to_string()
+}
+
+/// Trait for sending notifications.
+pub trait NotificationSender {
+    /// Sends a notification with the given summary, body, and timeout.
+    fn send_notification(
+        &self,
+        summary: &str,
+        body: &str,
+        timeout: i32,
+    ) -> Result<(), Box<dyn Error>>;
+}
+
+/// Default notification sender that uses notify-rust.
+pub struct DefaultNotificationSender;
+
+impl NotificationSender for DefaultNotificationSender {
+    fn send_notification(
+        &self,
+        summary: &str,
+        body: &str,
+        timeout: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        Notification::new()
+            .summary(summary)
+            .body(body)
+            .timeout(timeout)
+            .show()?;
+        Ok(())
+    }
+}
+
+/// Mock notification sender that records notifications for testing.
+#[cfg(test)]
+pub struct MockNotificationSender {
+    notifications: RefCell<Vec<(String, String, i32)>>,
+}
+
+#[cfg(test)]
+impl MockNotificationSender {
+    pub fn new() -> Self {
+        Self {
+            notifications: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn get_notifications(&self) -> Vec<(String, String, i32)> {
+        self.notifications.borrow().clone()
+    }
+}
+
+#[cfg(test)]
+impl NotificationSender for MockNotificationSender {
+    fn send_notification(
+        &self,
+        summary: &str,
+        body: &str,
+        timeout: i32,
+    ) -> Result<(), Box<dyn Error>> {
+        self.notifications
+            .borrow_mut()
+            .push((summary.to_string(), body.to_string(), timeout));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -922,8 +1001,9 @@ mod tests {
 
         let mock_runner = MockCommandRunner::new("tailscale", &["set", "--exit-node="], output);
         let action = TailscaleAction::DisableExitNode;
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -938,8 +1018,9 @@ mod tests {
 
         let mock_runner = MockCommandRunner::new("tailscale", &["up"], output);
         let action = TailscaleAction::SetEnable(true);
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -954,8 +1035,9 @@ mod tests {
 
         let mock_runner = MockCommandRunner::new("tailscale", &["down"], output);
         let action = TailscaleAction::SetEnable(false);
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -971,8 +1053,9 @@ mod tests {
         let mock_runner =
             MockCommandRunner::new("tailscale", &["set", "--shields-up", "true"], output);
         let action = TailscaleAction::SetShields(true);
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -988,8 +1071,9 @@ mod tests {
         let mock_runner =
             MockCommandRunner::new("tailscale", &["set", "--shields-up", "false"], output);
         let action = TailscaleAction::SetShields(false);
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -1138,8 +1222,9 @@ mod tests {
 
         let mock_runner = MockCommandRunner::new("tailscale", &["lock"], output);
         let action = TailscaleAction::ShowLockStatus;
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -1180,8 +1265,9 @@ mod tests {
 
         let mock_runner = MockCommandRunner::new("tailscale", &["lock"], output);
         let action = TailscaleAction::ShowLockStatus;
+        let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner).await;
+        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification)).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }

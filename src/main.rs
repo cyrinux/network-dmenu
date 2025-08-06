@@ -31,7 +31,7 @@ use networkmanager::{
 use tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
-    TailscaleAction,
+    DefaultNotificationSender, TailscaleAction,
 };
 
 /// Command-line arguments structure for the application.
@@ -791,7 +791,8 @@ async fn set_action(
         ActionType::Custom(custom_action) => handle_custom_action(custom_action),
         ActionType::System(system_action) => handle_system_action(system_action),
         ActionType::Tailscale(mullvad_action) => {
-            handle_tailscale_action(mullvad_action, command_runner).await
+            let notification_sender = DefaultNotificationSender;
+            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender)).await
         }
         ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
         ActionType::Wifi(wifi_action) => {
