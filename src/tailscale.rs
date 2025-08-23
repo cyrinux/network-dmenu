@@ -1,13 +1,14 @@
 use crate::command::{execute_command, is_command_installed, read_output_lines, CommandRunner};
 use crate::constants::{ICON_STAR, SUGGESTED_CHECK};
 use crate::format_entry;
+use crate::utils::get_flag;
 use notify_rust::Notification;
 use regex::Regex;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 
 #[cfg(test)]
@@ -126,9 +127,7 @@ pub fn get_mullvad_actions(
         actions.extend(other_actions);
 
         // Sort the results (but keep suggested node at the top if it exists)
-        let has_suggested = actions
-            .first()
-            .is_some_and(|a| a.contains(SUGGESTED_CHECK));
+        let has_suggested = actions.first().is_some_and(|a| a.contains(SUGGESTED_CHECK));
         if has_suggested {
             let suggested = actions.remove(0);
             actions.sort_by(|a, b| {
@@ -217,9 +216,10 @@ fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> Stri
     let node_name = parts.get(1).unwrap_or(&"").trim();
     let country = parts.get(2).unwrap_or(&"").trim();
     let is_active = active_exit_node == node_name;
+    let flag = get_flag(country);
     format_entry(
         "mullvad",
-        if is_active { "✅" } else { get_flag(country) },
+        if is_active { "✅" } else { &flag },
         &format!("{country:<15} - {node_ip:<16} {node_name}"),
     )
 }
@@ -243,6 +243,7 @@ fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> St
     )
 }
 
+/// Get the suggested exit-node
 fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
     let output = command_runner
         .run_command("tailscale", &["exit-node", "suggest"])
@@ -311,67 +312,6 @@ fn extract_node_ip(action: &str) -> Option<&str> {
         .map(|m| m.as_str())
 }
 
-/// Returns the flag emoji for a given country.
-fn get_flag(country: &str) -> &'static str {
-    let country_flags: HashMap<&str, &str> = [
-        ("Albania", "🇦🇱"),
-        ("Australia", "🇦🇺"),
-        ("Austria", "🇦🇹"),
-        ("Belgium", "🇧🇪"),
-        ("Brazil", "🇧🇷"),
-        ("Bulgaria", "🇧🇬"),
-        ("Canada", "🇨🇦"),
-        ("Chile", "🇨🇱"),
-        ("Colombia", "🇨🇴"),
-        ("Croatia", "🇭🇷"),
-        ("Cyprus", "🇨🇾"),
-        ("Czech Republic", "🇨🇿"),
-        ("Denmark", "🇩🇰"),
-        ("Estonia", "🇪🇪"),
-        ("Finland", "🇫🇮"),
-        ("France", "🇫🇷"),
-        ("Germany", "🇩🇪"),
-        ("Greece", "🇬🇷"),
-        ("Hong Kong", "🇭🇰"),
-        ("Hungary", "🇭🇺"),
-        ("Indonesia", "🇮🇩"),
-        ("Ireland", "🇮🇪"),
-        ("Israel", "🇮🇱"),
-        ("Italy", "🇮🇹"),
-        ("Japan", "🇯🇵"),
-        ("Latvia", "🇱🇻"),
-        ("Malaysia", "🇲🇾"),
-        ("Mexico", "🇲🇽"),
-        ("Netherlands", "🇳🇱"),
-        ("New Zealand", "🇳🇿"),
-        ("Nigeria", "🇳🇬"),
-        ("Norway", "🇳🇴"),
-        ("Peru", "🇵🇪"),
-        ("Philippines", "🇵🇭"),
-        ("Poland", "🇵🇱"),
-        ("Portugal", "🇵🇹"),
-        ("Romania", "🇷🇴"),
-        ("Serbia", "🇷🇸"),
-        ("Singapore", "🇸🇬"),
-        ("Slovakia", "🇸🇰"),
-        ("Slovenia", "🇸🇮"),
-        ("South Africa", "🇿🇦"),
-        ("Spain", "🇪🇸"),
-        ("Sweden", "🇸🇪"),
-        ("Switzerland", "🇨🇭"),
-        ("Thailand", "🇹🇭"),
-        ("Turkey", "🇹🇷"),
-        ("UK", "🇬🇧"),
-        ("Ukraine", "🇺🇦"),
-        ("USA", "🇺🇸"),
-    ]
-    .iter()
-    .cloned()
-    .collect();
-
-    country_flags.get(country).unwrap_or(&"❓")
-}
-
 /// Checks if an exit node is currently active for Tailscale.
 pub fn is_exit_node_active(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("tailscale", &["status"])?;
@@ -404,8 +344,11 @@ pub async fn handle_tailscale_action(
             let status = command_runner
                 .run_command("tailscale", &["set", "--exit-node="])?
                 .status;
-            // Ignore errors from mullvad check
-            let _ = check_mullvad().await;
+            // Log errors from mullvad check in debug mode but continue execution
+            if let Err(_e) = check_mullvad().await {
+                #[cfg(debug_assertions)]
+                eprintln!("Mullvad check error after exit node operation: {_e}");
+            }
             Ok(status.success())
         }
         TailscaleAction::SetEnable(enable) => {
@@ -416,12 +359,18 @@ pub async fn handle_tailscale_action(
         }
         TailscaleAction::SetExitNode(node) => {
             if set_exit_node(node) {
-                // Ignore errors from mullvad check
-                let _ = check_mullvad().await;
+                // Log errors from mullvad check in debug mode but continue execution
+                if let Err(_e) = check_mullvad().await {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Mullvad check error after disabling exit node: {_e}");
+                }
                 Ok(true)
             } else {
-                // Ignore errors from mullvad check
-                let _ = check_mullvad().await;
+                // Log errors from mullvad check in debug mode but continue execution
+                if let Err(_e) = check_mullvad().await {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Mullvad check error after setting exit node: {_e}");
+                }
                 Ok(false)
             }
         }
@@ -469,7 +418,12 @@ pub async fn handle_tailscale_action(
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if let Some(sender) = notification_sender {
-                    let _ = sender.send_notification("Tailscale Lock Status", &stdout, 10000);
+                    if let Err(_e) =
+                        sender.send_notification("Tailscale Lock Status", &stdout, 10000)
+                    {
+                        #[cfg(debug_assertions)]
+                        eprintln!("Failed to send lock status notification: {_e}");
+                    }
                 }
             }
             Ok(output.status.success())
@@ -478,31 +432,42 @@ pub async fn handle_tailscale_action(
             match sign_locked_node(node_key, command_runner) {
                 Ok(true) => {
                     if let Some(sender) = notification_sender {
-                        let _ = sender.send_notification(
+                        if let Err(_e) = sender.send_notification(
                             "Tailscale Lock",
                             &format!("Successfully signed node: {}", &node_key[..8]),
                             5000,
-                        );
+                        ) {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Failed to send successful node signing notification: {_e}");
+                        }
                     }
                     Ok(true)
                 }
                 Ok(false) => {
                     if let Some(sender) = notification_sender {
-                        let _ = sender.send_notification(
+                        if let Err(_e) = sender.send_notification(
                             "Tailscale Lock Error",
                             &format!("Failed to sign node: {}", &node_key[..8]),
                             5000,
-                        );
+                        ) {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Failed to send node signing failure notification: {_e}");
+                        }
                     }
                     Ok(false)
                 }
                 Err(e) => {
                     if let Some(sender) = notification_sender {
-                        let _ = sender.send_notification(
+                        if let Err(_notify_err) = sender.send_notification(
                             "Tailscale Lock Error",
                             &format!("Error signing node {}: {}", &node_key[..8], e),
                             5000,
-                        );
+                        ) {
+                            #[cfg(debug_assertions)]
+                            eprintln!(
+                                "Failed to send node signing error notification: {_notify_err}"
+                            );
+                        }
                     }
                     Ok(false)
                 }
@@ -512,11 +477,14 @@ pub async fn handle_tailscale_action(
             Ok(nodes) => {
                 if nodes.is_empty() {
                     if let Some(sender) = notification_sender {
-                        let _ = sender.send_notification(
+                        if let Err(_e) = sender.send_notification(
                             "Tailscale Lock",
                             "No locked nodes found",
                             5000,
-                        );
+                        ) {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Failed to send 'no locked nodes' notification: {_e}");
+                        }
                     }
                 } else {
                     let node_list = nodes
@@ -533,22 +501,28 @@ pub async fn handle_tailscale_action(
                         .collect::<Vec<_>>()
                         .join("\n");
                     if let Some(sender) = notification_sender {
-                        let _ = sender.send_notification(
+                        if let Err(_e) = sender.send_notification(
                             "Locked Nodes",
                             &format!("Locked nodes:\n{}", node_list),
                             10000,
-                        );
+                        ) {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Failed to send locked nodes list notification: {_e}");
+                        }
                     }
                 }
                 Ok(true)
             }
             Err(_) => {
                 if let Some(sender) = notification_sender {
-                    let _ = sender.send_notification(
+                    if let Err(_e) = sender.send_notification(
                         "Tailscale Lock Error",
                         "Failed to get locked nodes",
                         5000,
-                    );
+                    ) {
+                        #[cfg(debug_assertions)]
+                        eprintln!("Failed to send 'failed to get locked nodes' notification: {_e}");
+                    }
                 }
                 Ok(false)
             }

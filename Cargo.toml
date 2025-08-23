@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "1.7.4"
+version = "1.8.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["full"] }
 webbrowser = "1.0.3"
 reqwest-middleware = "0.4.2"
 reqwest-retry = "0.7.0"
+country-emoji = "0.2.0"
 
 [dev-dependencies]
 mockall = "0.12"
