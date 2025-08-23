@@ -16,12 +16,14 @@ use std::cell::RefCell;
 #[derive(Debug)]
 pub enum TailscaleAction {
     DisableExitNode,
+    ListLockedNodes,
+    SetAllowLanAccess(bool),
+    SetAcceptRoutes(bool),
     SetEnable(bool),
     SetExitNode(String),
     SetShields(bool),
     ShowLockStatus,
     SignLockedNode(String),
-    ListLockedNodes,
 }
 
 /// Add a new parameter to pass the excluded exit nodes.
@@ -39,6 +41,7 @@ pub fn get_mullvad_actions(
         .expect("Failed to execute command");
 
     let active_exit_node = get_active_exit_node(command_runner);
+    let suggested_exit_node = get_exit_node_suggested(command_runner);
 
     let exclude_set: HashSet<_> = exclude_exit_nodes.iter().collect();
 
@@ -49,7 +52,7 @@ pub fn get_mullvad_actions(
 
         // Performance optimization: Using functional style with single pass operation
         // First get all lines that contain mullvad.ts.net but aren't excluded
-        let mullvad_actions: Vec<String> = reader
+        let mut mullvad_actions: Vec<String> = reader
             .iter()
             .filter(|line| line.contains("mullvad.ts.net"))
             .filter(|line| !exclude_set.contains(&extract_node_name(line)))
@@ -58,27 +61,91 @@ pub fn get_mullvad_actions(
 
         // Then get all other ts.net lines that aren't mullvad and aren't excluded
         // Using a second pass on the same reader vector (not re-reading the command output)
-        let other_actions: Vec<String> = reader
+        let mut other_actions: Vec<String> = reader
             .iter()
             .filter(|line| line.contains("ts.net") && !line.contains("mullvad.ts.net"))
             .filter(|line| !exclude_set.contains(&extract_node_name(line)))
             .map(|line| parse_exit_node_line(line, &regex, &active_exit_node))
             .collect();
 
-        // Combine the two vectors
-        let mut actions = mullvad_actions;
+        // Add or mark suggested node if available
+        if let Some(suggested_node) = suggested_exit_node {
+            // The suggested node comes as just the hostname, not a full line
+            let suggested_name = suggested_node.clone();
+            if !exclude_set.contains(&suggested_name) {
+                // Check if suggested node exists in mullvad_actions
+                if let Some(pos) = mullvad_actions.iter().position(|action| action.contains(&suggested_name)) {
+                    // Mark existing node as suggested and move to top
+                    let mut existing_action = mullvad_actions.remove(pos);
+                    if !existing_action.contains("(suggested") {
+                        existing_action = format!("{} (suggested 🌟)", existing_action);
+                    }
+                    mullvad_actions.insert(0, existing_action);
+                } else if let Some(pos) = other_actions.iter().position(|action| action.contains(&suggested_name)) {
+                    // Mark existing node in other_actions as suggested and move to mullvad_actions top
+                    let mut existing_action = other_actions.remove(pos);
+                    if !existing_action.contains("(suggested") {
+                        existing_action = format!("{} (suggested 🌟)", existing_action);
+                    }
+                    mullvad_actions.insert(0, existing_action);
+                } else {
+                    // Add new suggested node
+                    let suggested_action = format!("{} (suggested 🌟)", suggested_node);
+                    mullvad_actions.insert(0, suggested_action);
+                }
+            }
+        }
+
+        // Combine the two vectors, keeping suggested nodes at the top
+        let mut actions = Vec::new();
+
+        // First add any suggested nodes from mullvad_actions
+        let suggested_nodes: Vec<String> = mullvad_actions.iter()
+            .filter(|action| action.contains("(suggested"))
+            .cloned()
+            .collect();
+
+        // Then add non-suggested mullvad actions
+        let non_suggested_mullvad: Vec<String> = mullvad_actions.iter()
+            .filter(|action| !action.contains("(suggested"))
+            .cloned()
+            .collect();
+
+        // Combine in order: suggested first, then mullvad, then other
+        actions.extend(suggested_nodes);
+        actions.extend(non_suggested_mullvad);
         actions.extend(other_actions);
 
-        // Sort the results
-        actions.sort_by(|a, b| {
-            a.split_whitespace()
-                .next()
-                .cmp(&b.split_whitespace().next())
-        });
+        // Sort the results (but keep suggested node at the top if it exists)
+        let has_suggested = actions.first().map_or(false, |a| a.contains("(suggested)"));
+        if has_suggested {
+            let suggested = actions.remove(0);
+            actions.sort_by(|a, b| {
+                a.split_whitespace()
+                    .next()
+                    .cmp(&b.split_whitespace().next())
+            });
+            actions.insert(0, suggested);
+        } else {
+            actions.sort_by(|a, b| {
+                a.split_whitespace()
+                    .next()
+                    .cmp(&b.split_whitespace().next())
+            });
+        }
         actions
     } else {
         Vec::new()
     }
+}
+
+/// Parse the exit-node suggest output
+fn parse_exit_node_suggest(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find(|line| line.starts_with("Suggested exit node:"))
+        .and_then(|line| line.split(':').nth(1))
+        .map(|s| s.trim().trim_end_matches('.').to_string())
 }
 
 /// Helper function to extract node name from the action line.
@@ -104,29 +171,29 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .await
     {
         Ok(resp) => resp,
-        Err(_e) => {
+        Err(error) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check request error: {}", _e);
+            eprintln!("Mullvad check request error: {error}");
             return Ok(());
         }
     };
 
     let text = match response.text().await {
         Ok(text) => text,
-        Err(_e) => {
+        Err(error) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check response error: {}", _e);
+            eprintln!("Mullvad check response error: {error}");
             return Ok(());
         }
     };
 
-    if let Err(_e) = Notification::new()
+    if let Err(error) = Notification::new()
         .summary("Connected Status")
         .body(text.trim())
         .show()
     {
         #[cfg(debug_assertions)]
-        eprintln!("Mullvad notification error: {}", _e);
+        eprintln!("Mullvad notification error: {error}");
     }
 
     Ok(())
@@ -163,6 +230,16 @@ fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> St
         if is_active { "✅" } else { "🌿" },
         &format!("{node_short_name:<15} - {node_ip:<16} {node_name}"),
     )
+}
+
+fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
+    let output = command_runner
+        .run_command("tailscale", &["exit-node", "suggest"])
+        .expect("Failed to execute command");
+
+    let exit_node = String::from_utf8_lossy(&output.stdout);
+
+    parse_exit_node_suggest(&exit_node)
 }
 
 /// Retrieves the currently active exit node for Tailscale.
@@ -350,6 +427,32 @@ pub async fn handle_tailscale_action(
                 .status;
             Ok(status.success())
         }
+        TailscaleAction::SetAcceptRoutes(enable) => {
+            let status = command_runner
+                .run_command(
+                    "tailscale",
+                    &[
+                        "set",
+                        "--accept-routes",
+                        if *enable { "true" } else { "false" },
+                    ],
+                )?
+                .status;
+            Ok(status.success())
+        }
+        TailscaleAction::SetAllowLanAccess(enable) => {
+            let status = command_runner
+                .run_command(
+                    "tailscale",
+                    &[
+                        "set",
+                        "--exit-node-allow-lan-access",
+                        if *enable { "true" } else { "false" },
+                    ],
+                )?
+                .status;
+            Ok(status.success())
+        }
         TailscaleAction::ShowLockStatus => {
             let output = command_runner.run_command("tailscale", &["lock"])?;
             if output.status.success() {
@@ -444,6 +547,20 @@ pub async fn handle_tailscale_action(
 
 /// Checks if Tailscale is currently enabled.
 pub fn is_tailscale_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
+    let output = command_runner.run_command("tailscale", &["status"])?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(!stdout.contains("Tailscale is stopped"));
+    }
+    Ok(false)
+}
+
+/// Checks if Tailscale allow lan access is enabled
+/// TODO
+pub fn is_tailscale_exit_lan_access_enabled(
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("tailscale", &["status"])?;
 
     if output.status.success() {
@@ -625,9 +742,9 @@ impl MockNotificationSender {
         }
     }
 
-    pub fn get_notifications(&self) -> Vec<(String, String, i32)> {
-        self.notifications.borrow().clone()
-    }
+    // pub fn get_notifications(&self) -> Vec<(String, String, i32)> {
+    //     self.notifications.borrow().clone()
+    // }
 }
 
 #[cfg(test)]
@@ -837,9 +954,16 @@ mod tests {
             stderr: vec![],
         };
 
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["exit-node", "list"], exit_nodes_output),
             ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
         ]);
         let exclude_nodes = vec![];
 
@@ -862,9 +986,16 @@ mod tests {
             stderr: vec![],
         };
 
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["exit-node", "list"], exit_nodes_output),
             ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
         ]);
         let exclude_nodes = vec!["excluded.ts.net".to_string()];
 
@@ -887,14 +1018,127 @@ mod tests {
             stderr: vec![],
         };
 
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["exit-node", "list"], exit_nodes_output),
             ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
         ]);
         let exclude_nodes = vec![];
 
         let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_with_suggested_node() {
+        let stdout = "100.65.216.68       au-adl-wg-301.mullvad.ts.net               Australia          Adelaide               -\n100.110.43.2        raspberrypi.allosaurus-godzilla.ts.net     -                  -                      -\n";
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
+        ]);
+        let exclude_nodes = vec![];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert_eq!(result.len(), 3); // Original 2 nodes + 1 suggested
+        assert!(result[0].contains("🌟"));
+        assert!(result[0].contains("us-nyc-wg-301.mullvad.ts.net"));
+        assert!(result[0].contains("(suggested 🌟)"));
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_with_existing_suggested_node() {
+        let stdout = "100.65.216.68       us-nyc-wg-301.mullvad.ts.net               United States      New York               -\n100.110.43.2        raspberrypi.allosaurus-godzilla.ts.net     -                  -                      -\n";
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
+        ]);
+        let exclude_nodes = vec![];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert_eq!(result.len(), 2); // Same number of nodes, no duplicates
+        assert!(result[0].contains("(suggested 🌟)")); // First result should be marked as suggested with star
+        assert!(result[0].contains("🌟")); // Should have star emoji
+        assert!(result[0].contains("us-nyc-wg-301.mullvad.ts.net")); // Should contain the suggested node
+    }
+
+    #[test]
+    fn test_get_mullvad_actions_with_suggested_node_in_other_actions() {
+        let stdout = "100.65.216.68       au-adl-wg-301.mullvad.ts.net               Australia          Adelaide               -\n100.110.43.2        us-nyc-wg-301.ts.net                           United States      New York               -\n";
+        let exit_nodes_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let status_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "{\"Peer\":{}}".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let suggest_output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: "Suggested exit node: us-nyc-wg-301.ts.net.".as_bytes().to_vec(),
+            stderr: vec![],
+        };
+
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["exit-node", "list"], exit_nodes_output),
+            ("tailscale", &["status", "--json"], status_output),
+            ("tailscale", &["exit-node", "suggest"], suggest_output),
+        ]);
+        let exclude_nodes = vec![];
+
+        let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
+        assert_eq!(result.len(), 2); // Same number of nodes, no duplicates
+        assert!(result[0].contains("(suggested 🌟)")); // First result should be marked as suggested with star
+        assert!(result[0].contains("🌟")); // Should have star emoji
+        assert!(result[0].contains("us-nyc-wg-301.ts.net")); // Should contain the suggested node
+        assert!(result[1].contains("au-adl-wg-301.mullvad.ts.net")); // Other node should still be there
     }
 
     #[test]

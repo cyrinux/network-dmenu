@@ -51,6 +51,24 @@ display = "😀 Example"
 cmd = "notify-send 'hello' 'world'"
 ```
 
+### My personal Configuration
+
+```toml
+dmenu_cmd = "dmenu"
+dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')'"
+[[actions]]
+display = "📡 DNS: Use DHCP server"
+cmd = "sudo resolvectl revert wlan0"
+
+[[actions]]
+display = "📡 DNS: Use 1.1.1.1 server"
+cmd = "sudo resolvectl dns wlan0 '1.1.1.1#cloudflare-dns.com'; sudo resolvectl dnsovertls wlan0 yes"
+
+[[actions]]
+display = "📡 DNS: Use Hagezi's server"
+cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.com'; sudo resolvectl dnsovertls wlan0 yes"
+```
+
 You can add more actions by editing this file.
 
 ## Usage
@@ -83,6 +101,7 @@ When Tailscale Lock is enabled on your tailnet, network-dmenu provides additiona
 - **✅ Sign Node**: Sign individual locked nodes to allow them to connect to your tailnet
 
 These actions will only appear in the menu when:
+
 1. Tailscale is installed and running
 2. Tailscale Lock is enabled on your tailnet
 3. For signing actions: there are locked nodes that need to be signed

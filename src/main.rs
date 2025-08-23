@@ -247,6 +247,24 @@ fn action_to_string(action: &ActionType) -> String {
                     "Shields down"
                 },
             ),
+            TailscaleAction::SetAcceptRoutes(enable) => format_entry(
+                "tailscale",
+                if *enable { "✅" } else { "❌" },
+                if *enable {
+                    "Allow advertise routes"
+                } else {
+                    "Disallow advertise routes"
+                },
+            ),
+            TailscaleAction::SetAllowLanAccess(enable) => format_entry(
+                "tailscale",
+                if *enable { "✅" } else { "❌" },
+                if *enable {
+                    "Allow lan access while exit-node used"
+                } else {
+                    "Disallow lan access while exit-node used"
+                },
+            ),
             TailscaleAction::ShowLockStatus => {
                 format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
             }
@@ -340,6 +358,30 @@ fn find_selected_action<'a>(
                                 "Shields up"
                             } else {
                                 "Shields down"
+                            },
+                        )
+                }
+                TailscaleAction::SetAcceptRoutes(enable) => {
+                    action
+                        == format_entry(
+                            "tailscale",
+                            if *enable { "✅" } else { "❌" },
+                            if *enable {
+                                "Allow advertise routes"
+                            } else {
+                                "Disallow advertise routes"
+                            },
+                        )
+                }
+                TailscaleAction::SetAllowLanAccess(enable) => {
+                    action
+                        == format_entry(
+                            "tailscale",
+                            if *enable { "✅" } else { "❌" },
+                            if *enable {
+                                "Allow lan access while exit-node used"
+                            } else {
+                                "Disallow lan access while exit-node used"
                             },
                         )
                 }
@@ -590,6 +632,18 @@ fn get_actions(
         // Add basic Tailscale actions first (these are simple and fast)
         actions.push(ActionType::Tailscale(TailscaleAction::SetShields(false)));
         actions.push(ActionType::Tailscale(TailscaleAction::SetShields(true)));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
+            false,
+        )));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
+            true,
+        )));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
+            false,
+        )));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
+            true,
+        )));
         actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
 
         // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
