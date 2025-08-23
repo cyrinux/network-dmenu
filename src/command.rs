@@ -1,11 +1,17 @@
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+use std::sync::Mutex;
 
 /// Trait for running shell commands.
 pub trait CommandRunner {
     /// Runs a shell command with the specified arguments.
     fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error>;
+    // fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+    //     Command::new(command).args(args).env("LC_ALL", "C").output()
+    // }
 }
 
 /// Struct for running real shell commands.
@@ -17,9 +23,30 @@ impl CommandRunner for RealCommandRunner {
     }
 }
 
+// Static command cache to avoid repeated lookups
+static COMMAND_CACHE: Lazy<Mutex<HashMap<String, bool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Checks if a command is installed on the system.
+/// Uses a cache to avoid repeated lookups.
 pub fn is_command_installed(cmd: &str) -> bool {
-    which::which(cmd).is_ok()
+    let mut cache = match COMMAND_CACHE.lock() {
+        Ok(cache) => cache,
+        Err(_) => {
+            // If we can't lock the cache (e.g., another thread panicked while holding the lock),
+            // just check the command directly without caching
+            return which::which(cmd).is_ok();
+        }
+    };
+
+    // Return cached result if available
+    if let Some(&installed) = cache.get(cmd) {
+        return installed;
+    }
+
+    // Otherwise check and cache the result
+    let installed = which::which(cmd).is_ok();
+    cache.insert(cmd.to_string(), installed);
+    installed
 }
 
 /// Reads the output of a command and returns it as a vector of lines.
@@ -27,17 +54,6 @@ pub fn read_output_lines(output: &Output) -> Result<Vec<String>, Box<dyn Error>>
     Ok(BufReader::new(output.stdout.as_slice())
         .lines()
         .collect::<Result<Vec<String>, _>>()?)
-}
-
-/// Executes a command and returns whether it was successful.
-pub fn execute_command(command: &str, args: &[&str]) -> bool {
-    Command::new(command)
-        .args(args)
-        .env("LC_ALL", "C")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 #[cfg(test)]
@@ -125,7 +141,8 @@ mod tests {
         };
 
         let mock_runner = MockCommandRunner::new("expected_cmd", &[], output);
-        let _ = mock_runner.run_command("wrong_cmd", &[]);
+        let result = mock_runner.run_command("wrong_cmd", &[]);
+        assert!(result.is_err(), "Expected error for wrong command");
     }
 
     #[test]
@@ -138,18 +155,25 @@ mod tests {
         };
 
         let mock_runner = MockCommandRunner::new("cmd", &["arg1"], output);
-        let _ = mock_runner.run_command("cmd", &["arg2"]);
+        let result = mock_runner.run_command("cmd", &["arg2"]);
+        assert!(result.is_err(), "Expected error for wrong arguments");
     }
 
     #[test]
     fn test_is_command_installed_existing() {
         // Test with a command that should exist on most systems
         assert!(is_command_installed("echo"));
+
+        // Calling again should use the cache
+        assert!(is_command_installed("echo"));
     }
 
     #[test]
     fn test_is_command_installed_nonexistent() {
         // Test with a command that definitely doesn't exist
+        assert!(!is_command_installed("nonexistent_command_xyz_12345"));
+
+        // Calling again should use the cache
         assert!(!is_command_installed("nonexistent_command_xyz_12345"));
     }
 
@@ -202,26 +226,5 @@ mod tests {
         let lines = result.unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "single line");
-    }
-
-    #[test]
-    fn test_execute_command_success() {
-        // Test with echo command which should succeed
-        let result = execute_command("echo", &["test"]);
-        assert!(result);
-    }
-
-    #[test]
-    fn test_execute_command_failure() {
-        // Test with nonexistent command
-        let result = execute_command("nonexistent_command_xyz_12345", &[]);
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_execute_command_with_args() {
-        // Test with a command that takes arguments
-        let result = execute_command("echo", &["hello", "world"]);
-        assert!(result);
     }
 }

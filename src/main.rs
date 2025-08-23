@@ -1,6 +1,8 @@
 use clap::Parser;
 use command::CommandRunner;
 use dirs::config_dir;
+#[cfg(feature = "gtk-ui")]
+use network_dmenu::select_action_with_gtk;
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -14,15 +16,22 @@ use utils::check_captive_portal;
 
 mod bluetooth;
 mod command;
+mod constants;
+mod diagnostics;
 mod iwd;
 mod networkmanager;
+mod rfkill;
 mod tailscale;
+mod tailscale_prefs;
 mod utils;
 
 use bluetooth::{
     get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
 };
 use command::{is_command_installed, RealCommandRunner};
+use diagnostics::{
+    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
+};
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
 use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
@@ -33,12 +42,17 @@ use tailscale::{
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     DefaultNotificationSender, TailscaleAction,
 };
+use tailscale_prefs::parse_tailscale_prefs;
+
+use constants::*;
+// Make sure ICON_KEY is available
+use constants::ICON_KEY;
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value = "wlan0")]
+    #[arg(long, default_value = "wlan0")]
     wifi_interface: String,
     #[arg(long)]
     no_wifi: bool,
@@ -49,7 +63,29 @@ struct Args {
     #[arg(long)]
     no_tailscale: bool,
     #[arg(long)]
+    no_diagnostics: bool,
+    #[arg(long)]
     profile: bool,
+    #[arg(
+        long,
+        help = "Limit the number of exit nodes shown per country (sorted by priority)"
+    )]
+    max_nodes_per_country: Option<i32>,
+    #[arg(
+        long,
+        help = "Limit the number of exit nodes shown per city (sorted by priority)"
+    )]
+    max_nodes_per_city: Option<i32>,
+    #[arg(
+        long,
+        help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
+    )]
+    country: Option<String>,
+    #[arg(
+        long,
+        help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)"
+    )]
+    use_gtk: bool,
 }
 
 /// Configuration structure for the application.
@@ -59,8 +95,18 @@ struct Config {
     actions: Vec<CustomAction>,
     #[serde(default)]
     exclude_exit_node: Vec<String>,
+    #[serde(default)]
+    max_nodes_per_country: Option<i32>,
+    #[serde(default)]
+    max_nodes_per_city: Option<i32>,
+    #[serde(default)]
+    country_filter: Option<String>,
     dmenu_cmd: String,
     dmenu_args: String,
+    #[serde(default)]
+    use_gtk: bool,
+    #[serde(default)]
+    use_gtk_fallback: bool,
 }
 
 /// Custom action structure for user-defined actions.
@@ -75,6 +121,7 @@ struct CustomAction {
 enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
+    Diagnostic(DiagnosticAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
@@ -87,6 +134,7 @@ enum SystemAction {
     EditConnections,
     RfkillBlock(String),
     RfkillUnblock(String),
+    AirplaneMode(bool),
 }
 
 /// Enum representing Wi-Fi-related actions.
@@ -115,17 +163,33 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
 }
 
 /// Returns the default configuration as a string.
-fn get_default_config() -> &'static str {
-    r#"
-dmenu_cmd = "dmenu"
-dmenu_args = "--no-multi"
+fn get_default_config() -> String {
+    format!(
+        r#"# General settings
+dmenu_cmd = "{}"
+dmenu_args = "{}"
+use_gtk = false
+use_gtk_fallback = true
 
-exclude_exit_node = ["exit1", "exit2"]
+# Exit node filtering options
+# List of exit nodes to exclude
+# exclude_exit_node = ["exit1", "exit2"]
+
+# Limit the number of exit nodes shown per country (sorted by priority)
+# max_nodes_per_country = 2
+
+# Limit the number of exit nodes shown per city (sorted by priority)
+# max_nodes_per_city = 1
+
+# Filter by country name (e.g., "USA", "Japan")
+# country_filter = "USA"
 
 [[actions]]
 display = "🛡️ Example"
 cmd = "notify-send 'hello' 'world'"
-"#
+"#,
+        DEFAULT_DMENU_CMD, DEFAULT_DMENU_ARGS
+    )
 }
 
 /// Main function for the application.
@@ -135,7 +199,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     create_default_config_if_missing()?;
 
-    let config = get_config()?; // Load the configuration once
+    let mut config = get_config()?; // Load the configuration once
+
+    // Override config with command line args if specified
+    if args.use_gtk {
+        config.use_gtk = true;
+    }
 
     check_required_commands(&config)?;
 
@@ -150,15 +219,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let actions = get_actions(&args, &config, &command_runner)?;
+    let actions = get_actions(&args, &config, &command_runner).await?;
 
     // Display profiling information if enabled
     if let Some(start) = start_time {
         let duration = start.elapsed();
-        eprintln!("Performance profile: Generated list in {:.2?}", duration);
+        eprintln!(">>> PROFILE: Generated list in {:.2?}", duration);
+        if args.profile {
+            let _ = Notification::new()
+                .summary("Network-dmenu Profiling")
+                .body(&format!("Generated list in {:.2?}", duration))
+                .show();
+        }
     }
 
-    let action = select_action_from_menu(&config, &actions)?;
+    let action = select_action_from_menu(&config, &actions).await?;
 
     if !action.is_empty() {
         let selected_action = find_selected_action(&action, &actions)?;
@@ -169,28 +244,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
             selected_action,
             &connected_devices,
             &command_runner,
+            args.profile,
         )
         .await?;
     }
-
-    debug_tailscale_status_if_installed()?;
+    // When action is empty (user pressed Escape or closed window), just exit silently
 
     Ok(())
 }
 
 /// Checks if required commands are installed.
 fn check_required_commands(config: &Config) -> Result<(), Box<dyn Error>> {
-    if !is_command_installed("pinentry-gnome3") || !is_command_installed(&config.dmenu_cmd) {
-        panic!("pinentry-gnome3 or dmenu command missing");
+    if !is_command_installed("pinentry-gnome3") {
+        eprintln!("Warning: pinentry-gnome3 command missing");
     }
+
+    #[cfg(feature = "gtk-ui")]
+    let using_gtk = config.use_gtk;
+
+    #[cfg(not(feature = "gtk-ui"))]
+    let using_gtk = false;
+
+    if !using_gtk && !is_command_installed(&config.dmenu_cmd) {
+        panic!("dmenu command missing and GTK UI not enabled");
+    }
+
     Ok(())
 }
 
-/// Selects an action from the menu using dmenu.
-fn select_action_from_menu(
+/// Selects an action from the menu using dmenu or GTK UI.
+async fn select_action_from_menu(
     config: &Config,
     actions: &[ActionType],
 ) -> Result<String, Box<dyn Error>> {
+    // Convert actions to string representation
+    let action_strings: Vec<String> = actions
+        .iter()
+        .map(|action| action_to_string(action))
+        .collect();
+
+    // Try GTK UI if feature is enabled and requested
+    #[cfg(feature = "gtk-ui")]
+    if config.use_gtk {
+        // Use blocking context to prevent thread initialization errors with GTK
+        match select_action_with_gtk(action_strings.clone()).await {
+            Ok(Some(selected)) => return Ok(selected),
+            Ok(None) => {
+                if !config.use_gtk_fallback {
+                    // Just return empty string when user cancels or presses Escape
+                    return Ok(String::new());
+                }
+                // Falls through to dmenu if use_gtk_fallback is true
+            }
+            Err(_) => {
+                // GTK UI failed to initialize, falling back to dmenu
+                eprintln!("GTK UI failed to initialize, falling back to dmenu");
+            }
+        }
+    }
+
+    // Fall back to dmenu if GTK UI is not enabled, not requested, or failed
     let mut child = Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
@@ -198,96 +311,195 @@ fn select_action_from_menu(
         .spawn()?;
 
     {
-        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
-        let actions_display = actions
-            .iter()
-            .map(action_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        write!(stdin, "{actions_display}")?;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        for action_string in action_strings {
+            writeln!(stdin, "{}", action_string)?;
+        }
     }
 
     let output = child.wait_with_output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(selected)
 }
 
 /// Converts an action to a string for display.
+/// Format device information for rfkill block/unblock operations
+fn format_rfkill_device(device: &str, block: bool) -> String {
+    let (icon, action) = if block {
+        (ICON_CROSS, "Turn OFF")
+    } else {
+        (ICON_SIGNAL, "Turn ON")
+    };
+
+    // Check if this is a device ID (numeric) or a device type
+    if let Ok(id) = device.parse::<u32>() {
+        // Load devices from cache
+        let all_devices = rfkill::load_rfkill_devices_from_cache();
+
+        // Find device by ID
+        let device_info = all_devices.iter().find(|d| d.id == id);
+
+        match device_info {
+            Some(info) => format_entry(
+                ACTION_TYPE_SYSTEM,
+                icon,
+                &format!(
+                    "{} {} ({})",
+                    action,
+                    info.device_type_display(),
+                    info.device
+                ),
+            ),
+            None => format_entry(
+                ACTION_TYPE_SYSTEM,
+                icon,
+                &format!("{} device ID: {}", action, id),
+            ),
+        }
+    } else {
+        format_entry(
+            ACTION_TYPE_SYSTEM,
+            icon,
+            &format!("{} all {} devices", action, device),
+        )
+    }
+}
+
 fn action_to_string(action: &ActionType) -> String {
     match action {
-        ActionType::Custom(custom_action) => format_entry("action", "", &custom_action.display),
+        ActionType::Custom(custom_action) => {
+            format_entry(ACTION_TYPE_ACTION, "", &custom_action.display)
+        }
         ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock(device) => {
-                format_entry("system", "❌", &format!("Radio {device} rfkill block"))
+            SystemAction::RfkillBlock(device) => format_rfkill_device(device, true),
+            SystemAction::RfkillUnblock(device) => format_rfkill_device(device, false),
+            SystemAction::EditConnections => {
+                format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
             }
-            SystemAction::RfkillUnblock(device) => {
-                format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
+            SystemAction::AirplaneMode(enable) => {
+                if *enable {
+                    format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, SYSTEM_AIRPLANE_MODE_ON)
+                } else {
+                    format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_AIRPLANE_MODE_OFF)
+                }
             }
-            SystemAction::EditConnections => format_entry("system", "📶", "Edit connections"),
         },
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
-            TailscaleAction::DisableExitNode => {
-                format_entry("tailscale", "❌", "Disable exit-node")
-            }
+            TailscaleAction::DisableExitNode => format_entry(
+                ACTION_TYPE_TAILSCALE,
+                ICON_CROSS,
+                TAILSCALE_DISABLE_EXIT_NODE,
+            ),
             TailscaleAction::SetEnable(enable) => format_entry(
-                "tailscale",
-                if *enable { "✅" } else { "❌" },
+                ACTION_TYPE_TAILSCALE,
+                if *enable { ICON_CHECK } else { ICON_CROSS },
                 if *enable {
-                    "Enable tailscale"
+                    TAILSCALE_ENABLE
                 } else {
-                    "Disable tailscale"
+                    TAILSCALE_DISABLE
                 },
             ),
-            TailscaleAction::SetShields(enable) => format_entry(
-                "tailscale",
-                if *enable { "🛡️" } else { "🛡️" },
-                if *enable {
-                    "Shields up"
+            TailscaleAction::SetShields(enable) => {
+                let text = if *enable {
+                    TAILSCALE_SHIELDS_UP
                 } else {
-                    "Shields down"
-                },
-            ),
-            TailscaleAction::ShowLockStatus => {
-                format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+                    TAILSCALE_SHIELDS_DOWN
+                };
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
             }
-            TailscaleAction::ListLockedNodes => {
-                format_entry("tailscale", "📋", "List Locked Nodes")
+            TailscaleAction::SetAcceptRoutes(enable) => {
+                let text = if *enable {
+                    TAILSCALE_ALLOW_ADVERTISE_ROUTES
+                } else {
+                    TAILSCALE_DISALLOW_ADVERTISE_ROUTES
+                };
+                format_entry(
+                    ACTION_TYPE_TAILSCALE,
+                    if *enable { ICON_CHECK } else { ICON_CROSS },
+                    text,
+                )
+            }
+            TailscaleAction::SetAllowLanAccess(enable) => {
+                let text = if *enable {
+                    TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE
+                } else {
+                    TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE
+                };
+                format_entry(
+                    ACTION_TYPE_TAILSCALE,
+                    if *enable { ICON_CHECK } else { ICON_CROSS },
+                    text,
+                )
+            }
+            TailscaleAction::ShowLockStatus => {
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_LOCK, TAILSCALE_SHOW_LOCK_STATUS)
+            }
+            TailscaleAction::ListLockedNodes => format_entry(
+                ACTION_TYPE_TAILSCALE,
+                ICON_LIST,
+                TAILSCALE_LIST_LOCKED_NODES,
+            ),
+            TailscaleAction::SignAllNodes => {
+                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                    let count = locked_nodes.len();
+                    if count > 0 {
+                        format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_KEY,
+                            &format!("Sign All Locked Nodes ({count})"),
+                        )
+                    } else {
+                        format_entry(ACTION_TYPE_TAILSCALE, ICON_KEY, "Sign All Locked Nodes")
+                    }
+                } else {
+                    format_entry(ACTION_TYPE_TAILSCALE, ICON_KEY, "Sign All Locked Nodes")
+                }
             }
             TailscaleAction::SignLockedNode(node_key) => {
                 // Try to find the hostname for this node key from locked nodes
                 if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
                     if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                         format_entry(
-                            "tailscale",
-                            "✅",
-                            &format!(
-                                "Sign Node: {} - {} ({})",
-                                extract_short_hostname(&node.hostname),
-                                node.machine_name,
-                                &node_key[..8]
-                            ),
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CHECK,
+                            &TAILSCALE_SIGN_NODE_DETAILED
+                                .replace("{hostname}", extract_short_hostname(&node.hostname))
+                                .replace("{machine}", &node.machine_name)
+                                .replace("{key}", &node_key[..8]),
                         )
                     } else {
-                        format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                        format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CHECK,
+                            &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
+                        )
                     }
                 } else {
-                    format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                    format_entry(
+                        ACTION_TYPE_TAILSCALE,
+                        ICON_CHECK,
+                        &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
+                    )
                 }
             }
         },
         ActionType::Vpn(vpn_action) => match vpn_action {
-            VpnAction::Connect(network) => format_entry("vpn", "", network),
-            VpnAction::Disconnect(network) => format_entry("vpn", "❌", network),
+            VpnAction::Connect(network) => format_entry(ACTION_TYPE_VPN, "", network),
+            VpnAction::Disconnect(network) => format_entry(ACTION_TYPE_VPN, ICON_CROSS, network),
         },
         ActionType::Wifi(wifi_action) => match wifi_action {
-            WifiAction::Network(network) => format_entry("wifi", "", network),
-            WifiAction::Disconnect => format_entry("wifi", "❌", "Disconnect"),
-            WifiAction::Connect => format_entry("wifi", "📶", "Connect"),
-            WifiAction::ConnectHidden => format_entry("wifi", "📶", "Connect to hidden network"),
+            WifiAction::Network(network) => format_entry(ACTION_TYPE_WIFI, "", network),
+            WifiAction::Disconnect => format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT),
+            WifiAction::Connect => format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT),
+            WifiAction::ConnectHidden => {
+                format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN)
+            }
         },
         ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
         },
+        ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
     }
 }
 
@@ -300,54 +512,108 @@ fn find_selected_action<'a>(
         .iter()
         .find(|a| match a {
             ActionType::Custom(custom_action) => {
-                format_entry("action", "", &custom_action.display) == action
+                format_entry(ACTION_TYPE_ACTION, "", &custom_action.display) == action
             }
             ActionType::System(system_action) => match system_action {
-                SystemAction::RfkillBlock(device) => {
-                    action == format_entry("system", "❌", &format!("Radio {device} rfkill block"))
-                }
+                SystemAction::RfkillBlock(device) => action == format_rfkill_device(device, true),
                 SystemAction::RfkillUnblock(device) => {
-                    action
-                        == format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
+                    action == format_rfkill_device(device, false)
                 }
                 SystemAction::EditConnections => {
-                    action == format_entry("system", "📶", "Edit connections")
+                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
+                }
+                SystemAction::AirplaneMode(enable) => {
+                    if *enable {
+                        action
+                            == format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, SYSTEM_AIRPLANE_MODE_ON)
+                    } else {
+                        action
+                            == format_entry(
+                                ACTION_TYPE_SYSTEM,
+                                ICON_SIGNAL,
+                                SYSTEM_AIRPLANE_MODE_OFF,
+                            )
+                    }
                 }
             },
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
                 TailscaleAction::DisableExitNode => {
-                    action == format_entry("tailscale", "❌", "Disable exit-node")
-                }
-                TailscaleAction::SetEnable(enable) => {
                     action
                         == format_entry(
-                            "tailscale",
-                            if *enable { "✅" } else { "❌" },
-                            if *enable {
-                                "Enable tailscale"
-                            } else {
-                                "Disable tailscale"
-                            },
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CROSS,
+                            TAILSCALE_DISABLE_EXIT_NODE,
+                        )
+                }
+                TailscaleAction::SetEnable(enable) => {
+                    let text = if *enable {
+                        TAILSCALE_ENABLE
+                    } else {
+                        TAILSCALE_DISABLE
+                    };
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
                         )
                 }
                 TailscaleAction::SetShields(enable) => {
+                    let text = if *enable {
+                        TAILSCALE_SHIELDS_UP
+                    } else {
+                        TAILSCALE_SHIELDS_DOWN
+                    };
+                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+                }
+                TailscaleAction::SetAcceptRoutes(enable) => {
+                    let text = if *enable {
+                        TAILSCALE_ALLOW_ADVERTISE_ROUTES
+                    } else {
+                        TAILSCALE_DISALLOW_ADVERTISE_ROUTES
+                    };
                     action
                         == format_entry(
-                            "tailscale",
-                            "🛡️",
-                            if *enable {
-                                "Shields up"
-                            } else {
-                                "Shields down"
-                            },
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
+                        )
+                }
+                TailscaleAction::SetAllowLanAccess(enable) => {
+                    let text = if *enable {
+                        TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE
+                    } else {
+                        TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE
+                    };
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
                         )
                 }
                 TailscaleAction::ShowLockStatus => {
-                    action == format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_LOCK,
+                            TAILSCALE_SHOW_LOCK_STATUS,
+                        )
                 }
                 TailscaleAction::ListLockedNodes => {
-                    action == format_entry("tailscale", "📋", "List Locked Nodes")
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_LIST,
+                            TAILSCALE_LIST_LOCKED_NODES,
+                        )
+                }
+                TailscaleAction::SignAllNodes => {
+                    // Match any "Sign All Locked Nodes" action, regardless of count
+                    action.starts_with(&format!(
+                        "{ACTION_TYPE_TAILSCALE:<10}- {ICON_KEY} Sign All Locked Nodes"
+                    ))
                 }
                 TailscaleAction::SignLockedNode(node_key) => {
                     // Try to find the hostname for this node key from locked nodes
@@ -355,56 +621,68 @@ fn find_selected_action<'a>(
                         if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                             action
                                 == format_entry(
-                                    "tailscale",
-                                    "✅",
-                                    &format!(
-                                        "Sign Node: {} - {} ({})",
-                                        extract_short_hostname(&node.hostname),
-                                        node.machine_name,
-                                        &node_key[..8]
-                                    ),
+                                    ACTION_TYPE_TAILSCALE,
+                                    ICON_CHECK,
+                                    &TAILSCALE_SIGN_NODE_DETAILED
+                                        .replace(
+                                            "{hostname}",
+                                            extract_short_hostname(&node.hostname),
+                                        )
+                                        .replace("{machine}", &node.machine_name)
+                                        .replace("{key}", &node_key[..8]),
                                 )
                         } else {
                             action
                                 == format_entry(
-                                    "tailscale",
-                                    "✅",
-                                    &format!("Sign Node: {}", &node_key[..8]),
+                                    ACTION_TYPE_TAILSCALE,
+                                    ICON_CHECK,
+                                    &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                                 )
                         }
                     } else {
                         action
                             == format_entry(
-                                "tailscale",
-                                "✅",
-                                &format!("Sign Node: {}", &node_key[..8]),
+                                ACTION_TYPE_TAILSCALE,
+                                ICON_CHECK,
+                                &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                             )
                     }
                 }
             },
             ActionType::Vpn(vpn_action) => match vpn_action {
-                VpnAction::Connect(network) => action == format_entry("vpn", "", network),
-                VpnAction::Disconnect(network) => action == format_entry("vpn,", "❌", network),
+                VpnAction::Connect(network) => action == format_entry(ACTION_TYPE_VPN, "", network),
+                VpnAction::Disconnect(network) => {
+                    action == format_entry(ACTION_TYPE_VPN, ICON_CROSS, network)
+                }
             },
             ActionType::Wifi(wifi_action) => match wifi_action {
-                WifiAction::Network(network) => action == format_entry("wifi", "", network),
-                WifiAction::Disconnect => action == format_entry("wifi", "❌", "Disconnect"),
-                WifiAction::Connect => action == format_entry("wifi", "📶", "Connect"),
+                WifiAction::Network(network) => {
+                    action == format_entry(ACTION_TYPE_WIFI, "", network)
+                }
+                WifiAction::Disconnect => {
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT)
+                }
+                WifiAction::Connect => {
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT)
+                }
                 WifiAction::ConnectHidden => {
-                    action == format_entry("wifi", "📶", "Connect to hidden network")
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN)
                 }
             },
             ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
                 BluetoothAction::ToggleConnect(device) => action == device,
             },
+            ActionType::Diagnostic(diagnostic_action) => {
+                action == diagnostic_action_to_string(diagnostic_action)
+            }
         })
         .ok_or(format!("Action not found: {action}").into())
 }
 
 /// Gets the configuration file path.
 fn get_config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let config_dir = config_dir().ok_or("Failed to find config directory")?;
-    Ok(config_dir.join("network-dmenu").join("config.toml"))
+    let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
+    Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
 }
 
 /// Creates a default configuration file if it doesn't exist.
@@ -448,7 +726,7 @@ fn get_config() -> Result<Config, Box<dyn Error>> {
 ///
 /// # Returns
 /// A vector of actions to display in the menu
-fn get_actions(
+async fn get_actions(
     args: &Args,
     config: &Config,
     command_runner: &dyn CommandRunner,
@@ -468,18 +746,17 @@ fn get_actions(
         None
     };
     let bluetooth_devices = if !args.no_bluetooth && is_command_installed("bluetoothctl") {
-        match get_paired_bluetooth_devices(command_runner) {
-            Ok(devices) => devices,
-            Err(_) => vec![], // Continue on error for better resilience
-        }
+        get_paired_bluetooth_devices(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
     if args.profile && bluetooth_start.is_some() {
-        eprintln!(
-            "  Bluetooth scan took: {:.2?}",
-            bluetooth_start.unwrap().elapsed()
-        );
+        let elapsed = bluetooth_start.unwrap().elapsed();
+        eprintln!(">>> PROFILE: Bluetooth scan took: {:.2?}", elapsed);
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!("Bluetooth scan took: {:.2?}", elapsed))
+            .show();
     }
 
     // Performance optimization: Collect VPN networks early - usually fast
@@ -489,15 +766,17 @@ fn get_actions(
         None
     };
     let vpn_networks = if !args.no_vpn && is_command_installed("nmcli") {
-        match get_nm_vpn_networks(command_runner) {
-            Ok(networks) => networks,
-            Err(_) => vec![], // Error resilience: continue despite errors
-        }
+        get_nm_vpn_networks(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
     if args.profile && vpn_start.is_some() {
-        eprintln!("  VPN scan took: {:.2?}", vpn_start.unwrap().elapsed());
+        let elapsed = vpn_start.unwrap().elapsed();
+        eprintln!(">>> PROFILE: VPN scan took: {:.2?}", elapsed);
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!("VPN scan took: {:.2?}", elapsed))
+            .show();
     }
 
     // Performance optimization: Start WiFi scanning early as it can be slow
@@ -509,15 +788,9 @@ fn get_actions(
     };
     let wifi_networks = if !args.no_wifi {
         if is_command_installed("nmcli") {
-            match get_nm_wifi_networks(command_runner) {
-                Ok(networks) => networks,
-                Err(_) => vec![], // Error resilience: continue despite errors
-            }
+            get_nm_wifi_networks(command_runner).unwrap_or_default()
         } else if is_command_installed("iwctl") {
-            match get_iwd_networks(&args.wifi_interface, command_runner) {
-                Ok(networks) => networks,
-                Err(_) => vec![], // Error resilience: continue despite errors
-            }
+            get_iwd_networks(&args.wifi_interface, command_runner).unwrap_or_default()
         } else {
             vec![]
         }
@@ -525,7 +798,12 @@ fn get_actions(
         vec![]
     };
     if args.profile && wifi_start.is_some() {
-        eprintln!("  WiFi scan took: {:.2?}", wifi_start.unwrap().elapsed());
+        let elapsed = wifi_start.unwrap().elapsed();
+        eprintln!(">>> PROFILE: WiFi scan took: {:.2?}", elapsed);
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!("WiFi scan took: {:.2?}", elapsed))
+            .show();
     }
 
     // Performance optimization: Add simple stateless items while network scans are processing
@@ -537,22 +815,169 @@ fn get_actions(
         actions.push(ActionType::System(SystemAction::EditConnections));
     }
 
-    if !args.no_wifi && is_command_installed("rfkill") {
-        actions.push(ActionType::System(SystemAction::RfkillBlock(
-            "wifi".to_string(),
-        )));
-        actions.push(ActionType::System(SystemAction::RfkillUnblock(
-            "wifi".to_string(),
-        )));
+    // Start timing for all system actions
+    let system_actions_start = if args.profile {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+
+    // Add rfkill device actions for a specific device type
+    async fn add_rfkill_device_actions(
+        actions: &mut Vec<ActionType>,
+        device_type: &str,
+        skip_cache: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        // Check for specific devices first
+        let devices = rfkill::get_rfkill_devices_by_type(device_type)
+            .await
+            .unwrap_or_default();
+
+        // Cache devices for later use in action_to_string
+        if !devices.is_empty() && !skip_cache {
+            // Cache rfkill devices for non-async functions to use
+            let _ = rfkill::cache_rfkill_devices().await;
+        }
+
+        if !devices.is_empty() {
+            // Add specific device actions
+            for device in &devices {
+                // Use is_unblocked to determine status - uses both methods from RfkillDevice
+                if device.is_blocked() {
+                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
+                        device.id.to_string(),
+                    )));
+                } else if device.is_unblocked() {
+                    actions.push(ActionType::System(SystemAction::RfkillBlock(
+                        device.id.to_string(),
+                    )));
+                }
+            }
+        } else {
+            // No specific devices found, add generic actions
+            actions.push(ActionType::System(SystemAction::RfkillBlock(
+                device_type.to_string(),
+            )));
+            actions.push(ActionType::System(SystemAction::RfkillUnblock(
+                device_type.to_string(),
+            )));
+        }
+
+        Ok(())
     }
 
-    if !args.no_bluetooth && is_command_installed("rfkill") {
-        actions.push(ActionType::System(SystemAction::RfkillBlock(
-            "bluetooth".to_string(),
-        )));
-        actions.push(ActionType::System(SystemAction::RfkillUnblock(
-            "bluetooth".to_string(),
-        )));
+    if !args.no_wifi && rfkill::is_rfkill_available() {
+        let wifi_rfkill_start = if args.profile {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
+        add_rfkill_device_actions(&mut actions, "wlan", false)
+            .await
+            .unwrap_or_default();
+
+        if args.profile && wifi_rfkill_start.is_some() {
+            let elapsed = wifi_rfkill_start.unwrap().elapsed();
+            eprintln!(">>> PROFILE: WiFi rfkill actions took: {:.2?}", elapsed);
+            let _ = Notification::new()
+                .summary("Network-dmenu Profiling")
+                .body(&format!("WiFi rfkill actions took: {:.2?}", elapsed))
+                .show();
+        }
+    }
+
+    if !args.no_bluetooth && rfkill::is_rfkill_available() {
+        let bt_rfkill_start = if args.profile {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
+        // Skip caching if we already did it for WiFi devices
+        let skip_cache = std::path::Path::new(&rfkill::get_rfkill_cache_path()).exists();
+        add_rfkill_device_actions(&mut actions, "bluetooth", skip_cache)
+            .await
+            .unwrap_or_default();
+
+        if args.profile && bt_rfkill_start.is_some() {
+            let elapsed = bt_rfkill_start.unwrap().elapsed();
+            eprintln!(
+                ">>> PROFILE: Bluetooth rfkill actions took: {:.2?}",
+                elapsed
+            );
+            let _ = Notification::new()
+                .summary("Network-dmenu Profiling")
+                .body(&format!("Bluetooth rfkill actions took: {:.2?}", elapsed))
+                .show();
+        }
+    }
+
+    // Determine if airplane mode is enabled and add appropriate toggle action
+    async fn add_airplane_mode_action(actions: &mut Vec<ActionType>) -> Result<(), Box<dyn Error>> {
+        // Check if all devices are blocked (airplane mode is on)
+        // Only consider airplane mode if we have radio devices
+        // Use get_device_type_summary to efficiently check device status
+        let device_summary = rfkill::get_device_type_summary().await.unwrap_or_default();
+
+        if !device_summary.is_empty() {
+            // Check if all radio devices are blocked
+            let radio_types = ["wlan", "bluetooth", "wwan", "fm", "nfc", "gps"];
+            let radio_devices: Vec<_> = device_summary
+                .iter()
+                .filter(|(device_type, _)| radio_types.contains(&device_type.as_str()))
+                .collect();
+
+            if !radio_devices.is_empty() {
+                // Check if all radio devices are blocked
+                // (blocked_count, unblocked_count)
+                let all_blocked = radio_devices
+                    .iter()
+                    .all(|(_, (blocked, unblocked))| *blocked > 0 && *unblocked == 0);
+
+                if all_blocked {
+                    // All devices are blocked, offer to disable airplane mode
+                    actions.push(ActionType::System(SystemAction::AirplaneMode(false)));
+                } else {
+                    // Not all devices are blocked, offer to enable airplane mode
+                    actions.push(ActionType::System(SystemAction::AirplaneMode(true)));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // Add airplane mode toggle if rfkill is available
+    if rfkill::is_rfkill_available() {
+        let airplane_mode_start = if args.profile {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
+        add_airplane_mode_action(&mut actions)
+            .await
+            .unwrap_or_default();
+
+        if args.profile && airplane_mode_start.is_some() {
+            let elapsed = airplane_mode_start.unwrap().elapsed();
+            eprintln!(">>> PROFILE: Airplane mode action took: {:.2?}", elapsed);
+            let _ = Notification::new()
+                .summary("Network-dmenu Profiling")
+                .body(&format!("Airplane mode action took: {:.2?}", elapsed))
+                .show();
+        }
+    }
+
+    // Display summary of all system actions timing
+    if args.profile && system_actions_start.is_some() {
+        let elapsed = system_actions_start.unwrap().elapsed();
+        eprintln!(">>> PROFILE: All system actions took: {:.2?}", elapsed);
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!("All system actions took: {:.2?}", elapsed))
+            .show();
     }
 
     // Performance optimization: Now add all the collected network information
@@ -586,14 +1011,36 @@ fn get_actions(
     } else {
         None
     };
+
+    // Get current Tailscale preferences to determine what toggle options to show
+    let prefs = parse_tailscale_prefs(command_runner).unwrap();
+
     if !args.no_tailscale && is_command_installed("tailscale") {
         // Add basic Tailscale actions first (these are simple and fast)
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(false)));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(true)));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(
+            !prefs.ShieldsUp,
+        )));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
+            !prefs.ExitNodeAllowLANAccess,
+        )));
+        actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
+            !prefs.RouteAll,
+        )));
         actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
 
         // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
-        let mullvad_actions = get_mullvad_actions(command_runner, &config.exclude_exit_node);
+        // Command-line args override config file settings
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
+        let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
+        let country = args.country.as_deref().or(config.country_filter.as_deref());
+
+        let mullvad_actions = get_mullvad_actions(
+            command_runner,
+            &config.exclude_exit_node,
+            max_per_country,
+            max_per_city,
+            country,
+        );
         actions.extend(
             mullvad_actions
                 .into_iter()
@@ -615,19 +1062,36 @@ fn get_actions(
             // Add individual sign node actions for each locked node
             // This is potentially the slowest operation, so we do it last
             if let Ok(locked_nodes) = get_locked_nodes(command_runner) {
-                for node in locked_nodes {
-                    actions.push(ActionType::Tailscale(TailscaleAction::SignLockedNode(
-                        node.node_key,
-                    )));
+                if !locked_nodes.is_empty() {
+                    // Add a single action to sign all nodes at once, placing it FIRST
+                    // Count is displayed in the action text automatically
+                    actions.insert(0, ActionType::Tailscale(TailscaleAction::SignAllNodes));
+
+                    // Also add individual node signing actions
+                    for node in locked_nodes {
+                        actions.push(ActionType::Tailscale(TailscaleAction::SignLockedNode(
+                            node.node_key,
+                        )));
+                    }
                 }
             }
         }
     }
     if args.profile && tailscale_start.is_some() {
-        eprintln!(
-            "  Tailscale operations took: {:.2?}",
-            tailscale_start.unwrap().elapsed()
-        );
+        let elapsed = tailscale_start.unwrap().elapsed();
+        eprintln!(">>> PROFILE: Tailscale operations took: {:.2?}", elapsed);
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!("Tailscale operations took: {:.2?}", elapsed))
+            .show();
+    }
+
+    // Add diagnostic actions (get_diagnostic_actions checks for tool availability internally)
+    if !args.no_diagnostics {
+        let diagnostic_actions = get_diagnostic_actions();
+        if !diagnostic_actions.is_empty() {
+            actions.extend(diagnostic_actions.into_iter().map(ActionType::Diagnostic));
+        }
     }
 
     Ok(actions)
@@ -640,21 +1104,119 @@ fn handle_custom_action(action: &CustomAction) -> Result<bool, Box<dyn Error>> {
 }
 
 /// Handles a system action.
-fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
-    match action {
-        SystemAction::RfkillBlock(device) => {
-            let status = Command::new("rfkill").arg("block").arg(device).status()?;
-            Ok(status.success())
+async fn handle_system_action(
+    action: &SystemAction,
+    profile: bool,
+) -> Result<bool, Box<dyn Error>> {
+    // Helper function to handle rfkill block/unblock operations
+    async fn handle_rfkill_operation(
+        device: &str,
+        block: bool,
+        profile: bool,
+    ) -> Result<bool, Box<dyn Error>> {
+        // Check if this is a device ID or device type
+        let rfkill_start = if profile {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
+        if let Ok(id) = device.parse::<u32>() {
+            if block {
+                rfkill::block_device(id).await?;
+            } else {
+                rfkill::unblock_device(id).await?;
+            }
+        } else if block {
+            rfkill::block_device_type(device).await?;
+        } else {
+            rfkill::unblock_device_type(device).await?;
+        };
+
+        if let Some(start) = rfkill_start {
+            let operation = if block { "block" } else { "unblock" };
+            let elapsed = start.elapsed();
+            eprintln!(
+                ">>> PROFILE: Rfkill {} {} took: {:.2?}",
+                operation, device, elapsed
+            );
+            if profile {
+                let _ = Notification::new()
+                    .summary("Network-dmenu Profiling")
+                    .body(&format!(
+                        "Rfkill {} {} took: {:.2?}",
+                        operation, device, elapsed
+                    ))
+                    .show();
+            }
         }
+        Ok(true)
+    }
+
+    let start_time = if profile {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+
+    let result = match action {
+        SystemAction::RfkillBlock(device) => handle_rfkill_operation(device, true, profile).await,
         SystemAction::RfkillUnblock(device) => {
-            let status = Command::new("rfkill").arg("unblock").arg(device).status()?;
-            Ok(status.success())
+            handle_rfkill_operation(device, false, profile).await
         }
         SystemAction::EditConnections => {
             let status = Command::new("nm-connection-editor").status()?;
             Ok(status.success())
         }
+        SystemAction::AirplaneMode(enable) => {
+            if *enable {
+                // Block all radio devices (wifi, bluetooth, etc.)
+                rfkill::block_device_type("all").await?;
+                // Notify user
+                let _ = Notification::new()
+                    .summary("Airplane Mode Enabled")
+                    .body("All wireless devices have been turned off")
+                    .show();
+            } else {
+                // Unblock all radio devices
+                rfkill::unblock_device_type("all").await?;
+                // Notify user
+                let _ = Notification::new()
+                    .summary("Airplane Mode Disabled")
+                    .body("Wireless devices have been turned back on")
+                    .show();
+            }
+            Ok(true)
+        }
+    };
+
+    // Display profiling information if enabled
+    if let Some(start) = start_time {
+        let action_name = match action {
+            SystemAction::RfkillBlock(device) => format!("Block {}", device),
+            SystemAction::RfkillUnblock(device) => format!("Unblock {}", device),
+            SystemAction::EditConnections => "Edit connections".to_string(),
+            SystemAction::AirplaneMode(enable) => {
+                format!("Airplane mode {}", if *enable { "ON" } else { "OFF" })
+            }
+        };
+        let elapsed = start.elapsed();
+        eprintln!(
+            ">>> PROFILE: System action '{}' took: {:.2?}",
+            action_name, elapsed
+        );
+        if profile {
+            let _ = Notification::new()
+                .summary("Network-dmenu Profiling")
+                .body(&format!(
+                    "System action '{}' took: {:.2?}",
+                    action_name, elapsed
+                ))
+                .show();
+        }
     }
+
+    result
 }
 
 /// Parses a VPN action string to extract the connection name.
@@ -665,7 +1227,9 @@ pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
-    let name_start = emoji_pos + action[emoji_pos..].chars().next().unwrap().len_utf8();
+    // Use unwrap_or to handle cases where there might not be a next character
+    let first_char = action[emoji_pos..].chars().next().unwrap_or(' ');
+    let name_start = emoji_pos + first_char.len_utf8();
     let name = action[name_start..].trim();
 
     if name.is_empty() {
@@ -708,8 +1272,15 @@ async fn handle_vpn_action(
             if is_command_installed("nmcli") {
                 connect_to_nm_vpn(network, command_runner)?;
             }
-            // Ignore errors from mullvad check
-            let _ = check_mullvad().await;
+
+            // Check mullvad status, assert errors in debug mode
+            // Ignore errors from mullvad check, but log in debug mode
+            let _e = check_mullvad().await;
+            #[cfg(debug_assertions)]
+            if let Err(ref e) = _e {
+                eprintln!("Failed to check mullvad status: {}", e);
+            }
+
             Ok(true)
         }
         VpnAction::Disconnect(network) => {
@@ -747,22 +1318,30 @@ async fn handle_wifi_action(
 
             // Only check for captive portal if connection was successful
             if status.success() {
-                // Ignore errors from captive portal check
-                let _ = check_captive_portal().await;
+                // Check for captive portal, log errors in debug mode
+                let _e = check_captive_portal().await;
+                #[cfg(debug_assertions)]
+                if let Err(ref e) = _e {
+                    eprintln!("Failed to check captive portal: {}", e);
+                }
             }
 
             Ok(status.success())
         }
         WifiAction::ConnectHidden => {
             let ssid = utils::prompt_for_ssid()?;
-            let network = format_entry("wifi", "📶", &format!("{ssid}\tUNKNOWN\t"));
+            let network = format_entry("wifi", ICON_SIGNAL, &format!("{ssid}\tUNKNOWN\t"));
             // FIXME: nmcli connect hidden network looks buggy
             // so we will use iwd directly for the moment
             let connection_result = if is_command_installed("iwctl") {
                 let result = connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
                 if result {
-                    // Ignore errors from captive portal check
-                    let _ = check_captive_portal().await;
+                    // Check for captive portal, log errors in debug mode
+                    let _e = check_captive_portal().await;
+                    #[cfg(debug_assertions)]
+                    if let Err(ref e) = _e {
+                        eprintln!("Failed to check captive portal: {}", e);
+                    }
                 }
                 result
             } else {
@@ -777,20 +1356,34 @@ async fn handle_wifi_action(
                 let result = connect_to_nm_wifi(network, false, command_runner)?;
                 // Only check for captive portal if connection was successful
                 if result {
-                    // Ignore errors from captive portal check
-                    let _ = check_captive_portal().await;
+                    // Check for captive portal, log errors in debug mode
+                    let _e = check_captive_portal().await;
+                    #[cfg(debug_assertions)]
+                    if let Err(ref e) = _e {
+                        eprintln!("Failed to check captive portal: {}", e);
+                    }
                 }
                 result
             } else if is_command_installed("iwctl") {
                 let result = connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
                 // For IWD, we check after connection attempt
-                let _ = check_captive_portal().await;
+                let _e = check_captive_portal().await;
+                #[cfg(debug_assertions)]
+                if let Err(ref e) = _e {
+                    eprintln!("Failed to check captive portal: {}", e);
+                }
                 result
             } else {
                 false
             };
-            // Ignore errors from mullvad check
-            let _ = check_mullvad().await;
+
+            // Check mullvad status, log errors in debug mode
+            let _e = check_mullvad().await;
+            #[cfg(debug_assertions)]
+            if let Err(ref e) = _e {
+                eprintln!("Failed to check mullvad status: {}", e);
+            }
+
             Ok(connection_result)
         }
     }
@@ -802,10 +1395,11 @@ async fn set_action(
     action: &ActionType,
     connected_devices: &[String],
     command_runner: &dyn CommandRunner,
+    profile: bool,
 ) -> Result<bool, Box<dyn Error>> {
     match action {
         ActionType::Custom(custom_action) => handle_custom_action(custom_action),
-        ActionType::System(system_action) => handle_system_action(system_action),
+        ActionType::System(system_action) => handle_system_action(system_action, profile).await,
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
             handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender))
@@ -818,26 +1412,37 @@ async fn set_action(
         ActionType::Bluetooth(bluetooth_action) => {
             handle_bluetooth_action(bluetooth_action, connected_devices, command_runner)
         }
+        ActionType::Diagnostic(diagnostic_action) => {
+            let result = handle_diagnostic_action(diagnostic_action, command_runner).await?;
+            // Show the result in a notification
+            let summary = if result.success {
+                "Diagnostic Complete"
+            } else {
+                "Diagnostic Failed"
+            };
+            let _ = Notification::new()
+                .summary(summary)
+                .body(&result.output)
+                .show();
+            Ok(result.success)
+        }
     }
 }
 
 /// Sends a notification about the connection.
 pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
-    Notification::new()
+    let _e = Notification::new()
         .summary(summary)
         .body(&format!("Connected to {name}"))
-        .show()?;
-    Ok(())
-}
+        .show();
 
-/// Prints the Tailscale status if the command is installed (for debugging).
-fn debug_tailscale_status_if_installed() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
-    {
-        if is_command_installed("tailscale") {
-            Command::new("tailscale").arg("status").status()?;
-        }
+    if let Err(ref e) = _e {
+        eprintln!("Failed to show notification: {}", e);
     }
+
+    // We don't want to propagate notification errors to the caller
+    // as notifications are not critical for functionality
     Ok(())
 }
 
@@ -865,8 +1470,8 @@ mod tests {
 
     #[test]
     fn test_format_entry_long_action() {
-        let result = format_entry("verylongaction", "🎯", "Some text");
-        assert_eq!(result, "verylongaction- 🎯 Some text");
+        let result = format_entry("verylongaction", "🌟", "Some text");
+        assert_eq!(result, "verylongaction- 🌟 Some text");
     }
 
     #[test]
@@ -875,6 +1480,8 @@ mod tests {
         assert!(config.contains("dmenu_cmd = \"dmenu\""));
         assert!(config.contains("dmenu_args = \"--no-multi\""));
         assert!(config.contains("exclude_exit_node = [\"exit1\", \"exit2\"]"));
+        assert!(config.contains("use_gtk = false"));
+        assert!(config.contains("use_gtk_fallback = true"));
         assert!(config.contains("[[actions]]"));
         assert!(config.contains("display = \"🛡️ Example\""));
         assert!(config.contains("cmd = \"notify-send 'hello' 'world'\""));
@@ -903,14 +1510,14 @@ mod tests {
     fn test_action_to_string_system_rfkill_block() {
         let action = ActionType::System(SystemAction::RfkillBlock("wifi".to_string()));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - ❌ Radio wifi rfkill block");
+        assert_eq!(result, "system    - ❌ Turn OFF all wifi devices");
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
         let action = ActionType::System(SystemAction::RfkillUnblock("wifi".to_string()));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - 📶 Radio wifi rfkill unblock");
+        assert_eq!(result, "system    - 📶 Turn ON all wifi devices");
     }
 
     #[test]
@@ -918,6 +1525,20 @@ mod tests {
         let action = ActionType::System(SystemAction::EditConnections);
         let result = action_to_string(&action);
         assert_eq!(result, "system    - 📶 Edit connections");
+    }
+
+    #[test]
+    fn test_action_to_string_system_airplane_mode_on() {
+        let action = ActionType::System(SystemAction::AirplaneMode(true));
+        let result = action_to_string(&action);
+        assert_eq!(result, "system    - ❌ Turn ON airplane mode");
+    }
+
+    #[test]
+    fn test_action_to_string_system_airplane_mode_off() {
+        let action = ActionType::System(SystemAction::AirplaneMode(false));
+        let result = action_to_string(&action);
+        assert_eq!(result, "system    - 📶 Turn OFF airplane mode");
     }
 
     #[test]
@@ -1034,6 +1655,35 @@ mod tests {
     }
 
     #[test]
+    fn test_find_selected_action_airplane_mode() {
+        let actions = vec![
+            ActionType::Wifi(WifiAction::Connect),
+            ActionType::System(SystemAction::AirplaneMode(true)),
+            ActionType::System(SystemAction::AirplaneMode(false)),
+        ];
+
+        // Test finding enable airplane mode
+        let result_on = find_selected_action("system    - ❌ Turn ON airplane mode", &actions);
+        assert!(result_on.is_ok());
+        match result_on.unwrap() {
+            ActionType::System(SystemAction::AirplaneMode(enable)) => {
+                assert!(*enable, "Expected airplane mode to be enabled");
+            }
+            _ => panic!("Expected SystemAction::AirplaneMode(true)"),
+        }
+
+        // Test finding disable airplane mode
+        let result_off = find_selected_action("system    - 📶 Turn OFF airplane mode", &actions);
+        assert!(result_off.is_ok());
+        match result_off.unwrap() {
+            ActionType::System(SystemAction::AirplaneMode(enable)) => {
+                assert!(!*enable, "Expected airplane mode to be disabled");
+            }
+            _ => panic!("Expected SystemAction::AirplaneMode(false)"),
+        }
+    }
+
+    #[test]
     fn test_get_config_path() {
         let path = get_config_path();
         assert!(path.is_ok());
@@ -1118,13 +1768,6 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_tailscale_status_if_installed() {
-        // This function should not panic and should return Ok(())
-        let result = debug_tailscale_status_if_installed();
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn test_action_to_string_tailscale_show_lock_status() {
         let action = ActionType::Tailscale(TailscaleAction::ShowLockStatus);
         let result = action_to_string(&action);
@@ -1143,5 +1786,107 @@ mod tests {
         let action = ActionType::Tailscale(TailscaleAction::SignLockedNode("abcd1234".to_string()));
         let result = action_to_string(&action);
         assert_eq!(result, "tailscale - ✅ Sign Node: abcd1234");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_test_connectivity() {
+        let action = ActionType::Diagnostic(DiagnosticAction::TestConnectivity);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- ✅ Test Connectivity");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_ping_gateway() {
+        let action = ActionType::Diagnostic(DiagnosticAction::PingGateway);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 📶 Ping Gateway");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_traceroute() {
+        let action = ActionType::Diagnostic(DiagnosticAction::TraceRoute("8.8.8.8".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 🗺️ Trace Route to 8.8.8.8");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_speedtest() {
+        let action = ActionType::Diagnostic(DiagnosticAction::SpeedTest);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 🚀 Speed Test");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_speedtest_fast() {
+        let action = ActionType::Diagnostic(DiagnosticAction::SpeedTestFast);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- ⚡ Speed Test (Fast.com)");
+    }
+
+    #[test]
+    fn test_exit_node_filter_config_override() {
+        // Test that command-line args override config file settings
+        let config = Config {
+            actions: Vec::new(),
+            exclude_exit_node: Vec::new(),
+            max_nodes_per_country: Some(2),
+            max_nodes_per_city: None,
+            country_filter: Some("Sweden".to_string()),
+            dmenu_cmd: "dmenu".to_string(),
+            dmenu_args: String::new(),
+        };
+
+        // When args are None, config values should be used
+        let mut args = Args {
+            wifi_interface: "wlan0".to_string(),
+            no_wifi: false,
+            no_vpn: false,
+            no_bluetooth: false,
+            no_tailscale: false,
+            no_diagnostics: false,
+            profile: false,
+            max_nodes_per_country: None,
+            max_nodes_per_city: None,
+            country: None,
+        };
+
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
+        let country = args
+            .country
+            .as_deref()
+            .or_else(|| config.country_filter.as_deref());
+
+        assert_eq!(max_per_country, Some(2));
+        assert_eq!(country, Some("Sweden"));
+
+        // When args are provided, they should override config
+        args.max_nodes_per_country = Some(3);
+        args.country = Some("USA".to_string());
+
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
+        let country = args
+            .country
+            .as_deref()
+            .or_else(|| config.country_filter.as_deref());
+
+        assert_eq!(max_per_country, Some(3));
+        assert_eq!(country, Some("USA"));
+    }
+
+    #[test]
+    fn test_find_selected_action_diagnostic_success() {
+        let actions = vec![
+            ActionType::Diagnostic(DiagnosticAction::TestConnectivity),
+            ActionType::Diagnostic(DiagnosticAction::PingGateway),
+        ];
+
+        let selected = "diagnostic- ✅ Test Connectivity";
+        let result = find_selected_action(selected, &actions);
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ActionType::Diagnostic(DiagnosticAction::TestConnectivity) => {}
+            _ => panic!("Expected TestConnectivity action"),
+        }
     }
 }

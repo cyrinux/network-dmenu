@@ -1,4 +1,5 @@
 use crate::command::{read_output_lines, CommandRunner};
+use crate::constants::{ICON_CHECK, ICON_SIGNAL};
 use crate::utils::{convert_network_strength, prompt_for_password};
 use crate::{parse_vpn_action, parse_wifi_action, VpnAction, WifiAction};
 use regex::Regex;
@@ -105,7 +106,15 @@ fn parse_vpn_lines(actions: &mut Vec<VpnAction>, vpn_lines: Vec<String>) {
             let typ = parts[1].trim();
             let name = parts[2].trim();
             if !name.is_empty() && (typ == "vpn" || typ == "wireguard") {
-                let display = format!("{} {}", if in_use == "yes" { "✅" } else { "📶" }, name);
+                let display = format!(
+                    "{} {}",
+                    if in_use == "yes" {
+                        ICON_CHECK
+                    } else {
+                        ICON_SIGNAL
+                    },
+                    name
+                );
                 if in_use == "yes" {
                     actions.push(VpnAction::Disconnect(display));
                 } else {
@@ -128,7 +137,11 @@ fn parse_wifi_lines(actions: &mut Vec<WifiAction>, wifi_lines: Vec<String>) {
             if !ssid.is_empty() {
                 let display = format!(
                     "{} {:<25}\t{:<11}\t{}",
-                    if in_use == "*" { "✅" } else { "📶" },
+                    if in_use == "*" {
+                        ICON_CHECK
+                    } else {
+                        ICON_SIGNAL
+                    },
                     ssid,
                     security.to_uppercase(),
                     convert_network_strength(signal),
