@@ -1,4 +1,5 @@
 use crate::command::{read_output_lines, CommandRunner};
+use crate::constants::{ICON_CHECK, ICON_SIGNAL, SECURITY_OPEN, SECURITY_UNKNOWN};
 use crate::utils::{convert_network_strength, prompt_for_password};
 use crate::{parse_wifi_action, WifiAction};
 use regex::Regex;
@@ -65,13 +66,16 @@ fn parse_iwd_networks(
         let mut parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 3 {
             let connected = network.starts_with("\u{1b}[0m");
-            let signal = parts.pop().unwrap().trim();
-            let security = parts.pop().unwrap().trim();
-            let ssid = line[..line.find(security).unwrap()].trim();
+            // Use unwrap_or to provide default values in case of failure
+            let signal = parts.pop().unwrap_or_default().trim();
+            let security = parts.pop().unwrap_or_default().trim();
+            // Find security in the line, or use the full line if not found
+            let security_pos = line.find(security).unwrap_or(line.len());
+            let ssid = line[..security_pos].trim();
             let ssid = full_ansi_escape.replace_all(ssid, "").to_string();
             let display = format!(
                 "{} {:<25}\t{:<11}\t{}",
-                if connected { "✅" } else { "📶" },
+                if connected { ICON_CHECK } else { ICON_SIGNAL },
                 ssid,
                 security.to_uppercase(),
                 convert_network_strength(signal)
@@ -95,7 +99,10 @@ pub fn connect_to_iwd_wifi(
     #[cfg(debug_assertions)]
     println!("Connecting to Wi-Fi network: {ssid} with security {security}");
 
-    if is_known_network(ssid, command_runner)? || security == "OPEN" || security == "UNKNOWN" {
+    if is_known_network(ssid, command_runner)?
+        || security == SECURITY_OPEN
+        || security == SECURITY_UNKNOWN
+    {
         attempt_connection(interface, ssid, hidden, None, command_runner)
     } else {
         let password = prompt_for_password(ssid)?;
@@ -128,7 +135,7 @@ fn attempt_connection(
         Ok(true)
     } else {
         #[cfg(debug_assertions)]
-        eprintln!("NOOOOO Failed to connect to Wi-Fi network: {ssid}");
+        eprintln!("Failed to connect to Wi-Fi network: {}", ssid);
         Ok(false)
     }
 }

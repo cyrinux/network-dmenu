@@ -1,3 +1,4 @@
+use country_emoji::flag;
 use notify_rust::Notification;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -11,6 +12,10 @@ const DETECT_CAPTIVE_PORTAL_URL: &str = "http://detectportal.firefox.com/";
 const EXPECTED_RESPONSE: &str = "success";
 const TIMEOUT_DURATION: Duration = Duration::from_secs(5);
 
+/// Returns the flag emoji for a given country.
+pub fn get_flag(name_or_code: &str) -> String {
+    flag(name_or_code).unwrap_or_else(|| "❓".into())
+}
 /// Detects a captive portal by making an HTTP request to a known URL.
 /// If a captive portal is detected, it notifies the user and opens the portal in a web browser.
 pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {

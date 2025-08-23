@@ -1,0 +1,28 @@
+# General settings
+dmenu_cmd = "dmenu"
+dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')' -f --bind='alt-d:change-query('diagnostic')'"
+
+# Exit node filtering options
+# List of exit nodes to exclude
+# exclude_exit_node = ["hostname1.ts.net", "hostname2.ts.net"]
+
+# Filter by node priority (higher values mean higher priority nodes)
+# min_exit_node_priority = 50
+
+# Filter by country name (e.g., "USA", "Sweden", "Japan")
+# country_filter = "USA"
+
+# You can also apply these filters at runtime with command-line parameters:
+# --min-exit-node-priority and --country (these will override config file settings)
+
+[[actions]]
+display = "📡 DNS: Use DHCP server"
+cmd = "sudo resolvectl revert wlan0"
+
+[[actions]]
+display = "📡 DNS: Use 1.1.1.1 server"
+cmd = "sudo resolvectl dns wlan0 '1.1.1.1#cloudflare-dns.com'; sudo resolvectl dnsovertls wlan0 yes"
+
+[[actions]]
+display = "📡 DNS: Use Hagezi's server"
+cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.com'; sudo resolvectl dnsovertls wlan0 yes"

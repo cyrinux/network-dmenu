@@ -1,19 +1,28 @@
 //! Network DMenu Library
 //!
-//! A library for managing network connections via dmenu, supporting Tailscale,
+//! A Rust library for working with network interfaces through dmenu-style interfaces. Supports
 //! Wi-Fi networks (via NetworkManager and iwd), VPN connections, and Bluetooth devices.
 
 pub mod bluetooth;
 pub mod command;
+pub mod constants;
+pub mod diagnostics;
 pub mod iwd;
 pub mod networkmanager;
+pub mod rfkill;
 pub mod tailscale;
+pub mod tailscale_prefs;
 pub mod utils;
+
+use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
 // Re-export commonly used types and functions
 pub use bluetooth::{get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction};
 pub use command::{
-    execute_command, is_command_installed, read_output_lines, CommandRunner, RealCommandRunner,
+    is_command_installed, read_output_lines, CommandRunner, RealCommandRunner,
+};
+pub use diagnostics::{
+    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
 };
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected,
@@ -41,6 +50,7 @@ use std::error::Error;
 pub enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
+    Diagnostic(DiagnosticAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
@@ -81,9 +91,9 @@ pub enum VpnAction {
 /// Formats an entry for display in the menu
 pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
     if icon.is_empty() {
-        format!("{action:<10}- {text}")
+        format!("{:<10}- {}", action, text)
     } else {
-        format!("{action:<10}- {icon} {text}")
+        format!("{:<10}- {} {}", action, icon, text)
     }
 }
 
@@ -100,7 +110,9 @@ pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>
 pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
     let emoji_pos = action
         .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
+        .find(|(_, c)| {
+            *c == ICON_CHECK.chars().next().unwrap() || *c == ICON_SIGNAL.chars().next().unwrap()
+        })
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
@@ -118,7 +130,11 @@ pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>
 pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
     let emoji_pos = action
         .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶' || *c == '❌')
+        .find(|(_, c)| {
+            *c == ICON_CHECK.chars().next().unwrap()
+                || *c == ICON_SIGNAL.chars().next().unwrap()
+                || *c == ICON_CROSS.chars().next().unwrap()
+        })
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
@@ -150,11 +166,12 @@ pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::ICON_STAR;
 
     #[test]
     fn test_format_entry_integration() {
-        let result = format_entry("test", "🎯", "sample text");
-        assert_eq!(result, "test      - 🎯 sample text");
+        let result = format_entry("test", ICON_STAR, "sample text");
+        assert_eq!(result, "test      - 🌟 sample text");
     }
 
     #[test]
