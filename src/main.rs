@@ -474,10 +474,7 @@ fn get_actions(
         None
     };
     let bluetooth_devices = if !args.no_bluetooth && is_command_installed("bluetoothctl") {
-        match get_paired_bluetooth_devices(command_runner) {
-            Ok(devices) => devices,
-            Err(_) => vec![], // Continue on error for better resilience
-        }
+        get_paired_bluetooth_devices(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
@@ -495,10 +492,7 @@ fn get_actions(
         None
     };
     let vpn_networks = if !args.no_vpn && is_command_installed("nmcli") {
-        match get_nm_vpn_networks(command_runner) {
-            Ok(networks) => networks,
-            Err(_) => vec![], // Error resilience: continue despite errors
-        }
+        get_nm_vpn_networks(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
@@ -515,15 +509,9 @@ fn get_actions(
     };
     let wifi_networks = if !args.no_wifi {
         if is_command_installed("nmcli") {
-            match get_nm_wifi_networks(command_runner) {
-                Ok(networks) => networks,
-                Err(_) => vec![], // Error resilience: continue despite errors
-            }
+            get_nm_wifi_networks(command_runner).unwrap_or_default()
         } else if is_command_installed("iwctl") {
-            match get_iwd_networks(&args.wifi_interface, command_runner) {
-                Ok(networks) => networks,
-                Err(_) => vec![], // Error resilience: continue despite errors
-            }
+            get_iwd_networks(&args.wifi_interface, command_runner).unwrap_or_default()
         } else {
             vec![]
         }

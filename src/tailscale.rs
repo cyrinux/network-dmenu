@@ -128,7 +128,7 @@ pub fn get_mullvad_actions(
         // Sort the results (but keep suggested node at the top if it exists)
         let has_suggested = actions
             .first()
-            .map_or(false, |a| a.contains(SUGGESTED_CHECK));
+            .is_some_and(|a| a.contains(SUGGESTED_CHECK));
         if has_suggested {
             let suggested = actions.remove(0);
             actions.sort_by(|a, b| {
@@ -182,29 +182,29 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .await
     {
         Ok(resp) => resp,
-        Err(error) => {
+        Err(_error) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check request error: {error}");
+            eprintln!("Mullvad check request error: {_error}");
             return Ok(());
         }
     };
 
     let text = match response.text().await {
         Ok(text) => text,
-        Err(error) => {
+        Err(_error) => {
             #[cfg(debug_assertions)]
-            eprintln!("Mullvad check response error: {error}");
+            eprintln!("Mullvad check response error: {_error}");
             return Ok(());
         }
     };
 
-    if let Err(error) = Notification::new()
+    if let Err(_error) = Notification::new()
         .summary("Connected Status")
         .body(text.trim())
         .show()
     {
         #[cfg(debug_assertions)]
-        eprintln!("Mullvad notification error: {error}");
+        eprintln!("Mullvad notification error: {_error}");
     }
 
     Ok(())
