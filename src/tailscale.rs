@@ -1,4 +1,5 @@
 use crate::command::{execute_command, is_command_installed, read_output_lines, CommandRunner};
+use crate::constants::{ICON_STAR, SUGGESTED_CHECK};
 use crate::format_entry;
 use notify_rust::Notification;
 use regex::Regex;
@@ -74,23 +75,29 @@ pub fn get_mullvad_actions(
             let suggested_name = suggested_node.clone();
             if !exclude_set.contains(&suggested_name) {
                 // Check if suggested node exists in mullvad_actions
-                if let Some(pos) = mullvad_actions.iter().position(|action| action.contains(&suggested_name)) {
+                if let Some(pos) = mullvad_actions
+                    .iter()
+                    .position(|action| action.contains(&suggested_name))
+                {
                     // Mark existing node as suggested and move to top
                     let mut existing_action = mullvad_actions.remove(pos);
-                    if !existing_action.contains("(suggested") {
-                        existing_action = format!("{} (suggested 🌟)", existing_action);
+                    if !existing_action.contains(SUGGESTED_CHECK) {
+                        existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
                     }
                     mullvad_actions.insert(0, existing_action);
-                } else if let Some(pos) = other_actions.iter().position(|action| action.contains(&suggested_name)) {
+                } else if let Some(pos) = other_actions
+                    .iter()
+                    .position(|action| action.contains(&suggested_name))
+                {
                     // Mark existing node in other_actions as suggested and move to mullvad_actions top
                     let mut existing_action = other_actions.remove(pos);
-                    if !existing_action.contains("(suggested") {
-                        existing_action = format!("{} (suggested 🌟)", existing_action);
+                    if !existing_action.contains(SUGGESTED_CHECK) {
+                        existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
                     }
                     mullvad_actions.insert(0, existing_action);
                 } else {
                     // Add new suggested node
-                    let suggested_action = format!("{} (suggested 🌟)", suggested_node);
+                    let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
                     mullvad_actions.insert(0, suggested_action);
                 }
             }
@@ -100,14 +107,16 @@ pub fn get_mullvad_actions(
         let mut actions = Vec::new();
 
         // First add any suggested nodes from mullvad_actions
-        let suggested_nodes: Vec<String> = mullvad_actions.iter()
-            .filter(|action| action.contains("(suggested"))
+        let suggested_nodes: Vec<String> = mullvad_actions
+            .iter()
+            .filter(|action| action.contains(SUGGESTED_CHECK))
             .cloned()
             .collect();
 
         // Then add non-suggested mullvad actions
-        let non_suggested_mullvad: Vec<String> = mullvad_actions.iter()
-            .filter(|action| !action.contains("(suggested"))
+        let non_suggested_mullvad: Vec<String> = mullvad_actions
+            .iter()
+            .filter(|action| !action.contains(SUGGESTED_CHECK))
             .cloned()
             .collect();
 
@@ -117,7 +126,9 @@ pub fn get_mullvad_actions(
         actions.extend(other_actions);
 
         // Sort the results (but keep suggested node at the top if it exists)
-        let has_suggested = actions.first().map_or(false, |a| a.contains("(suggested)"));
+        let has_suggested = actions
+            .first()
+            .map_or(false, |a| a.contains(SUGGESTED_CHECK));
         if has_suggested {
             let suggested = actions.remove(0);
             actions.sort_by(|a, b| {
@@ -547,20 +558,6 @@ pub async fn handle_tailscale_action(
 
 /// Checks if Tailscale is currently enabled.
 pub fn is_tailscale_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command("tailscale", &["status"])?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(!stdout.contains("Tailscale is stopped"));
-    }
-    Ok(false)
-}
-
-/// Checks if Tailscale allow lan access is enabled
-/// TODO
-pub fn is_tailscale_exit_lan_access_enabled(
-    command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("tailscale", &["status"])?;
 
     if output.status.success() {
@@ -1052,7 +1049,9 @@ mod tests {
 
         let suggest_output = Output {
             status: ExitStatus::from_raw(0),
-            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.".as_bytes().to_vec(),
+            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net."
+                .as_bytes()
+                .to_vec(),
             stderr: vec![],
         };
 
@@ -1067,7 +1066,7 @@ mod tests {
         assert_eq!(result.len(), 3); // Original 2 nodes + 1 suggested
         assert!(result[0].contains("🌟"));
         assert!(result[0].contains("us-nyc-wg-301.mullvad.ts.net"));
-        assert!(result[0].contains("(suggested 🌟)"));
+        assert!(result[0].contains(&format!("(suggested {})", ICON_STAR)));
     }
 
     #[test]
@@ -1087,7 +1086,9 @@ mod tests {
 
         let suggest_output = Output {
             status: ExitStatus::from_raw(0),
-            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.".as_bytes().to_vec(),
+            stdout: "Suggested exit node: us-nyc-wg-301.mullvad.ts.net."
+                .as_bytes()
+                .to_vec(),
             stderr: vec![],
         };
 
@@ -1100,8 +1101,8 @@ mod tests {
 
         let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
         assert_eq!(result.len(), 2); // Same number of nodes, no duplicates
-        assert!(result[0].contains("(suggested 🌟)")); // First result should be marked as suggested with star
-        assert!(result[0].contains("🌟")); // Should have star emoji
+        assert!(result[0].contains(&format!("(suggested {})", ICON_STAR))); // First result should be marked as suggested with star
+        assert!(result[0].contains(ICON_STAR)); // Should have star emoji
         assert!(result[0].contains("us-nyc-wg-301.mullvad.ts.net")); // Should contain the suggested node
     }
 
@@ -1122,7 +1123,9 @@ mod tests {
 
         let suggest_output = Output {
             status: ExitStatus::from_raw(0),
-            stdout: "Suggested exit node: us-nyc-wg-301.ts.net.".as_bytes().to_vec(),
+            stdout: "Suggested exit node: us-nyc-wg-301.ts.net."
+                .as_bytes()
+                .to_vec(),
             stderr: vec![],
         };
 
@@ -1135,8 +1138,8 @@ mod tests {
 
         let result = get_mullvad_actions(&mock_runner, &exclude_nodes);
         assert_eq!(result.len(), 2); // Same number of nodes, no duplicates
-        assert!(result[0].contains("(suggested 🌟)")); // First result should be marked as suggested with star
-        assert!(result[0].contains("🌟")); // Should have star emoji
+        assert!(result[0].contains(&format!("(suggested {})", ICON_STAR))); // First result should be marked as suggested with star
+        assert!(result[0].contains(ICON_STAR)); // Should have star emoji
         assert!(result[0].contains("us-nyc-wg-301.ts.net")); // Should contain the suggested node
         assert!(result[1].contains("au-adl-wg-301.mullvad.ts.net")); // Other node should still be there
     }

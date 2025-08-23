@@ -5,6 +5,7 @@
 
 pub mod bluetooth;
 pub mod command;
+pub mod constants;
 pub mod iwd;
 pub mod networkmanager;
 pub mod tailscale;

@@ -14,6 +14,7 @@ use utils::check_captive_portal;
 
 mod bluetooth;
 mod command;
+mod constants;
 mod iwd;
 mod networkmanager;
 mod tailscale;
@@ -33,6 +34,8 @@ use tailscale::{
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     DefaultNotificationSender, TailscaleAction,
 };
+
+use constants::*;
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
@@ -115,22 +118,24 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
 }
 
 /// Returns the default configuration as a string.
-fn get_default_config() -> &'static str {
-    r#"
-dmenu_cmd = "dmenu"
-dmenu_args = "--no-multi"
+fn get_default_config() -> String {
+    format!(r#"
+dmenu_cmd = "{}"
+dmenu_args = "{}"
 
 exclude_exit_node = ["exit1", "exit2"]
 
 [[actions]]
 display = "🛡️ Example"
 cmd = "notify-send 'hello' 'world'"
-"#
+"#, DEFAULT_DMENU_CMD, DEFAULT_DMENU_ARGS)
 }
 
 /// Main function for the application.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
+
     let args = Args::parse();
 
     create_default_config_if_missing()?;
@@ -214,94 +219,88 @@ fn select_action_from_menu(
 /// Converts an action to a string for display.
 fn action_to_string(action: &ActionType) -> String {
     match action {
-        ActionType::Custom(custom_action) => format_entry("action", "", &custom_action.display),
+        ActionType::Custom(custom_action) => format_entry(ACTION_TYPE_ACTION, "", &custom_action.display),
         ActionType::System(system_action) => match system_action {
             SystemAction::RfkillBlock(device) => {
-                format_entry("system", "❌", &format!("Radio {device} rfkill block"))
+                format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device))
             }
             SystemAction::RfkillUnblock(device) => {
-                format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
+                format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device))
             }
-            SystemAction::EditConnections => format_entry("system", "📶", "Edit connections"),
+            SystemAction::EditConnections => format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS),
         },
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
             TailscaleAction::DisableExitNode => {
-                format_entry("tailscale", "❌", "Disable exit-node")
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_CROSS, TAILSCALE_DISABLE_EXIT_NODE)
             }
-            TailscaleAction::SetEnable(enable) => format_entry(
-                "tailscale",
-                if *enable { "✅" } else { "❌" },
-                if *enable {
-                    "Enable tailscale"
+            TailscaleAction::SetEnable(enable) => {
+                let text = if *enable {
+                    TAILSCALE_ENABLE
                 } else {
-                    "Disable tailscale"
-                },
-            ),
-            TailscaleAction::SetShields(enable) => format_entry(
-                "tailscale",
-                if *enable { "🛡️" } else { "🛡️" },
-                if *enable {
-                    "Shields up"
+                    TAILSCALE_DISABLE
+                };
+                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+            }
+            TailscaleAction::SetShields(enable) => {
+                let text = if *enable {
+                    TAILSCALE_SHIELDS_UP
                 } else {
-                    "Shields down"
-                },
-            ),
-            TailscaleAction::SetAcceptRoutes(enable) => format_entry(
-                "tailscale",
-                if *enable { "✅" } else { "❌" },
-                if *enable {
-                    "Allow advertise routes"
+                    TAILSCALE_SHIELDS_DOWN
+                };
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+            }
+            TailscaleAction::SetAcceptRoutes(enable) => {
+                let text = if *enable {
+                    TAILSCALE_ALLOW_ADVERTISE_ROUTES
                 } else {
-                    "Disallow advertise routes"
-                },
-            ),
-            TailscaleAction::SetAllowLanAccess(enable) => format_entry(
-                "tailscale",
-                if *enable { "✅" } else { "❌" },
-                if *enable {
-                    "Allow lan access while exit-node used"
+                    TAILSCALE_DISALLOW_ADVERTISE_ROUTES
+                };
+                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+            }
+            TailscaleAction::SetAllowLanAccess(enable) => {
+                let text = if *enable {
+                    TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE
                 } else {
-                    "Disallow lan access while exit-node used"
-                },
-            ),
+                    TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE
+                };
+                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+            }
             TailscaleAction::ShowLockStatus => {
-                format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_LOCK, TAILSCALE_SHOW_LOCK_STATUS)
             }
             TailscaleAction::ListLockedNodes => {
-                format_entry("tailscale", "📋", "List Locked Nodes")
+                format_entry(ACTION_TYPE_TAILSCALE, ICON_LIST, TAILSCALE_LIST_LOCKED_NODES)
             }
             TailscaleAction::SignLockedNode(node_key) => {
                 // Try to find the hostname for this node key from locked nodes
                 if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
                     if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                         format_entry(
-                            "tailscale",
-                            "✅",
-                            &format!(
-                                "Sign Node: {} - {} ({})",
-                                extract_short_hostname(&node.hostname),
-                                node.machine_name,
-                                &node_key[..8]
-                            ),
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CHECK,
+                            &TAILSCALE_SIGN_NODE_DETAILED
+                                .replace("{hostname}", &extract_short_hostname(&node.hostname))
+                                .replace("{machine}", &node.machine_name)
+                                .replace("{key}", &node_key[..8]),
                         )
                     } else {
-                        format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                        format_entry(ACTION_TYPE_TAILSCALE, ICON_CHECK, &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]))
                     }
                 } else {
-                    format_entry("tailscale", "✅", &format!("Sign Node: {}", &node_key[..8]))
+                    format_entry(ACTION_TYPE_TAILSCALE, ICON_CHECK, &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]))
                 }
             }
         },
         ActionType::Vpn(vpn_action) => match vpn_action {
-            VpnAction::Connect(network) => format_entry("vpn", "", network),
-            VpnAction::Disconnect(network) => format_entry("vpn", "❌", network),
+            VpnAction::Connect(network) => format_entry(ACTION_TYPE_VPN, "", network),
+            VpnAction::Disconnect(network) => format_entry(ACTION_TYPE_VPN, ICON_CROSS, network),
         },
         ActionType::Wifi(wifi_action) => match wifi_action {
-            WifiAction::Network(network) => format_entry("wifi", "", network),
-            WifiAction::Disconnect => format_entry("wifi", "❌", "Disconnect"),
-            WifiAction::Connect => format_entry("wifi", "📶", "Connect"),
-            WifiAction::ConnectHidden => format_entry("wifi", "📶", "Connect to hidden network"),
+            WifiAction::Network(network) => format_entry(ACTION_TYPE_WIFI, "", network),
+            WifiAction::Disconnect => format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT),
+            WifiAction::Connect => format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT),
+            WifiAction::ConnectHidden => format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN),
         },
         ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
@@ -318,78 +317,45 @@ fn find_selected_action<'a>(
         .iter()
         .find(|a| match a {
             ActionType::Custom(custom_action) => {
-                format_entry("action", "", &custom_action.display) == action
+                format_entry(ACTION_TYPE_ACTION, "", &custom_action.display) == action
             }
             ActionType::System(system_action) => match system_action {
                 SystemAction::RfkillBlock(device) => {
-                    action == format_entry("system", "❌", &format!("Radio {device} rfkill block"))
+                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device))
                 }
                 SystemAction::RfkillUnblock(device) => {
-                    action
-                        == format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
+                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device))
                 }
                 SystemAction::EditConnections => {
-                    action == format_entry("system", "📶", "Edit connections")
+                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
                 }
             },
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
                 TailscaleAction::DisableExitNode => {
-                    action == format_entry("tailscale", "❌", "Disable exit-node")
+                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_CROSS, TAILSCALE_DISABLE_EXIT_NODE)
                 }
                 TailscaleAction::SetEnable(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            if *enable { "✅" } else { "❌" },
-                            if *enable {
-                                "Enable tailscale"
-                            } else {
-                                "Disable tailscale"
-                            },
-                        )
+                    let text = if *enable { TAILSCALE_ENABLE } else { TAILSCALE_DISABLE };
+                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
                 }
                 TailscaleAction::SetShields(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            "🛡️",
-                            if *enable {
-                                "Shields up"
-                            } else {
-                                "Shields down"
-                            },
-                        )
+                    let text = if *enable { TAILSCALE_SHIELDS_UP } else { TAILSCALE_SHIELDS_DOWN };
+                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
                 }
                 TailscaleAction::SetAcceptRoutes(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            if *enable { "✅" } else { "❌" },
-                            if *enable {
-                                "Allow advertise routes"
-                            } else {
-                                "Disallow advertise routes"
-                            },
-                        )
+                    let text = if *enable { TAILSCALE_ALLOW_ADVERTISE_ROUTES } else { TAILSCALE_DISALLOW_ADVERTISE_ROUTES };
+                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
                 }
                 TailscaleAction::SetAllowLanAccess(enable) => {
-                    action
-                        == format_entry(
-                            "tailscale",
-                            if *enable { "✅" } else { "❌" },
-                            if *enable {
-                                "Allow lan access while exit-node used"
-                            } else {
-                                "Disallow lan access while exit-node used"
-                            },
-                        )
+                    let text = if *enable { TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE } else { TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE };
+                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
                 }
                 TailscaleAction::ShowLockStatus => {
-                    action == format_entry("tailscale", "🔒", "Show Tailscale Lock Status")
+                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_LOCK, TAILSCALE_SHOW_LOCK_STATUS)
                 }
                 TailscaleAction::ListLockedNodes => {
-                    action == format_entry("tailscale", "📋", "List Locked Nodes")
+                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_LIST, TAILSCALE_LIST_LOCKED_NODES)
                 }
                 TailscaleAction::SignLockedNode(node_key) => {
                     // Try to find the hostname for this node key from locked nodes
@@ -397,43 +363,41 @@ fn find_selected_action<'a>(
                         if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                             action
                                 == format_entry(
-                                    "tailscale",
-                                    "✅",
-                                    &format!(
-                                        "Sign Node: {} - {} ({})",
-                                        extract_short_hostname(&node.hostname),
-                                        node.machine_name,
-                                        &node_key[..8]
-                                    ),
+                                    ACTION_TYPE_TAILSCALE,
+                                    ICON_CHECK,
+                                    &TAILSCALE_SIGN_NODE_DETAILED
+                                        .replace("{hostname}", &extract_short_hostname(&node.hostname))
+                                        .replace("{machine}", &node.machine_name)
+                                        .replace("{key}", &node_key[..8]),
                                 )
                         } else {
                             action
                                 == format_entry(
-                                    "tailscale",
-                                    "✅",
-                                    &format!("Sign Node: {}", &node_key[..8]),
+                                    ACTION_TYPE_TAILSCALE,
+                                    ICON_CHECK,
+                                    &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                                 )
                         }
                     } else {
                         action
                             == format_entry(
-                                "tailscale",
-                                "✅",
-                                &format!("Sign Node: {}", &node_key[..8]),
+                                ACTION_TYPE_TAILSCALE,
+                                ICON_CHECK,
+                                &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                             )
                     }
                 }
             },
             ActionType::Vpn(vpn_action) => match vpn_action {
-                VpnAction::Connect(network) => action == format_entry("vpn", "", network),
-                VpnAction::Disconnect(network) => action == format_entry("vpn,", "❌", network),
+                VpnAction::Connect(network) => action == format_entry(ACTION_TYPE_VPN, "", network),
+                VpnAction::Disconnect(network) => action == format_entry(ACTION_TYPE_VPN, ICON_CROSS, network),
             },
             ActionType::Wifi(wifi_action) => match wifi_action {
-                WifiAction::Network(network) => action == format_entry("wifi", "", network),
-                WifiAction::Disconnect => action == format_entry("wifi", "❌", "Disconnect"),
-                WifiAction::Connect => action == format_entry("wifi", "📶", "Connect"),
+                WifiAction::Network(network) => action == format_entry(ACTION_TYPE_WIFI, "", network),
+                WifiAction::Disconnect => action == format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT),
+                WifiAction::Connect => action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT),
                 WifiAction::ConnectHidden => {
-                    action == format_entry("wifi", "📶", "Connect to hidden network")
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN)
                 }
             },
             ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
@@ -445,8 +409,8 @@ fn find_selected_action<'a>(
 
 /// Gets the configuration file path.
 fn get_config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let config_dir = config_dir().ok_or("Failed to find config directory")?;
-    Ok(config_dir.join("network-dmenu").join("config.toml"))
+    let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
+    Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
 }
 
 /// Creates a default configuration file if it doesn't exist.
