@@ -85,8 +85,8 @@ enum ActionType {
 #[derive(Debug)]
 enum SystemAction {
     EditConnections,
-    RfkillBlock,
-    RfkillUnblock,
+    RfkillBlock(String),
+    RfkillUnblock(String),
 }
 
 /// Enum representing Wi-Fi-related actions.
@@ -216,9 +216,11 @@ fn action_to_string(action: &ActionType) -> String {
     match action {
         ActionType::Custom(custom_action) => format_entry("action", "", &custom_action.display),
         ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock => format_entry("system", "❌", "Radio wifi rfkill block"),
-            SystemAction::RfkillUnblock => {
-                format_entry("system", "📶", "Radio wifi rfkill unblock")
+            SystemAction::RfkillBlock(device) => {
+                format_entry("system", "❌", &format!("Radio {device} rfkill block"))
+            }
+            SystemAction::RfkillUnblock(device) => {
+                format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
             }
             SystemAction::EditConnections => format_entry("system", "📶", "Edit connections"),
         },
@@ -301,11 +303,12 @@ fn find_selected_action<'a>(
                 format_entry("action", "", &custom_action.display) == action
             }
             ActionType::System(system_action) => match system_action {
-                SystemAction::RfkillBlock => {
-                    action == format_entry("system", "❌", "Radio wifi rfkill block")
+                SystemAction::RfkillBlock(device) => {
+                    action == format_entry("system", "❌", &format!("Radio {device} rfkill block"))
                 }
-                SystemAction::RfkillUnblock => {
-                    action == format_entry("system", "📶", "Radio wifi rfkill unblock")
+                SystemAction::RfkillUnblock(device) => {
+                    action
+                        == format_entry("system", "📶", &format!("Radio {device} rfkill unblock"))
                 }
                 SystemAction::EditConnections => {
                     action == format_entry("system", "📶", "Edit connections")
@@ -535,8 +538,21 @@ fn get_actions(
     }
 
     if !args.no_wifi && is_command_installed("rfkill") {
-        actions.push(ActionType::System(SystemAction::RfkillBlock));
-        actions.push(ActionType::System(SystemAction::RfkillUnblock));
+        actions.push(ActionType::System(SystemAction::RfkillBlock(
+            "wifi".to_string(),
+        )));
+        actions.push(ActionType::System(SystemAction::RfkillUnblock(
+            "wifi".to_string(),
+        )));
+    }
+
+    if !args.no_bluetooth && is_command_installed("rfkill") {
+        actions.push(ActionType::System(SystemAction::RfkillBlock(
+            "bluetooth".to_string(),
+        )));
+        actions.push(ActionType::System(SystemAction::RfkillUnblock(
+            "bluetooth".to_string(),
+        )));
     }
 
     // Performance optimization: Now add all the collected network information
@@ -626,12 +642,12 @@ fn handle_custom_action(action: &CustomAction) -> Result<bool, Box<dyn Error>> {
 /// Handles a system action.
 fn handle_system_action(action: &SystemAction) -> Result<bool, Box<dyn Error>> {
     match action {
-        SystemAction::RfkillBlock => {
-            let status = Command::new("rfkill").arg("block").arg("wlan").status()?;
+        SystemAction::RfkillBlock(device) => {
+            let status = Command::new("rfkill").arg("block").arg(device).status()?;
             Ok(status.success())
         }
-        SystemAction::RfkillUnblock => {
-            let status = Command::new("rfkill").arg("unblock").arg("wlan").status()?;
+        SystemAction::RfkillUnblock(device) => {
+            let status = Command::new("rfkill").arg("unblock").arg(device).status()?;
             Ok(status.success())
         }
         SystemAction::EditConnections => {
@@ -792,7 +808,8 @@ async fn set_action(
         ActionType::System(system_action) => handle_system_action(system_action),
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
-            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender)).await
+            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender))
+                .await
         }
         ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
         ActionType::Wifi(wifi_action) => {
@@ -884,14 +901,14 @@ mod tests {
 
     #[test]
     fn test_action_to_string_system_rfkill_block() {
-        let action = ActionType::System(SystemAction::RfkillBlock);
+        let action = ActionType::System(SystemAction::RfkillBlockWifi);
         let result = action_to_string(&action);
         assert_eq!(result, "system    - ❌ Radio wifi rfkill block");
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
-        let action = ActionType::System(SystemAction::RfkillUnblock);
+        let action = ActionType::System(SystemAction::RfkillUnblockWifi);
         let result = action_to_string(&action);
         assert_eq!(result, "system    - 📶 Radio wifi rfkill unblock");
     }
@@ -992,7 +1009,7 @@ mod tests {
     fn test_find_selected_action_success() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock),
+            ActionType::System(SystemAction::RfkillBlockWifi),
         ];
 
         let result = find_selected_action("wifi      - 📶 Connect", &actions);
@@ -1008,7 +1025,7 @@ mod tests {
     fn test_find_selected_action_not_found() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock),
+            ActionType::System(SystemAction::RfkillBlockWifi),
         ];
 
         let result = find_selected_action("nonexistent action", &actions);
