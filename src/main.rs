@@ -901,14 +901,14 @@ mod tests {
 
     #[test]
     fn test_action_to_string_system_rfkill_block() {
-        let action = ActionType::System(SystemAction::RfkillBlockWifi);
+        let action = ActionType::System(SystemAction::RfkillBlock("wifi".to_string()));
         let result = action_to_string(&action);
         assert_eq!(result, "system    - ❌ Radio wifi rfkill block");
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
-        let action = ActionType::System(SystemAction::RfkillUnblockWifi);
+        let action = ActionType::System(SystemAction::RfkillUnblock("wifi".to_string()));
         let result = action_to_string(&action);
         assert_eq!(result, "system    - 📶 Radio wifi rfkill unblock");
     }
@@ -1009,7 +1009,7 @@ mod tests {
     fn test_find_selected_action_success() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlockWifi),
+            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
         ];
 
         let result = find_selected_action("wifi      - 📶 Connect", &actions);
@@ -1025,7 +1025,7 @@ mod tests {
     fn test_find_selected_action_not_found() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlockWifi),
+            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
         ];
 
         let result = find_selected_action("nonexistent action", &actions);
