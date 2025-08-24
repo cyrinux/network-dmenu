@@ -15,6 +15,7 @@ use utils::check_captive_portal;
 mod bluetooth;
 mod command;
 mod constants;
+mod diagnostics;
 mod iwd;
 mod networkmanager;
 mod tailscale;
@@ -24,6 +25,9 @@ use bluetooth::{
     get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
 };
 use command::{is_command_installed, RealCommandRunner};
+use diagnostics::{
+    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
+};
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
 use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
@@ -41,7 +45,7 @@ use constants::*;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value = "wlan0")]
+    #[arg(long, default_value = "wlan0")]
     wifi_interface: String,
     #[arg(long)]
     no_wifi: bool,
@@ -51,6 +55,8 @@ struct Args {
     no_bluetooth: bool,
     #[arg(long)]
     no_tailscale: bool,
+    #[arg(long)]
+    no_diagnostics: bool,
     #[arg(long)]
     profile: bool,
 }
@@ -78,6 +84,7 @@ struct CustomAction {
 enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
+    Diagnostic(DiagnosticAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
@@ -340,6 +347,7 @@ fn action_to_string(action: &ActionType) -> String {
         ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
         },
+        ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
     }
 }
 
@@ -505,6 +513,9 @@ fn find_selected_action<'a>(
             ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
                 BluetoothAction::ToggleConnect(device) => action == device,
             },
+            ActionType::Diagnostic(diagnostic_action) => {
+                action == diagnostic_action_to_string(diagnostic_action)
+            }
         })
         .ok_or(format!("Action not found: {action}").into())
 }
@@ -738,6 +749,14 @@ fn get_actions(
         );
     }
 
+    // Add diagnostic actions (get_diagnostic_actions checks for tool availability internally)
+    if !args.no_diagnostics {
+        let diagnostic_actions = get_diagnostic_actions();
+        if !diagnostic_actions.is_empty() {
+            actions.extend(diagnostic_actions.into_iter().map(ActionType::Diagnostic));
+        }
+    }
+
     Ok(actions)
 }
 
@@ -957,6 +976,20 @@ async fn set_action(
         ActionType::Bluetooth(bluetooth_action) => {
             handle_bluetooth_action(bluetooth_action, connected_devices, command_runner)
         }
+        ActionType::Diagnostic(diagnostic_action) => {
+            let result = handle_diagnostic_action(diagnostic_action, command_runner).await?;
+            // Show the result in a notification
+            let summary = if result.success {
+                "Diagnostic Complete"
+            } else {
+                "Diagnostic Failed"
+            };
+            let _ = Notification::new()
+                .summary(summary)
+                .body(&result.output)
+                .show();
+            Ok(result.success)
+        }
     }
 }
 
@@ -987,7 +1020,10 @@ fn debug_tailscale_status_if_installed() -> Result<(), Box<dyn Error>> {
                 eprintln!("Failed to get tailscale status: {}", e);
             } else if let Ok(status) = _e {
                 if !status.success() {
-                    eprintln!("Tailscale status command failed with exit code: {:?}", status.code());
+                    eprintln!(
+                        "Tailscale status command failed with exit code: {:?}",
+                        status.code()
+                    );
                 }
             }
         }
@@ -1297,5 +1333,57 @@ mod tests {
         let action = ActionType::Tailscale(TailscaleAction::SignLockedNode("abcd1234".to_string()));
         let result = action_to_string(&action);
         assert_eq!(result, "tailscale - ✅ Sign Node: abcd1234");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_test_connectivity() {
+        let action = ActionType::Diagnostic(DiagnosticAction::TestConnectivity);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- ✅ Test Connectivity");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_ping_gateway() {
+        let action = ActionType::Diagnostic(DiagnosticAction::PingGateway);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 📶 Ping Gateway");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_traceroute() {
+        let action = ActionType::Diagnostic(DiagnosticAction::TraceRoute("8.8.8.8".to_string()));
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 🗺️ Trace Route to 8.8.8.8");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_speedtest() {
+        let action = ActionType::Diagnostic(DiagnosticAction::SpeedTest);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 🚀 Speed Test");
+    }
+
+    #[test]
+    fn test_action_to_string_diagnostic_speedtest_fast() {
+        let action = ActionType::Diagnostic(DiagnosticAction::SpeedTestFast);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- ⚡ Speed Test (Fast.com)");
+    }
+
+    #[test]
+    fn test_find_selected_action_diagnostic_success() {
+        let actions = vec![
+            ActionType::Diagnostic(DiagnosticAction::TestConnectivity),
+            ActionType::Diagnostic(DiagnosticAction::PingGateway),
+        ];
+
+        let selected = "diagnostic- ✅ Test Connectivity";
+        let result = find_selected_action(selected, &actions);
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ActionType::Diagnostic(DiagnosticAction::TestConnectivity) => {}
+            _ => panic!("Expected TestConnectivity action"),
+        }
     }
 }

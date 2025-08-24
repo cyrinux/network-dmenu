@@ -15,6 +15,7 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - Set Tailscale exit nodes
 - Set mullvad exit nodes
 - **Tailscale Lock management - view lock status and sign new locked nodes**
+- **Network diagnostics - ping gateway/DNS, traceroute, MTU testing, connectivity checks**
 - Customizable actions via a configuration file
 - Bluetooth connect and disconnect to known devices
 - Connect to wifi devices with bare iwd or network-manager
@@ -38,6 +39,12 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - `dmenu` or compatible.
 - `nmcli` or just `iwd`, optional, for wifi.
 - `bluetoothctl`, optional, for bluetooth.
+- `ping`, optional, for connectivity and latency diagnostics.
+- `traceroute`, optional, for network path tracing.
+- `ip`, optional, for routing table and interface information.
+- `ss` or `netstat`, optional, for network connection listings.
+- `speedtest-cli` or `speedtest`, optional, for internet speed testing.
+- `fast`, optional, for Netflix's Fast.com speed testing.
 
 ## Configuration
 
@@ -79,6 +86,11 @@ Run the following command to open the dmenu selector:
 network-dmenu
 ```
 
+You can also disable specific features:
+```sh
+network-dmenu --no-wifi --no-bluetooth --no-diagnostics
+```
+
 Select an action from the menu. The corresponding command will be executed.
 
 ### Performance Optimizations
@@ -107,6 +119,80 @@ These actions will only appear in the menu when:
 3. For signing actions: there are locked nodes that need to be signed
 
 When you sign a node, you'll receive a notification confirming success or failure. The signing process uses your local Tailscale Lock key to authorize the node.
+
+### Network Diagnostics
+
+network-dmenu includes comprehensive network diagnostic tools to help troubleshoot connectivity issues. Each diagnostic tool appears only if the required binary is installed:
+
+**Ping-based diagnostics** (requires `ping`):
+- **🚀 Test Connectivity**: Quick check if internet is reachable
+- **📶 Ping Gateway**: Test connection to your default gateway
+- **📶 Ping DNS Servers**: Test connectivity to common DNS servers (8.8.8.8, 1.1.1.1, 9.9.9.9)
+- **📏 Check MTU**: Determine maximum transmission unit size to a target
+- **⏱️ Check Latency**: Measure network latency with detailed statistics
+
+**Network tracing** (requires `traceroute`):
+- **🗺️ Trace Route**: Show the network path to a destination
+
+**System information** (requires `ip`):
+- **🛣️ Show Routing Table**: Display current network routing configuration
+- **🔌 Show Network Interfaces**: Display network interface information
+
+**Connection monitoring** (requires `ss` or `netstat`):
+- **📊 Show Network Connections**: List active network connections
+
+**Internet speed testing** (requires `speedtest-cli`, `speedtest`, or `fast`):
+- **🚀 Speed Test**: Comprehensive internet speed test using speedtest-cli or speedtest
+- **⚡ Speed Test (Fast.com)**: Quick speed test using Netflix's fast.com service
+
+All diagnostic results are shown in desktop notifications for easy viewing. These tools are particularly useful for:
+
+- Diagnosing slow network connections
+- Troubleshooting VPN or Tailscale connectivity issues
+- Identifying network configuration problems
+- Monitoring network performance
+
+The diagnostic features can be disabled using the `--no-diagnostics` flag if not needed.
+
+### Installing Optional Speedtest Tools
+
+To enable internet speed testing functionality, install one or more of these tools:
+
+**speedtest-go** (Recommended - provides detailed JSON output with pretty notifications):
+```sh
+# Using go install
+go install github.com/showwin/speedtest-go@latest
+
+# Or download pre-built binaries from:
+# https://github.com/showwin/speedtest-go/releases
+```
+
+**speedtest-cli** (Python-based alternative):
+```sh
+# Using pip
+pip install speedtest-cli
+
+# Using package managers
+sudo apt install speedtest-cli    # Debian/Ubuntu
+brew install speedtest-cli        # macOS
+```
+
+**speedtest** (Official Ookla tool):
+```sh
+# Download from https://www.speedtest.net/apps/cli
+# Or using package managers
+sudo apt install speedtest        # Debian/Ubuntu (newer versions)
+brew install speedtest-cli        # macOS
+```
+
+**fast** (Netflix's fast.com CLI):
+```sh
+# Using npm
+npm install -g fast-cli
+
+# Using package managers  
+brew install fast-cli             # macOS
+```
 
 ## Dependencies
 

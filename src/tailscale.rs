@@ -666,7 +666,7 @@ pub fn sign_locked_node(
 }
 
 /// Extracts a short hostname for display.
-pub fn extract_short_hostname<'a>(hostname: &'a str) -> &'a str {
+pub fn extract_short_hostname(hostname: &str) -> &str {
     hostname.split('.').next().unwrap_or(hostname)
 }
 
@@ -704,6 +704,13 @@ impl NotificationSender for DefaultNotificationSender {
 #[cfg(test)]
 pub struct MockNotificationSender {
     notifications: RefCell<Vec<(String, String, i32)>>,
+}
+
+#[cfg(test)]
+impl Default for MockNotificationSender {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

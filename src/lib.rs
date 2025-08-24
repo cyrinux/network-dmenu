@@ -6,6 +6,7 @@
 pub mod bluetooth;
 pub mod command;
 pub mod constants;
+pub mod diagnostics;
 pub mod iwd;
 pub mod networkmanager;
 pub mod tailscale;
@@ -17,6 +18,9 @@ use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 pub use bluetooth::{get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction};
 pub use command::{
     execute_command, is_command_installed, read_output_lines, CommandRunner, RealCommandRunner,
+};
+pub use diagnostics::{
+    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
 };
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected,
@@ -44,6 +48,7 @@ use std::error::Error;
 pub enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
+    Diagnostic(DiagnosticAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
