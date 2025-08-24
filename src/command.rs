@@ -1,6 +1,9 @@
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 
 /// Trait for running shell commands.
 pub trait CommandRunner {
@@ -17,9 +20,30 @@ impl CommandRunner for RealCommandRunner {
     }
 }
 
+// Static command cache to avoid repeated lookups
+static COMMAND_CACHE: Lazy<Mutex<HashMap<String, bool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Checks if a command is installed on the system.
+/// Uses a cache to avoid repeated lookups.
 pub fn is_command_installed(cmd: &str) -> bool {
-    which::which(cmd).is_ok()
+    let mut cache = match COMMAND_CACHE.lock() {
+        Ok(cache) => cache,
+        Err(_) => {
+            // If we can't lock the cache (e.g., another thread panicked while holding the lock),
+            // just check the command directly without caching
+            return which::which(cmd).is_ok();
+        }
+    };
+
+    // Return cached result if available
+    if let Some(&installed) = cache.get(cmd) {
+        return installed;
+    }
+
+    // Otherwise check and cache the result
+    let installed = which::which(cmd).is_ok();
+    cache.insert(cmd.to_string(), installed);
+    installed
 }
 
 /// Reads the output of a command and returns it as a vector of lines.
@@ -30,7 +54,7 @@ pub fn read_output_lines(output: &Output) -> Result<Vec<String>, Box<dyn Error>>
 }
 
 /// Executes a command and returns whether it was successful.
-pub fn execute_command(command: &str, args: &[&str]) -> bool {
+pub async fn execute_command(command: &str, args: &[&str]) -> bool {
     Command::new(command)
         .args(args)
         .env("LC_ALL", "C")
@@ -145,11 +169,17 @@ mod tests {
     fn test_is_command_installed_existing() {
         // Test with a command that should exist on most systems
         assert!(is_command_installed("echo"));
+
+        // Calling again should use the cache
+        assert!(is_command_installed("echo"));
     }
 
     #[test]
     fn test_is_command_installed_nonexistent() {
         // Test with a command that definitely doesn't exist
+        assert!(!is_command_installed("nonexistent_command_xyz_12345"));
+
+        // Calling again should use the cache
         assert!(!is_command_installed("nonexistent_command_xyz_12345"));
     }
 

@@ -280,7 +280,7 @@ fn get_active_exit_node(command_runner: &dyn CommandRunner) -> String {
 }
 
 /// Sets the exit node for Tailscale.
-fn set_exit_node(action: &str) -> bool {
+pub async fn set_exit_node(action: &str) -> bool {
     let Some(node_ip) = extract_node_ip(action) else {
         return false;
     };
@@ -288,7 +288,7 @@ fn set_exit_node(action: &str) -> bool {
     #[cfg(debug_assertions)]
     println!("Exit-node ip address: {node_ip}");
 
-    if !execute_command("tailscale", &["up"]) {
+    if !execute_command("tailscale", &["up"]).await {
         return false;
     }
 
@@ -300,7 +300,7 @@ fn set_exit_node(action: &str) -> bool {
             node_ip,
             "--exit-node-allow-lan-access=true",
         ],
-    )
+    ).await
 }
 
 /// Extracts the IP address from the action string.
@@ -358,7 +358,7 @@ pub async fn handle_tailscale_action(
             Ok(status.success())
         }
         TailscaleAction::SetExitNode(node) => {
-            if set_exit_node(node) {
+            if set_exit_node(node).await {
                 // Log errors from mullvad check in debug mode but continue execution
                 if let Err(_e) = check_mullvad().await {
                     #[cfg(debug_assertions)]
@@ -665,8 +665,8 @@ pub fn sign_locked_node(
 }
 
 /// Extracts a short hostname for display.
-pub fn extract_short_hostname(hostname: &str) -> String {
-    hostname.split('.').next().unwrap_or(hostname).to_string()
+pub fn extract_short_hostname<'a>(hostname: &'a str) -> &'a str {
+    hostname.split('.').next().unwrap_or(hostname)
 }
 
 /// Trait for sending notifications.

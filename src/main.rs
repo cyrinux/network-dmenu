@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Performance optimization: We're using a more efficient approach for network scanning
     // that prioritizes faster operations first to improve perceived responsiveness
-    let command_runner = RealCommandRunner;
+    let command_runner = RealCommandRunner ;
 
     // Measure performance if profiling is enabled
     let start_time = if args.profile {
