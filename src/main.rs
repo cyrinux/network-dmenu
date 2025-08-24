@@ -773,7 +773,9 @@ pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
-    let name_start = emoji_pos + action[emoji_pos..].chars().next().unwrap().len_utf8();
+    // Use unwrap_or to handle cases where there might not be a next character
+    let first_char = action[emoji_pos..].chars().next().unwrap_or(' ');
+    let name_start = emoji_pos + first_char.len_utf8();
     let name = action[name_start..].trim();
 
     if name.is_empty() {
@@ -816,8 +818,15 @@ async fn handle_vpn_action(
             if is_command_installed("nmcli") {
                 connect_to_nm_vpn(network, command_runner)?;
             }
-            // Ignore errors from mullvad check
-            let _ = check_mullvad().await;
+
+            // Check mullvad status, assert errors in debug mode
+            // Ignore errors from mullvad check, but log in debug mode
+            let _e = check_mullvad().await;
+            #[cfg(debug_assertions)]
+            if let Err(ref e) = _e {
+                eprintln!("Failed to check mullvad status: {}", e);
+            }
+
             Ok(true)
         }
         VpnAction::Disconnect(network) => {
@@ -855,8 +864,12 @@ async fn handle_wifi_action(
 
             // Only check for captive portal if connection was successful
             if status.success() {
-                // Ignore errors from captive portal check
-                let _ = check_captive_portal().await;
+                // Check for captive portal, log errors in debug mode
+                let _e = check_captive_portal().await;
+                #[cfg(debug_assertions)]
+                if let Err(ref e) = _e {
+                    eprintln!("Failed to check captive portal: {}", e);
+                }
             }
 
             Ok(status.success())
@@ -869,8 +882,12 @@ async fn handle_wifi_action(
             let connection_result = if is_command_installed("iwctl") {
                 let result = connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
                 if result {
-                    // Ignore errors from captive portal check
-                    let _ = check_captive_portal().await;
+                    // Check for captive portal, log errors in debug mode
+                    let _e = check_captive_portal().await;
+                    #[cfg(debug_assertions)]
+                    if let Err(ref e) = _e {
+                        eprintln!("Failed to check captive portal: {}", e);
+                    }
                 }
                 result
             } else {
@@ -885,20 +902,34 @@ async fn handle_wifi_action(
                 let result = connect_to_nm_wifi(network, false, command_runner)?;
                 // Only check for captive portal if connection was successful
                 if result {
-                    // Ignore errors from captive portal check
-                    let _ = check_captive_portal().await;
+                    // Check for captive portal, log errors in debug mode
+                    let _e = check_captive_portal().await;
+                    #[cfg(debug_assertions)]
+                    if let Err(ref e) = _e {
+                        eprintln!("Failed to check captive portal: {}", e);
+                    }
                 }
                 result
             } else if is_command_installed("iwctl") {
                 let result = connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
                 // For IWD, we check after connection attempt
-                let _ = check_captive_portal().await;
+                let _e = check_captive_portal().await;
+                #[cfg(debug_assertions)]
+                if let Err(ref e) = _e {
+                    eprintln!("Failed to check captive portal: {}", e);
+                }
                 result
             } else {
                 false
             };
-            // Ignore errors from mullvad check
-            let _ = check_mullvad().await;
+
+            // Check mullvad status, log errors in debug mode
+            let _e = check_mullvad().await;
+            #[cfg(debug_assertions)]
+            if let Err(ref e) = _e {
+                eprintln!("Failed to check mullvad status: {}", e);
+            }
+
             Ok(connection_result)
         }
     }
@@ -931,10 +962,18 @@ async fn set_action(
 
 /// Sends a notification about the connection.
 pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
-    Notification::new()
+    let _e = Notification::new()
         .summary(summary)
         .body(&format!("Connected to {name}"))
-        .show()?;
+        .show();
+
+    #[cfg(debug_assertions)]
+    if let Err(ref e) = _e {
+        eprintln!("Failed to show notification: {}", e);
+    }
+
+    // We don't want to propagate notification errors to the caller
+    // as notifications are not critical for functionality
     Ok(())
 }
 
@@ -943,7 +982,14 @@ fn debug_tailscale_status_if_installed() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
     {
         if is_command_installed("tailscale") {
-            Command::new("tailscale").arg("status").status()?;
+            let _e = Command::new("tailscale").arg("status").status();
+            if let Err(ref e) = _e {
+                eprintln!("Failed to get tailscale status: {}", e);
+            } else if let Ok(status) = _e {
+                if !status.success() {
+                    eprintln!("Tailscale status command failed with exit code: {:?}", status.code());
+                }
+            }
         }
     }
     Ok(())

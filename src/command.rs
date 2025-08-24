@@ -149,7 +149,8 @@ mod tests {
         };
 
         let mock_runner = MockCommandRunner::new("expected_cmd", &[], output);
-        let _ = mock_runner.run_command("wrong_cmd", &[]);
+        let result = mock_runner.run_command("wrong_cmd", &[]);
+        assert!(result.is_err(), "Expected error for wrong command");
     }
 
     #[test]
@@ -162,7 +163,8 @@ mod tests {
         };
 
         let mock_runner = MockCommandRunner::new("cmd", &["arg1"], output);
-        let _ = mock_runner.run_command("cmd", &["arg2"]);
+        let result = mock_runner.run_command("cmd", &["arg2"]);
+        assert!(result.is_err(), "Expected error for wrong arguments");
     }
 
     #[test]
