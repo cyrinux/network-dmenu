@@ -16,7 +16,14 @@ pub const ICON_SHIELD: &str = "🛡️";
 pub const ICON_LOCK: &str = "🔒";
 pub const ICON_LIST: &str = "📋";
 pub const ICON_STAR: &str = "🌟";
+pub const ICON_BLUETOOTH: &str = "";
 
+// Security types
+pub const SECURITY_OPEN: &str = "OPEN";
+pub const SECURITY_UNKNOWN: &str = "UNKNOWN";
+
+// We use format strings directly in the code instead of constants
+// to avoid issues with the format! macro
 
 // System actions
 pub const SYSTEM_RADIO_RFKILL_BLOCK: &str = "Radio {} rfkill block";
@@ -32,7 +39,8 @@ pub const TAILSCALE_SHIELDS_DOWN: &str = "Shields down";
 pub const TAILSCALE_ALLOW_ADVERTISE_ROUTES: &str = "Allow advertise routes";
 pub const TAILSCALE_DISALLOW_ADVERTISE_ROUTES: &str = "Disallow advertise routes";
 pub const TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE: &str = "Allow lan access while exit-node used";
-pub const TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE: &str = "Disallow lan access while exit-node used";
+pub const TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE: &str =
+    "Disallow lan access while exit-node used";
 pub const TAILSCALE_SHOW_LOCK_STATUS: &str = "Show Tailscale Lock Status";
 pub const TAILSCALE_LIST_LOCKED_NODES: &str = "List Locked Nodes";
 pub const TAILSCALE_SIGN_NODE: &str = "Sign Node: {}";
@@ -50,12 +58,16 @@ pub const SUGGESTED_CHECK: &str = "(suggested";
 // Network connection messages
 // Error messages
 pub const ERROR_CONFIG_READ: &str = "Failed to read config";
+// Error messages - commented out for now as they're used directly in the code
+// pub const ERROR_EMOJI_NOT_FOUND: &str = "Emoji not found in action";
+// pub const ERROR_TAB_NOT_FOUND: &str = "Tab not found in action";
+// pub const ERROR_NO_SSID: &str = "No SSID found in action";
+// pub const ERROR_NO_NAME: &str = "No name found after emoji";
+// pub const ERROR_CONNECTION_FAILED: &str = "Failed to connect to network";
 
 // Default config values
 pub const DEFAULT_DMENU_CMD: &str = "dmenu";
 pub const DEFAULT_DMENU_ARGS: &str = "--no-multi";
-
-
 
 // Config file
 pub const CONFIG_FILENAME: &str = "config.toml";

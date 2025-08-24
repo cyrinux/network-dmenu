@@ -300,7 +300,8 @@ pub async fn set_exit_node(action: &str) -> bool {
             node_ip,
             "--exit-node-allow-lan-access=true",
         ],
-    ).await
+    )
+    .await
 }
 
 /// Extracts the IP address from the action string.

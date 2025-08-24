@@ -11,6 +11,8 @@ pub mod networkmanager;
 pub mod tailscale;
 pub mod utils;
 
+use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
+
 // Re-export commonly used types and functions
 pub use bluetooth::{get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction};
 pub use command::{
@@ -82,9 +84,9 @@ pub enum VpnAction {
 /// Formats an entry for display in the menu
 pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
     if icon.is_empty() {
-        format!("{action:<10}- {text}")
+        format!("{:<10}- {}", action, text)
     } else {
-        format!("{action:<10}- {icon} {text}")
+        format!("{:<10}- {} {}", action, icon, text)
     }
 }
 
@@ -101,7 +103,9 @@ pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>
 pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
     let emoji_pos = action
         .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
+        .find(|(_, c)| {
+            *c == ICON_CHECK.chars().next().unwrap() || *c == ICON_SIGNAL.chars().next().unwrap()
+        })
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
@@ -119,7 +123,11 @@ pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>
 pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
     let emoji_pos = action
         .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶' || *c == '❌')
+        .find(|(_, c)| {
+            *c == ICON_CHECK.chars().next().unwrap()
+                || *c == ICON_SIGNAL.chars().next().unwrap()
+                || *c == ICON_CROSS.chars().next().unwrap()
+        })
         .map(|(i, _)| i)
         .ok_or("Emoji not found in action")?;
 
@@ -151,11 +159,12 @@ pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::ICON_STAR;
 
     #[test]
     fn test_format_entry_integration() {
-        let result = format_entry("test", "🎯", "sample text");
-        assert_eq!(result, "test      - 🎯 sample text");
+        let result = format_entry("test", ICON_STAR, "sample text");
+        assert_eq!(result, "test      - 🌟 sample text");
     }
 
     #[test]

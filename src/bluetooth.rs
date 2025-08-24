@@ -1,4 +1,5 @@
 use crate::command::{read_output_lines, CommandRunner};
+use crate::constants::{ICON_BLUETOOTH, ICON_CHECK};
 use crate::format_entry;
 use regex::Regex;
 use std::error::Error;
@@ -61,7 +62,11 @@ fn parse_bluetooth_device(line: String, connected_devices: &[String]) -> Option<
                     // Return the appropriate BluetoothAction
                     BluetoothAction::ToggleConnect(format_entry(
                         "bluetooth",
-                        if is_active { "✅" } else { " " },
+                        if is_active {
+                            ICON_CHECK
+                        } else {
+                            ICON_BLUETOOTH
+                        },
                         &format!("{nm:<25} - {addr}"),
                     ))
                 })
@@ -170,8 +175,11 @@ mod tests {
 
     #[test]
     fn test_extract_device_address_valid() {
-        let device = "bluetooth - ✅ Test Device Name         - AA:BB:CC:DD:EE:FF";
-        let result = extract_device_address(device);
+        let device = format!(
+            "bluetooth - {} Test Device Name         - AA:BB:CC:DD:EE:FF",
+            ICON_CHECK
+        );
+        let result = extract_device_address(&device);
         assert_eq!(result, Some("AA:BB:CC:DD:EE:FF".to_string()));
     }
 
@@ -211,7 +219,7 @@ mod tests {
 
         assert!(result.is_some());
         if let Some(BluetoothAction::ToggleConnect(device_str)) = result {
-            assert!(device_str.contains("✅"));
+            assert!(device_str.contains(ICON_CHECK));
         }
     }
 
@@ -376,12 +384,15 @@ mod tests {
             stderr: vec![],
         };
 
-        let device = "bluetooth - ✅ Test Device           - AA:BB:CC:DD:EE:FF";
+        let device = format!(
+            "bluetooth - {} Test Device           - AA:BB:CC:DD:EE:FF",
+            ICON_CHECK
+        );
         let connected_devices = vec!["AA:BB:CC:DD:EE:FF".to_string()];
         let mock_runner =
             MockCommandRunner::new("bluetoothctl", &["disconnect", "AA:BB:CC:DD:EE:FF"], output);
 
-        let result = connect_to_bluetooth_device(device, &connected_devices, &mock_runner);
+        let result = connect_to_bluetooth_device(&device, &connected_devices, &mock_runner);
         assert!(result.is_ok());
         assert!(result.unwrap());
     }

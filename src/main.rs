@@ -119,7 +119,8 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
 
 /// Returns the default configuration as a string.
 fn get_default_config() -> String {
-    format!(r#"
+    format!(
+        r#"
 dmenu_cmd = "{}"
 dmenu_args = "{}"
 
@@ -128,14 +129,14 @@ exclude_exit_node = ["exit1", "exit2"]
 [[actions]]
 display = "🛡️ Example"
 cmd = "notify-send 'hello' 'world'"
-"#, DEFAULT_DMENU_CMD, DEFAULT_DMENU_ARGS)
+"#,
+        DEFAULT_DMENU_CMD, DEFAULT_DMENU_ARGS
+    )
 }
 
 /// Main function for the application.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-
-
     let args = Args::parse();
 
     create_default_config_if_missing()?;
@@ -146,7 +147,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Performance optimization: We're using a more efficient approach for network scanning
     // that prioritizes faster operations first to improve perceived responsiveness
-    let command_runner = RealCommandRunner ;
+    let command_runner = RealCommandRunner;
 
     // Measure performance if profiling is enabled
     let start_time = if args.profile {
@@ -219,28 +220,42 @@ fn select_action_from_menu(
 /// Converts an action to a string for display.
 fn action_to_string(action: &ActionType) -> String {
     match action {
-        ActionType::Custom(custom_action) => format_entry(ACTION_TYPE_ACTION, "", &custom_action.display),
+        ActionType::Custom(custom_action) => {
+            format_entry(ACTION_TYPE_ACTION, "", &custom_action.display)
+        }
         ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock(device) => {
-                format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device))
+            SystemAction::RfkillBlock(device) => format_entry(
+                ACTION_TYPE_SYSTEM,
+                ICON_CROSS,
+                &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device),
+            ),
+            SystemAction::RfkillUnblock(device) => format_entry(
+                ACTION_TYPE_SYSTEM,
+                ICON_SIGNAL,
+                &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device),
+            ),
+            SystemAction::EditConnections => {
+                format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
             }
-            SystemAction::RfkillUnblock(device) => {
-                format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device))
-            }
-            SystemAction::EditConnections => format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS),
         },
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
-            TailscaleAction::DisableExitNode => {
-                format_entry(ACTION_TYPE_TAILSCALE, ICON_CROSS, TAILSCALE_DISABLE_EXIT_NODE)
-            }
+            TailscaleAction::DisableExitNode => format_entry(
+                ACTION_TYPE_TAILSCALE,
+                ICON_CROSS,
+                TAILSCALE_DISABLE_EXIT_NODE,
+            ),
             TailscaleAction::SetEnable(enable) => {
                 let text = if *enable {
                     TAILSCALE_ENABLE
                 } else {
                     TAILSCALE_DISABLE
                 };
-                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                format_entry(
+                    ACTION_TYPE_TAILSCALE,
+                    if *enable { ICON_CHECK } else { ICON_CROSS },
+                    text,
+                )
             }
             TailscaleAction::SetShields(enable) => {
                 let text = if *enable {
@@ -256,7 +271,11 @@ fn action_to_string(action: &ActionType) -> String {
                 } else {
                     TAILSCALE_DISALLOW_ADVERTISE_ROUTES
                 };
-                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                format_entry(
+                    ACTION_TYPE_TAILSCALE,
+                    if *enable { ICON_CHECK } else { ICON_CROSS },
+                    text,
+                )
             }
             TailscaleAction::SetAllowLanAccess(enable) => {
                 let text = if *enable {
@@ -264,14 +283,20 @@ fn action_to_string(action: &ActionType) -> String {
                 } else {
                     TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE
                 };
-                format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                format_entry(
+                    ACTION_TYPE_TAILSCALE,
+                    if *enable { ICON_CHECK } else { ICON_CROSS },
+                    text,
+                )
             }
             TailscaleAction::ShowLockStatus => {
                 format_entry(ACTION_TYPE_TAILSCALE, ICON_LOCK, TAILSCALE_SHOW_LOCK_STATUS)
             }
-            TailscaleAction::ListLockedNodes => {
-                format_entry(ACTION_TYPE_TAILSCALE, ICON_LIST, TAILSCALE_LIST_LOCKED_NODES)
-            }
+            TailscaleAction::ListLockedNodes => format_entry(
+                ACTION_TYPE_TAILSCALE,
+                ICON_LIST,
+                TAILSCALE_LIST_LOCKED_NODES,
+            ),
             TailscaleAction::SignLockedNode(node_key) => {
                 // Try to find the hostname for this node key from locked nodes
                 if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
@@ -285,10 +310,18 @@ fn action_to_string(action: &ActionType) -> String {
                                 .replace("{key}", &node_key[..8]),
                         )
                     } else {
-                        format_entry(ACTION_TYPE_TAILSCALE, ICON_CHECK, &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]))
+                        format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CHECK,
+                            &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
+                        )
                     }
                 } else {
-                    format_entry(ACTION_TYPE_TAILSCALE, ICON_CHECK, &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]))
+                    format_entry(
+                        ACTION_TYPE_TAILSCALE,
+                        ICON_CHECK,
+                        &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
+                    )
                 }
             }
         },
@@ -300,7 +333,9 @@ fn action_to_string(action: &ActionType) -> String {
             WifiAction::Network(network) => format_entry(ACTION_TYPE_WIFI, "", network),
             WifiAction::Disconnect => format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT),
             WifiAction::Connect => format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT),
-            WifiAction::ConnectHidden => format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN),
+            WifiAction::ConnectHidden => {
+                format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN)
+            }
         },
         ActionType::Bluetooth(bluetooth_action) => match bluetooth_action {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
@@ -321,10 +356,20 @@ fn find_selected_action<'a>(
             }
             ActionType::System(system_action) => match system_action {
                 SystemAction::RfkillBlock(device) => {
-                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device))
+                    action
+                        == format_entry(
+                            ACTION_TYPE_SYSTEM,
+                            ICON_CROSS,
+                            &SYSTEM_RADIO_RFKILL_BLOCK.replace("{}", device),
+                        )
                 }
                 SystemAction::RfkillUnblock(device) => {
-                    action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device))
+                    action
+                        == format_entry(
+                            ACTION_TYPE_SYSTEM,
+                            ICON_SIGNAL,
+                            &SYSTEM_RADIO_RFKILL_UNBLOCK.replace("{}", device),
+                        )
                 }
                 SystemAction::EditConnections => {
                     action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
@@ -333,29 +378,75 @@ fn find_selected_action<'a>(
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
                 TailscaleAction::DisableExitNode => {
-                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_CROSS, TAILSCALE_DISABLE_EXIT_NODE)
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_CROSS,
+                            TAILSCALE_DISABLE_EXIT_NODE,
+                        )
                 }
                 TailscaleAction::SetEnable(enable) => {
-                    let text = if *enable { TAILSCALE_ENABLE } else { TAILSCALE_DISABLE };
-                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                    let text = if *enable {
+                        TAILSCALE_ENABLE
+                    } else {
+                        TAILSCALE_DISABLE
+                    };
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
+                        )
                 }
                 TailscaleAction::SetShields(enable) => {
-                    let text = if *enable { TAILSCALE_SHIELDS_UP } else { TAILSCALE_SHIELDS_DOWN };
+                    let text = if *enable {
+                        TAILSCALE_SHIELDS_UP
+                    } else {
+                        TAILSCALE_SHIELDS_DOWN
+                    };
                     action == format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
                 }
                 TailscaleAction::SetAcceptRoutes(enable) => {
-                    let text = if *enable { TAILSCALE_ALLOW_ADVERTISE_ROUTES } else { TAILSCALE_DISALLOW_ADVERTISE_ROUTES };
-                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                    let text = if *enable {
+                        TAILSCALE_ALLOW_ADVERTISE_ROUTES
+                    } else {
+                        TAILSCALE_DISALLOW_ADVERTISE_ROUTES
+                    };
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
+                        )
                 }
                 TailscaleAction::SetAllowLanAccess(enable) => {
-                    let text = if *enable { TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE } else { TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE };
-                    action == format_entry(ACTION_TYPE_TAILSCALE, if *enable { ICON_CHECK } else { ICON_CROSS }, text)
+                    let text = if *enable {
+                        TAILSCALE_ALLOW_LAN_ACCESS_EXIT_NODE
+                    } else {
+                        TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE
+                    };
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            if *enable { ICON_CHECK } else { ICON_CROSS },
+                            text,
+                        )
                 }
                 TailscaleAction::ShowLockStatus => {
-                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_LOCK, TAILSCALE_SHOW_LOCK_STATUS)
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_LOCK,
+                            TAILSCALE_SHOW_LOCK_STATUS,
+                        )
                 }
                 TailscaleAction::ListLockedNodes => {
-                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_LIST, TAILSCALE_LIST_LOCKED_NODES)
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            ICON_LIST,
+                            TAILSCALE_LIST_LOCKED_NODES,
+                        )
                 }
                 TailscaleAction::SignLockedNode(node_key) => {
                     // Try to find the hostname for this node key from locked nodes
@@ -366,7 +457,10 @@ fn find_selected_action<'a>(
                                     ACTION_TYPE_TAILSCALE,
                                     ICON_CHECK,
                                     &TAILSCALE_SIGN_NODE_DETAILED
-                                        .replace("{hostname}", &extract_short_hostname(&node.hostname))
+                                        .replace(
+                                            "{hostname}",
+                                            &extract_short_hostname(&node.hostname),
+                                        )
                                         .replace("{machine}", &node.machine_name)
                                         .replace("{key}", &node_key[..8]),
                                 )
@@ -390,12 +484,20 @@ fn find_selected_action<'a>(
             },
             ActionType::Vpn(vpn_action) => match vpn_action {
                 VpnAction::Connect(network) => action == format_entry(ACTION_TYPE_VPN, "", network),
-                VpnAction::Disconnect(network) => action == format_entry(ACTION_TYPE_VPN, ICON_CROSS, network),
+                VpnAction::Disconnect(network) => {
+                    action == format_entry(ACTION_TYPE_VPN, ICON_CROSS, network)
+                }
             },
             ActionType::Wifi(wifi_action) => match wifi_action {
-                WifiAction::Network(network) => action == format_entry(ACTION_TYPE_WIFI, "", network),
-                WifiAction::Disconnect => action == format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT),
-                WifiAction::Connect => action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT),
+                WifiAction::Network(network) => {
+                    action == format_entry(ACTION_TYPE_WIFI, "", network)
+                }
+                WifiAction::Disconnect => {
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_CROSS, WIFI_DISCONNECT)
+                }
+                WifiAction::Connect => {
+                    action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT)
+                }
                 WifiAction::ConnectHidden => {
                     action == format_entry(ACTION_TYPE_WIFI, ICON_SIGNAL, WIFI_CONNECT_HIDDEN)
                 }
@@ -761,7 +863,7 @@ async fn handle_wifi_action(
         }
         WifiAction::ConnectHidden => {
             let ssid = utils::prompt_for_ssid()?;
-            let network = format_entry("wifi", "📶", &format!("{ssid}\tUNKNOWN\t"));
+            let network = format_entry("wifi", ICON_SIGNAL, &format!("{ssid}\tUNKNOWN\t"));
             // FIXME: nmcli connect hidden network looks buggy
             // so we will use iwd directly for the moment
             let connection_result = if is_command_installed("iwctl") {
@@ -871,8 +973,8 @@ mod tests {
 
     #[test]
     fn test_format_entry_long_action() {
-        let result = format_entry("verylongaction", "🎯", "Some text");
-        assert_eq!(result, "verylongaction- 🎯 Some text");
+        let result = format_entry("verylongaction", "🌟", "Some text");
+        assert_eq!(result, "verylongaction- 🌟 Some text");
     }
 
     #[test]

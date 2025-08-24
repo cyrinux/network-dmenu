@@ -234,24 +234,24 @@ mod tests {
         assert_eq!(lines[0], "single line");
     }
 
-    #[test]
-    fn test_execute_command_success() {
+    #[tokio::test]
+    async fn test_execute_command_success() {
         // Test with echo command which should succeed
-        let result = execute_command("echo", &["test"]);
+        let result = execute_command("echo", &["test"]).await;
         assert!(result);
     }
 
-    #[test]
-    fn test_execute_command_failure() {
+    #[tokio::test]
+    async fn test_execute_command_failure() {
         // Test with nonexistent command
-        let result = execute_command("nonexistent_command_xyz_12345", &[]);
+        let result = execute_command("nonexistent_command_xyz_12345", &[]).await;
         assert!(!result);
     }
 
-    #[test]
-    fn test_execute_command_with_args() {
+    #[tokio::test]
+    async fn test_execute_command_with_args() {
         // Test with a command that takes arguments
-        let result = execute_command("echo", &["hello", "world"]);
+        let result = execute_command("echo", &["hello", "world"]).await;
         assert!(result);
     }
 }

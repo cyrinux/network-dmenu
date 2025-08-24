@@ -1,3 +1,4 @@
+use country_emoji::flag;
 use notify_rust::Notification;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -6,8 +7,6 @@ use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use tokio::time::{timeout, Duration};
-use country_emoji::flag;
-
 
 const DETECT_CAPTIVE_PORTAL_URL: &str = "http://detectportal.firefox.com/";
 const EXPECTED_RESPONSE: &str = "success";
