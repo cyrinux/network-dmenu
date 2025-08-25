@@ -19,6 +19,7 @@ mod diagnostics;
 mod iwd;
 mod networkmanager;
 mod tailscale;
+mod tailscale_prefs;
 mod utils;
 
 use bluetooth::{
@@ -38,6 +39,7 @@ use tailscale::{
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     DefaultNotificationSender, TailscaleAction,
 };
+use tailscale_prefs::parse_tailscale_prefs;
 
 use constants::*;
 
@@ -693,21 +695,20 @@ fn get_actions(
     } else {
         None
     };
+
+    // Get current Tailscale preferences to determine what toggle options to show
+    let prefs = parse_tailscale_prefs(command_runner).unwrap();
+
     if !args.no_tailscale && is_command_installed("tailscale") {
         // Add basic Tailscale actions first (these are simple and fast)
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(false)));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(true)));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
-            false,
+        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(
+            !prefs.ShieldsUp,
         )));
         actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
-            true,
+            !prefs.ExitNodeAllowLANAccess,
         )));
         actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
-            false,
-        )));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
-            true,
+            !prefs.RouteAll,
         )));
         actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
 

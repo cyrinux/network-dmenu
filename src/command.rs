@@ -9,6 +9,9 @@ use std::sync::Mutex;
 pub trait CommandRunner {
     /// Runs a shell command with the specified arguments.
     fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error>;
+    // fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
+    //     Command::new(command).args(args).env("LC_ALL", "C").output()
+    // }
 }
 
 /// Struct for running real shell commands.

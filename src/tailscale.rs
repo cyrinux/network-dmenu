@@ -296,7 +296,7 @@ pub async fn set_exit_node(action: &str) -> bool {
         "tailscale",
         &[
             "set",
-            "--exit-node",
+            "--exit-node=",
             node_ip,
             "--exit-node-allow-lan-access=true",
         ],
@@ -381,8 +381,11 @@ pub async fn handle_tailscale_action(
                     "tailscale",
                     &[
                         "set",
-                        "--shields-up",
-                        if *enable { "true" } else { "false" },
+                        if *enable {
+                            "--shields-up=true"
+                        } else {
+                            "--shields-up=false"
+                        },
                     ],
                 )?
                 .status;
@@ -394,8 +397,11 @@ pub async fn handle_tailscale_action(
                     "tailscale",
                     &[
                         "set",
-                        "--accept-routes",
-                        if *enable { "true" } else { "false" },
+                        if *enable {
+                            "--accept-routes=true"
+                        } else {
+                            "--accept-routes=false"
+                        },
                     ],
                 )?
                 .status;
@@ -407,8 +413,11 @@ pub async fn handle_tailscale_action(
                     "tailscale",
                     &[
                         "set",
-                        "--exit-node-allow-lan-access",
-                        if *enable { "true" } else { "false" },
+                        if *enable {
+                            "--exit-node-allow-lan-access=true"
+                        } else {
+                            "--exit-node-allow-lan-access=false"
+                        },
                     ],
                 )?
                 .status;
@@ -1288,7 +1297,7 @@ mod tests {
         };
 
         let mock_runner =
-            MockCommandRunner::new("tailscale", &["set", "--shields-up", "true"], output);
+            MockCommandRunner::new("tailscale", &["set", "--shields-up=", "true"], output);
         let action = TailscaleAction::SetShields(true);
         let mock_notification = MockNotificationSender::new();
 
@@ -1306,7 +1315,7 @@ mod tests {
         };
 
         let mock_runner =
-            MockCommandRunner::new("tailscale", &["set", "--shields-up", "false"], output);
+            MockCommandRunner::new("tailscale", &["set", "--shields-up=", "false"], output);
         let action = TailscaleAction::SetShields(false);
         let mock_notification = MockNotificationSender::new();
 
