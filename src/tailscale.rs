@@ -290,7 +290,7 @@ pub async fn set_exit_node(command_runner: &dyn CommandRunner, action: &str) -> 
 
     // Run the "tailscale up" command
     match command_runner.run_command("tailscale", &["up"]) {
-        Ok(output) if output.status.success() => {},
+        Ok(output) if output.status.success() => {}
         _ => return false,
     }
 
@@ -299,8 +299,7 @@ pub async fn set_exit_node(command_runner: &dyn CommandRunner, action: &str) -> 
         "tailscale",
         &[
             "set",
-            "--exit-node=",
-            node_ip,
+            &format!("--exit-node={node_ip}"),
             "--exit-node-allow-lan-access=true",
         ],
     ) {
