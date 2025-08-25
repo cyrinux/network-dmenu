@@ -10,6 +10,7 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::error::Error;
+use std::collections::HashMap;
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -54,21 +55,54 @@ pub fn get_mullvad_actions(
 
         // Performance optimization: Using functional style with single pass operation
         // First get all lines that contain mullvad.ts.net but aren't excluded
-        let mut mullvad_actions: Vec<String> = reader
+        // Using fold to deduplicate by node name in a functional style
+        let mullvad_nodes = reader
             .iter()
             .filter(|line| line.contains("mullvad.ts.net"))
-            .filter(|line| !exclude_set.contains(&extract_node_name(line)))
-            .map(|line| parse_mullvad_line(line, &regex, &active_exit_node))
-            .collect();
+            .fold(HashMap::new(), |mut acc, line| {
+                let node_name = extract_node_name(line);
+                if !exclude_set.contains(&node_name) {
+                    let parsed_line = parse_mullvad_line(line, &regex, &active_exit_node);
+                    // Only keep the first occurrence of each node name (or active one if present)
+                    if !acc.contains_key(&node_name) || (!active_exit_node.is_empty() && line.contains(&active_exit_node)) {
+                        acc.insert(node_name, parsed_line);
+                    }
+                }
+                acc
+            });
+        let mut mullvad_actions: Vec<String> = mullvad_nodes.into_values().collect();
+        // Sort Mullvad nodes alphabetically by country name
+        mullvad_actions.sort_by(|a, b| {
+            // Extract country name - typically the third field after flag
+            let country_a = a.split_whitespace().nth(2).unwrap_or("").to_string();
+            let country_b = b.split_whitespace().nth(2).unwrap_or("").to_string();
+            country_a.cmp(&country_b)
+        });
 
         // Then get all other ts.net lines that aren't mullvad and aren't excluded
-        // Using a second pass on the same reader vector (not re-reading the command output)
-        let mut other_actions: Vec<String> = reader
+        // Using a second pass on the same reader vector with functional fold for deduplication
+        let other_nodes = reader
             .iter()
             .filter(|line| line.contains("ts.net") && !line.contains("mullvad.ts.net"))
-            .filter(|line| !exclude_set.contains(&extract_node_name(line)))
-            .map(|line| parse_exit_node_line(line, &regex, &active_exit_node))
-            .collect();
+            .fold(HashMap::new(), |mut acc, line| {
+                let node_name = extract_node_name(line);
+                if !exclude_set.contains(&node_name) {
+                    let parsed_line = parse_exit_node_line(line, &regex, &active_exit_node);
+                    // Only keep the first occurrence of each node name (or active one if present)
+                    if !acc.contains_key(&node_name) || (!active_exit_node.is_empty() && line.contains(&active_exit_node)) {
+                        acc.insert(node_name, parsed_line);
+                    }
+                }
+                acc
+            });
+        let mut other_actions: Vec<String> = other_nodes.into_values().collect();
+        // Sort other exit nodes alphabetically by hostname
+        other_actions.sort_by(|a, b| {
+            // For non-Mullvad nodes, sort by hostname (last field)
+            let hostname_a = a.split_whitespace().last().unwrap_or("").to_string();
+            let hostname_b = b.split_whitespace().last().unwrap_or("").to_string();
+            hostname_a.cmp(&hostname_b)
+        });
 
         // Add or mark suggested node if available
         if let Some(suggested_node) = suggested_exit_node {
@@ -104,44 +138,47 @@ pub fn get_mullvad_actions(
             }
         }
 
-        // Combine the two vectors, keeping suggested nodes at the top
-        let mut actions = Vec::new();
-
-        // First add any suggested nodes from mullvad_actions
-        let suggested_nodes: Vec<String> = mullvad_actions
-            .iter()
-            .filter(|action| action.contains(SUGGESTED_CHECK))
-            .cloned()
-            .collect();
-
-        // Then add non-suggested mullvad actions
-        let non_suggested_mullvad: Vec<String> = mullvad_actions
-            .iter()
-            .filter(|action| !action.contains(SUGGESTED_CHECK))
-            .cloned()
-            .collect();
+        // Combine the vectors in a functional manner, keeping suggested nodes at the top
+        // First partition mullvad_actions into suggested and non-suggested
+        let (suggested_nodes, non_suggested_mullvad): (Vec<String>, Vec<String>) = mullvad_actions
+            .into_iter()
+            .partition(|action| action.contains(SUGGESTED_CHECK));
 
         // Combine in order: suggested first, then mullvad, then other
-        actions.extend(suggested_nodes);
-        actions.extend(non_suggested_mullvad);
-        actions.extend(other_actions);
+        let mut actions = suggested_nodes
+            .into_iter()
+            .chain(non_suggested_mullvad.into_iter())
+            .chain(other_actions.into_iter())
+            .collect::<Vec<String>>();
 
-        // Sort the results (but keep suggested node at the top if it exists)
-        let has_suggested = actions.first().is_some_and(|a| a.contains(SUGGESTED_CHECK));
-        if has_suggested {
-            let suggested = actions.remove(0);
-            actions.sort_by(|a, b| {
-                a.split_whitespace()
-                    .next()
-                    .cmp(&b.split_whitespace().next())
-            });
-            actions.insert(0, suggested);
+        // Sort the results in a more functional style (but keep suggested node at the top if it exists)
+        let (has_suggested, suggested) = if actions.first().is_some_and(|a| a.contains(SUGGESTED_CHECK)) {
+            (true, actions.remove(0))
         } else {
-            actions.sort_by(|a, b| {
-                a.split_whitespace()
-                    .next()
-                    .cmp(&b.split_whitespace().next())
-            });
+            (false, String::new())
+        };
+
+        // Apply sorting using a consistent sort function for the final list
+        actions.sort_by(|a, b| {
+            // If it contains "mullvad", sort by country (third field)
+            // Otherwise, sort by hostname (last field)
+            if a.contains("mullvad") && b.contains("mullvad") {
+                let country_a = a.split_whitespace().nth(2).unwrap_or("").to_string();
+                let country_b = b.split_whitespace().nth(2).unwrap_or("").to_string();
+                country_a.cmp(&country_b)
+            } else if !a.contains("mullvad") && !b.contains("mullvad") {
+                let hostname_a = a.split_whitespace().last().unwrap_or("").to_string();
+                let hostname_b = b.split_whitespace().last().unwrap_or("").to_string();
+                hostname_a.cmp(&hostname_b)
+            } else {
+                // If mixing types, mullvad entries come first
+                if a.contains("mullvad") { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }
+            }
+        });
+
+        // Reinsert suggested node if it exists
+        if has_suggested {
+            actions.insert(0, suggested);
         }
         actions
     } else {
@@ -1301,7 +1338,7 @@ mod tests {
         };
 
         let mock_runner =
-            MockCommandRunner::new("tailscale", &["set", "--shields-up=", "true"], output);
+            MockCommandRunner::new("tailscale", &["set", "--shields-up=true"], output);
         let action = TailscaleAction::SetShields(true);
         let mock_notification = MockNotificationSender::new();
 
@@ -1319,7 +1356,7 @@ mod tests {
         };
 
         let mock_runner =
-            MockCommandRunner::new("tailscale", &["set", "--shields-up=", "false"], output);
+            MockCommandRunner::new("tailscale", &["set", "--shields-up=false"], output);
         let action = TailscaleAction::SetShields(false);
         let mock_notification = MockNotificationSender::new();
 
