@@ -314,7 +314,7 @@ fn action_to_string(action: &ActionType) -> String {
                             ACTION_TYPE_TAILSCALE,
                             ICON_CHECK,
                             &TAILSCALE_SIGN_NODE_DETAILED
-                                .replace("{hostname}", &extract_short_hostname(&node.hostname))
+                                .replace("{hostname}", extract_short_hostname(&node.hostname))
                                 .replace("{machine}", &node.machine_name)
                                 .replace("{key}", &node_key[..8]),
                         )
@@ -469,7 +469,7 @@ fn find_selected_action<'a>(
                                     &TAILSCALE_SIGN_NODE_DETAILED
                                         .replace(
                                             "{hostname}",
-                                            &extract_short_hostname(&node.hostname),
+                                            extract_short_hostname(&node.hostname),
                                         )
                                         .replace("{machine}", &node.machine_name)
                                         .replace("{key}", &node_key[..8]),

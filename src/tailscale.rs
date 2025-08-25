@@ -1,4 +1,4 @@
-use crate::command::{execute_command, is_command_installed, read_output_lines, CommandRunner};
+use crate::command::{is_command_installed, read_output_lines, CommandRunner};
 use crate::constants::{ICON_STAR, SUGGESTED_CHECK};
 use crate::format_entry;
 use crate::utils::get_flag;
@@ -280,7 +280,7 @@ fn get_active_exit_node(command_runner: &dyn CommandRunner) -> String {
 }
 
 /// Sets the exit node for Tailscale.
-pub async fn set_exit_node(action: &str) -> bool {
+pub async fn set_exit_node(command_runner: &dyn CommandRunner, action: &str) -> bool {
     let Some(node_ip) = extract_node_ip(action) else {
         return false;
     };
@@ -288,11 +288,14 @@ pub async fn set_exit_node(action: &str) -> bool {
     #[cfg(debug_assertions)]
     println!("Exit-node ip address: {node_ip}");
 
-    if !execute_command("tailscale", &["up"]).await {
-        return false;
+    // Run the "tailscale up" command
+    match command_runner.run_command("tailscale", &["up"]) {
+        Ok(output) if output.status.success() => {},
+        _ => return false,
     }
 
-    execute_command(
+    // Run the "tailscale set" command with the exit node
+    match command_runner.run_command(
         "tailscale",
         &[
             "set",
@@ -300,8 +303,10 @@ pub async fn set_exit_node(action: &str) -> bool {
             node_ip,
             "--exit-node-allow-lan-access=true",
         ],
-    )
-    .await
+    ) {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Extracts the IP address from the action string.
@@ -359,7 +364,7 @@ pub async fn handle_tailscale_action(
             Ok(status.success())
         }
         TailscaleAction::SetExitNode(node) => {
-            if set_exit_node(node).await {
+            if set_exit_node(command_runner, node).await {
                 // Log errors from mullvad check in debug mode but continue execution
                 if let Err(_e) = check_mullvad().await {
                     #[cfg(debug_assertions)]
@@ -370,7 +375,7 @@ pub async fn handle_tailscale_action(
                 // Log errors from mullvad check in debug mode but continue execution
                 if let Err(_e) = check_mullvad().await {
                     #[cfg(debug_assertions)]
-                    eprintln!("Mullvad check error after setting exit node: {_e}");
+                    eprintln!("Mullvad check error after disabling exit node: {_e}");
                 }
                 Ok(false)
             }

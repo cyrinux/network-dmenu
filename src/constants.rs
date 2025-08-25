@@ -1,4 +1,4 @@
-//! Constants module for repeated strings throughout the application
+
 //! This module contains all user-facing strings to facilitate easy translation and maintenance
 
 // Action types
