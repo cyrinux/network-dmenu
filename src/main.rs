@@ -40,7 +40,7 @@ use networkmanager::{
 use tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
-    DefaultNotificationSender, TailscaleAction,
+    DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
 use tailscale_prefs::parse_tailscale_prefs;
 
@@ -819,7 +819,7 @@ async fn get_actions(
             }
 
             // Add general actions for the device type only if there are devices
-            let type_display = match device_type {
+            let _type_display = match device_type {
                 "wlan" => "WiFi",
                 "bluetooth" => "Bluetooth",
                 "nfc" => "NFC",
@@ -831,25 +831,8 @@ async fn get_actions(
                 _ => device_type,
             };
 
-            let block_all_text = format_entry(
-                ACTION_TYPE_SYSTEM,
-                ICON_CROSS,
-                &format!("Turn OFF all {} devices", type_display),
-            );
-            let unblock_all_text = format_entry(
-                ACTION_TYPE_SYSTEM,
-                ICON_SIGNAL,
-                &format!("Turn ON all {} devices", type_display),
-            );
-
-            actions.push(ActionType::System(SystemAction::RfkillBlock(
-                device_type.to_string(),
-                block_all_text,
-            )));
-            actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                device_type.to_string(),
-                unblock_all_text,
-            )));
+            // Type-wide toggle actions removed as per requirement
+            // Only keeping per-device toggles
         }
 
         Ok(())
@@ -1021,7 +1004,11 @@ async fn get_actions(
         let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
         let country = args.country.as_deref().or(config.country_filter.as_deref());
 
+        // Create TailscaleState once to avoid multiple calls to tailscale status
+        let tailscale_state = TailscaleState::new(command_runner);
+
         let mullvad_actions = get_mullvad_actions(
+            &tailscale_state,
             command_runner,
             &config.exclude_exit_node,
             max_per_country,
@@ -1034,7 +1021,7 @@ async fn get_actions(
                 .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
         );
 
-        if is_exit_node_active(command_runner).unwrap_or(false) {
+        if is_exit_node_active(&tailscale_state).unwrap_or(false) {
             actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
         }
 
@@ -1391,7 +1378,8 @@ async fn set_action(
         ActionType::System(system_action) => handle_system_action(system_action, profile).await,
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
-            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender))
+            let tailscale_state = TailscaleState::new(command_runner);
+            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender), Some(&tailscale_state))
                 .await
         }
         ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
