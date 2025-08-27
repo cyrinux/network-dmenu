@@ -52,6 +52,7 @@
             gnumake
             gobject-introspection
             graphene
+            dbus
             gtk4
             gtk4.dev
             # GTK4 development dependencies
