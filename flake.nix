@@ -16,7 +16,15 @@
           openssl
           dbus
           gtk4
+          gtk4.dev
           libadwaita
+          glib
+          glib.dev
+          gobject-introspection
+          pango
+          cairo
+          gdk-pixbuf
+          graphene
         ];
       in
       {
@@ -25,10 +33,18 @@
           meta.mainProgram = "network-dmenu";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = libs;
+          cargoBuildOptions = attrs: attrs ++ [ "--features" "gtk-ui" ];
         };
         devShell = with pkgs; mkShell {
           buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy pkg-config cargo-bump cargo-deny cargo-bloat cargo-feature ] ++ libs;
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
+
+          # Set environment variables for pkg-config to find GTK libraries
+          shellHook = ''
+            export LD_LIBRARY_PATH=${lib.makeLibraryPath [ gtk4 libadwaita glib ]}:$LD_LIBRARY_PATH
+            export PKG_CONFIG_PATH="${gtk4.dev}/lib/pkgconfig:${libadwaita}/lib/pkgconfig:${glib.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
+            echo "GTK4 development environment ready!"
+          '';
         };
       }
     );

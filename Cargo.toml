@@ -13,7 +13,7 @@ repository = "https://github.com/cyrinux/network-dmenu"
 
 [features]
 default = []
-gtk-ui = ["gtk4", "relm4", "relm4-components", "adw"]
+gtk-ui = ["dep:gtk4", "dep:relm4", "dep:relm4-components", "dep:libadwaita"]
 
 [dependencies]
 dirs = "6.0"
@@ -34,10 +34,10 @@ once_cell = "1.19"
 clap = { version = "4", features = ["suggestions", "help", "usage", "color", "derive", "std"], default-features = false }
 
 # GTK UI dependencies (optional)
-gtk4 = { version = "0.8", features = ["v4_10"], optional = true }
+gtk4 = { version = "0.8", optional = true }
 relm4 = { version = "0.8", features = ["macros"], optional = true }
 relm4-components = { version = "0.8", optional = true }
-adw = { version = "0.6", package = "libadwaita", optional = true }
+libadwaita = { version = "0.6", optional = true }
 
 [dev-dependencies]
 mockall = "0.12"

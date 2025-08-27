@@ -15,7 +15,8 @@ pub mod tailscale_prefs;
 pub mod utils;
 
 #[cfg(feature = "gtk-ui")]
-pub mod gtk_ui;
+#[path = "gtk_ui.rs"]
+mod gtk_ui;
 
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
@@ -43,7 +44,7 @@ pub use tailscale::{
 };
 
 #[cfg(feature = "gtk-ui")]
-pub use gtk_ui::select_action_with_gtk;
+pub use self::gtk_ui::select_action_with_gtk;
 pub use utils::{
     check_captive_portal, convert_network_strength, prompt_for_password, prompt_for_ssid,
 };

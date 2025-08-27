@@ -1,6 +1,8 @@
 use clap::Parser;
 use command::CommandRunner;
 use dirs::config_dir;
+#[cfg(feature = "gtk-ui")]
+use network_dmenu::select_action_with_gtk;
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -64,13 +66,22 @@ struct Args {
     no_diagnostics: bool,
     #[arg(long)]
     profile: bool,
-    #[arg(long, help = "Limit the number of exit nodes shown per country (sorted by priority)")]
+    #[arg(
+        long,
+        help = "Limit the number of exit nodes shown per country (sorted by priority)"
+    )]
     max_nodes_per_country: Option<i32>,
-    #[arg(long, help = "Limit the number of exit nodes shown per city (sorted by priority)")]
+    #[arg(
+        long,
+        help = "Limit the number of exit nodes shown per city (sorted by priority)"
+    )]
     max_nodes_per_city: Option<i32>,
-    #[arg(long, help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')")]
+    #[arg(
+        long,
+        help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
+    )]
     country: Option<String>,
-    #[arg(long, help = "Use built-in GTK UI instead of dmenu")]
+    #[arg(long, help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)")]
     use_gtk: bool,
 }
 
@@ -91,6 +102,9 @@ struct Config {
     dmenu_args: String,
     #[serde(default)]
     use_gtk: bool,
+    #[serde(default)]
+    use_gtk_fallback: bool,
+    // Field to indicate whether to use dmenu as fallback if GTK UI fails
     // Legacy field for backward compatibility
     #[serde(default)]
     #[serde(skip_serializing)]
@@ -157,6 +171,7 @@ fn get_default_config() -> String {
 dmenu_cmd = "{}"
 dmenu_args = "{}"
 use_gtk = false
+use_gtk_fallback = true
 
 # Exit node filtering options
 # List of exit nodes to exclude
@@ -269,19 +284,26 @@ async fn select_action_from_menu(
         .map(|action| action_to_string(action))
         .collect();
 
+    // Try GTK UI if feature is enabled and requested
     #[cfg(feature = "gtk-ui")]
-    {
-        if config.use_gtk {
-            // Use GTK UI if enabled
-            if let Some(selected) = select_action_with_gtk(action_strings.clone()).await {
-                return Ok(selected);
-            } else {
-                return Err("User cancelled selection".into());
+    if config.use_gtk {
+        // Use blocking context to prevent thread initialization errors with GTK
+        match select_action_with_gtk(action_strings.clone()).await {
+            Ok(Some(selected)) => return Ok(selected),
+            Ok(None) => {
+                if !config.use_gtk_fallback {
+                    return Err("User cancelled selection".into());
+                }
+                // Falls through to dmenu if use_gtk_fallback is true
+            },
+            Err(_) => {
+                // GTK UI failed to initialize, falling back to dmenu
+                eprintln!("GTK UI failed to initialize, falling back to dmenu");
             }
         }
     }
 
-    // Fall back to dmenu if GTK UI is not enabled or not requested
+    // Fall back to dmenu if GTK UI is not enabled, not requested, or failed
     let mut child = Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
@@ -1017,7 +1039,7 @@ async fn get_actions(
             &config.exclude_exit_node,
             max_per_country,
             max_per_city,
-            country
+            country,
         );
         actions.extend(
             mullvad_actions
@@ -1458,6 +1480,8 @@ mod tests {
         assert!(config.contains("dmenu_cmd = \"dmenu\""));
         assert!(config.contains("dmenu_args = \"--no-multi\""));
         assert!(config.contains("exclude_exit_node = [\"exit1\", \"exit2\"]"));
+        assert!(config.contains("use_gtk = false"));
+        assert!(config.contains("use_gtk_fallback = true"));
         assert!(config.contains("[[actions]]"));
         assert!(config.contains("display = \"🛡️ Example\""));
         assert!(config.contains("cmd = \"notify-send 'hello' 'world'\""));
@@ -1827,7 +1851,10 @@ mod tests {
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args.country.as_deref().or_else(|| config.country_filter.as_deref());
+        let country = args
+            .country
+            .as_deref()
+            .or_else(|| config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(2));
         assert_eq!(country, Some("Sweden"));
@@ -1837,7 +1864,10 @@ mod tests {
         args.country = Some("USA".to_string());
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args.country.as_deref().or_else(|| config.country_filter.as_deref());
+        let country = args
+            .country
+            .as_deref()
+            .or_else(|| config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(3));
         assert_eq!(country, Some("USA"));
