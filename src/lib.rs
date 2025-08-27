@@ -14,6 +14,9 @@ pub mod tailscale;
 pub mod tailscale_prefs;
 pub mod utils;
 
+#[cfg(feature = "gtk-ui")]
+pub mod gtk_ui;
+
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
 // Re-export commonly used types and functions
@@ -38,6 +41,9 @@ pub use tailscale::{
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     TailscaleAction,
 };
+
+#[cfg(feature = "gtk-ui")]
+pub use gtk_ui::select_action_with_gtk;
 pub use utils::{
     check_captive_portal, convert_network_strength, prompt_for_password, prompt_for_ssid,
 };

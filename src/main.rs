@@ -70,6 +70,8 @@ struct Args {
     max_nodes_per_city: Option<i32>,
     #[arg(long, help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')")]
     country: Option<String>,
+    #[arg(long, help = "Use built-in GTK UI instead of dmenu")]
+    use_gtk: bool,
 }
 
 /// Configuration structure for the application.
@@ -87,6 +89,12 @@ struct Config {
     country_filter: Option<String>,
     dmenu_cmd: String,
     dmenu_args: String,
+    #[serde(default)]
+    use_gtk: bool,
+    // Legacy field for backward compatibility
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    min_exit_node_priority: Option<i32>,
 }
 
 /// Custom action structure for user-defined actions.
@@ -145,11 +153,23 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
 /// Returns the default configuration as a string.
 fn get_default_config() -> String {
     format!(
-        r#"
+        r#"# General settings
 dmenu_cmd = "{}"
 dmenu_args = "{}"
+use_gtk = false
 
-exclude_exit_node = ["exit1", "exit2"]
+# Exit node filtering options
+# List of exit nodes to exclude
+# exclude_exit_node = ["exit1", "exit2"]
+
+# Limit the number of exit nodes shown per country (sorted by priority)
+# max_nodes_per_country = 2
+
+# Limit the number of exit nodes shown per city (sorted by priority)
+# max_nodes_per_city = 1
+
+# Filter by country name (e.g., "USA", "Japan")
+# country_filter = "USA"
 
 [[actions]]
 display = "🛡️ Example"
@@ -166,7 +186,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     create_default_config_if_missing()?;
 
-    let config = get_config()?; // Load the configuration once
+    let mut config = get_config()?; // Load the configuration once
+
+    // Override config with command line args if specified
+    if args.use_gtk {
+        config.use_gtk = true;
+    }
 
     check_required_commands(&config)?;
 
@@ -195,7 +220,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let action = select_action_from_menu(&config, &actions)?;
+    let action = select_action_from_menu(&config, &actions).await?;
 
     if !action.is_empty() {
         let selected_action = find_selected_action(&action, &actions)?;
@@ -216,17 +241,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 /// Checks if required commands are installed.
 fn check_required_commands(config: &Config) -> Result<(), Box<dyn Error>> {
-    if !is_command_installed("pinentry-gnome3") || !is_command_installed(&config.dmenu_cmd) {
-        panic!("pinentry-gnome3 or dmenu command missing");
+    if !is_command_installed("pinentry-gnome3") {
+        eprintln!("Warning: pinentry-gnome3 command missing");
     }
+
+    #[cfg(feature = "gtk-ui")]
+    let using_gtk = config.use_gtk;
+
+    #[cfg(not(feature = "gtk-ui"))]
+    let using_gtk = false;
+
+    if !using_gtk && !is_command_installed(&config.dmenu_cmd) {
+        panic!("dmenu command missing and GTK UI not enabled");
+    }
+
     Ok(())
 }
 
-/// Selects an action from the menu using dmenu.
-fn select_action_from_menu(
+/// Selects an action from the menu using dmenu or GTK UI.
+async fn select_action_from_menu(
     config: &Config,
     actions: &[ActionType],
 ) -> Result<String, Box<dyn Error>> {
+    // Convert actions to string representation
+    let action_strings: Vec<String> = actions
+        .iter()
+        .map(|action| action_to_string(action))
+        .collect();
+
+    #[cfg(feature = "gtk-ui")]
+    {
+        if config.use_gtk {
+            // Use GTK UI if enabled
+            if let Some(selected) = select_action_with_gtk(action_strings.clone()).await {
+                return Ok(selected);
+            } else {
+                return Err("User cancelled selection".into());
+            }
+        }
+    }
+
+    // Fall back to dmenu if GTK UI is not enabled or not requested
     let mut child = Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
@@ -234,17 +289,15 @@ fn select_action_from_menu(
         .spawn()?;
 
     {
-        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
-        let actions_display = actions
-            .iter()
-            .map(action_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        write!(stdin, "{actions_display}")?;
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        for action_string in action_strings {
+            writeln!(stdin, "{}", action_string)?;
+        }
     }
 
     let output = child.wait_with_output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(selected)
 }
 
 /// Converts an action to a string for display.

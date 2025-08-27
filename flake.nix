@@ -11,7 +11,13 @@
       let
         pkgs = import nixpkgs { inherit system; };
         naersk-lib = pkgs.callPackage naersk { };
-        libs = with pkgs; [ pkg-config openssl dbus ];
+        libs = with pkgs; [
+          pkg-config
+          openssl
+          dbus
+          gtk4
+          libadwaita
+        ];
       in
       {
         defaultPackage = naersk-lib.buildPackage {

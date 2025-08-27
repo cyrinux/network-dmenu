@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "1.9.2"
+version = "1.10.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
@@ -11,30 +11,33 @@ license = "MIT"
 homepage = "https://github.com/cyrinux/network-dmenu"
 repository = "https://github.com/cyrinux/network-dmenu"
 
+[features]
+default = []
+gtk-ui = ["gtk4", "relm4", "relm4-components", "adw"]
+
 [dependencies]
-dirs = { version = "~6.0" }
+dirs = "6.0"
 serde = { version = "1", default-features = false }
 serde_json = "1"
-toml = { version = "~0.9", features = ["parse", "serde"], default-features = false }
-regex = { version = "~1.11", default-features = false }
-reqwest = { version = "~0.12", features = ["blocking", "default-tls", "charset", "json"], default-features = false }
+toml = { version = "0.9", features = ["parse", "serde"], default-features = false }
+regex = { version = "1.11", default-features = false }
+reqwest = { version = "0.12", features = ["blocking", "default-tls", "charset", "json"], default-features = false }
 notify-rust = { version = "4", features = ["default"], default-features = false }
-which = { version = "~8.0" }
-ipaddress = "~0.1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util"] }
+which = "8.0"
+ipaddress = "0.1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "sync"] }
 webbrowser = "1.0.3"
 reqwest-middleware = "0.4.2"
 reqwest-retry = "0.7.0"
 country-emoji = "0.2.0"
 once_cell = "1.19"
-clap = { version = "4", features = [
-  "suggestions",
-  "help",
-  "usage",
-  "color",
-  "derive",
-  "std",
-], default-features = false }
+clap = { version = "4", features = ["suggestions", "help", "usage", "color", "derive", "std"], default-features = false }
+
+# GTK UI dependencies (optional)
+gtk4 = { version = "0.8", features = ["v4_10"], optional = true }
+relm4 = { version = "0.8", features = ["macros"], optional = true }
+relm4-components = { version = "0.8", optional = true }
+adw = { version = "0.6", package = "libadwaita", optional = true }
 
 [dev-dependencies]
 mockall = "0.12"
