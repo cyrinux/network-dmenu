@@ -64,8 +64,10 @@ struct Args {
     no_diagnostics: bool,
     #[arg(long)]
     profile: bool,
-    #[arg(long, help = "Filter exit nodes by minimum priority (higher values mean higher priority nodes)")]
-    min_exit_node_priority: Option<i32>,
+    #[arg(long, help = "Limit the number of exit nodes shown per country (sorted by priority)")]
+    max_nodes_per_country: Option<i32>,
+    #[arg(long, help = "Limit the number of exit nodes shown per city (sorted by priority)")]
+    max_nodes_per_city: Option<i32>,
     #[arg(long, help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')")]
     country: Option<String>,
 }
@@ -78,7 +80,9 @@ struct Config {
     #[serde(default)]
     exclude_exit_node: Vec<String>,
     #[serde(default)]
-    min_exit_node_priority: Option<i32>,
+    max_nodes_per_country: Option<i32>,
+    #[serde(default)]
+    max_nodes_per_city: Option<i32>,
     #[serde(default)]
     country_filter: Option<String>,
     dmenu_cmd: String,
@@ -951,13 +955,15 @@ async fn get_actions(
 
         // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
         // Command-line args override config file settings
-        let priority = args.min_exit_node_priority.or(config.min_exit_node_priority);
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
+        let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
         let country = args.country.as_deref().or(config.country_filter.as_deref());
 
         let mullvad_actions = get_mullvad_actions(
             command_runner,
             &config.exclude_exit_node,
-            priority,
+            max_per_country,
+            max_per_city,
             country
         );
         actions.extend(
@@ -1746,7 +1752,8 @@ mod tests {
         let config = Config {
             actions: Vec::new(),
             exclude_exit_node: Vec::new(),
-            min_exit_node_priority: Some(25),
+            max_nodes_per_country: Some(2),
+            max_nodes_per_city: None,
             country_filter: Some("Sweden".to_string()),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
@@ -1761,24 +1768,25 @@ mod tests {
             no_tailscale: false,
             no_diagnostics: false,
             profile: false,
-            min_exit_node_priority: None,
+            max_nodes_per_country: None,
+            max_nodes_per_city: None,
             country: None,
         };
 
-        let priority = args.min_exit_node_priority.or(config.min_exit_node_priority);
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
         let country = args.country.as_deref().or_else(|| config.country_filter.as_deref());
 
-        assert_eq!(priority, Some(25));
+        assert_eq!(max_per_country, Some(2));
         assert_eq!(country, Some("Sweden"));
 
         // When args are provided, they should override config
-        args.min_exit_node_priority = Some(50);
+        args.max_nodes_per_country = Some(3);
         args.country = Some("USA".to_string());
 
-        let priority = args.min_exit_node_priority.or(config.min_exit_node_priority);
+        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
         let country = args.country.as_deref().or_else(|| config.country_filter.as_deref());
 
-        assert_eq!(priority, Some(50));
+        assert_eq!(max_per_country, Some(3));
         assert_eq!(country, Some("USA"));
     }
 

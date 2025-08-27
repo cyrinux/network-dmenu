@@ -88,7 +88,7 @@ network-dmenu
 
 You can also disable specific features or filter exit nodes:
 ```sh
-network-dmenu --no-wifi --no-bluetooth --no-diagnostics --min-exit-node-priority 50 --country USA
+network-dmenu --no-wifi --no-bluetooth --no-diagnostics --max-nodes-per-country 2 --max-nodes-per-city 1 --country USA
 ```
 
 Select an action from the menu. The corresponding command will be executed.
@@ -107,18 +107,33 @@ network-dmenu has been optimized for performance with the following features:
 
 ### Exit Node Filtering
 
-#### Priority Filtering
+#### Limiting Nodes Per Country
 
-You can filter exit nodes based on their priority value using the `--min-exit-node-priority` parameter:
+You can limit the number of exit nodes shown per country using the `--max-nodes-per-country` parameter:
 
 ```sh
-network-dmenu --min-exit-node-priority 50
+network-dmenu --max-nodes-per-country 2
 ```
 
-This will only show exit nodes with a priority of 50 or higher. This is particularly useful for:
-- Focusing on high-performance or reliable exit nodes
+This will show only the top 2 highest-priority exit nodes for each country. This is particularly useful for:
 - Reducing the number of displayed options when many exit nodes are available
-- Prioritizing exit nodes based on your personal preferences
+- Ensuring variety by having options from multiple countries
+- Getting the best nodes from each country based on your needs
+
+#### Limiting Nodes Per City
+
+You can limit the number of exit nodes shown per city using the `--max-nodes-per-city` parameter:
+
+```sh
+network-dmenu --max-nodes-per-city 1
+```
+
+This will show only the top highest-priority exit node for each city (e.g., Paris, Marseille, New York). Cities are determined from the location data provided by Tailscale/Mullvad.
+
+This is useful for:
+- Getting more granular control over node selection
+- Ensuring variety across different cities within the same country
+- Selecting specific infrastructure within a geographical area
 
 #### Country Filtering
 
@@ -128,31 +143,52 @@ You can filter Mullvad exit nodes by country using the `--country` parameter:
 network-dmenu --country "Japan"
 ```
 
-This will only show exit nodes located in the specified country. The filter is case-insensitive.
+This will show exit nodes located in the specified country. The filter is case-insensitive and will match any country name containing the specified string.
 
 #### Combining Filters
 
 You can combine multiple filters to narrow down your exit node selection:
 
 ```sh
-network-dmenu --min-exit-node-priority 50 --country "USA"
+network-dmenu --max-nodes-per-country 2 --max-nodes-per-city 1 --country "USA"
 ```
 
-This will show only USA exit nodes with a priority of 50 or higher.
+This will show the top exit node from each city in the USA, with a maximum of 2 nodes total for the country. When both filters are specified, the city filter takes precedence, giving you more granular control.
 
 #### Persistent Filtering in Configuration File
 
 You can set these filters permanently in your configuration file (`~/.config/network-dmenu/config.toml`):
 
 ```toml
-# Filter by node priority (higher values mean higher priority nodes)
-min_exit_node_priority = 50
+# Limit the number of exit nodes shown per country (sorted by priority)
+max_nodes_per_country = 2
+
+# Limit the number of exit nodes shown per city (sorted by priority)
+max_nodes_per_city = 1
 
 # Filter by country name
 country_filter = "USA"
 ```
 
 Command-line arguments will override configuration file settings when both are specified.
+
+#### How Node Selection Works
+
+The node selection process works as follows:
+
+1. First, nodes are filtered by country if specified
+2. Then, if `max_nodes_per_city` is set, nodes are grouped by city and the top N highest-priority nodes are selected from each city
+3. If `max_nodes_per_country` is set (and city filtering is not used), nodes are grouped by country and the top N highest-priority nodes are selected from each country
+4. Nodes are sorted for display with suggested nodes first, then by country, then by city
+5. Each node shows both country and city information for easier selection
+
+The node selection process works as follows:
+
+1. First, nodes are filtered by country if specified
+2. Then, if `max_nodes_per_city` is set, nodes are grouped by city and the top N highest-priority nodes are selected from each city
+3. If `max_nodes_per_country` is set (and city filtering is not used), nodes are grouped by country and the top N highest-priority nodes are selected from each country
+4. Nodes are sorted for display with suggested nodes first, then by country, then by city
+5. Each node shows both country and city information for easier selection
 
 ### Tailscale Lock
 
@@ -240,7 +276,7 @@ brew install speedtest-cli        # macOS
 # Using npm
 npm install -g fast-cli
 
-# Using package managers  
+# Using package managers
 brew install fast-cli             # macOS
 ```
 

@@ -17,8 +17,9 @@ pub const ICON_SHIELD: &str = "🛡️";
 pub const ICON_LOCK: &str = "🔒";
 pub const ICON_LIST: &str = "📋";
 pub const ICON_STAR: &str = "🌟";
-pub const ICON_BLUETOOTH: &str = "";
+pub const ICON_BLUETOOTH: &str = "";
 pub const ICON_KEY: &str = "🔑";
+pub const ICON_LEAF: &str = "🌿";
 
 // Security types
 pub const SECURITY_OPEN: &str = "OPEN";

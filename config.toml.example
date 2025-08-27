@@ -6,14 +6,18 @@ dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bin
 # List of exit nodes to exclude
 # exclude_exit_node = ["hostname1.ts.net", "hostname2.ts.net"]
 
-# Filter by node priority (higher values mean higher priority nodes)
-# min_exit_node_priority = 50
+# Limit the number of exit nodes shown per country (sorted by priority)
+# max_nodes_per_country = 2
+
+# Limit the number of exit nodes shown per city (sorted by priority)
+# Shows the top highest-priority node from each city (e.g., Paris, Marseille)
+# max_nodes_per_city = 1
 
 # Filter by country name (e.g., "USA", "Sweden", "Japan")
 # country_filter = "USA"
 
 # You can also apply these filters at runtime with command-line parameters:
-# --min-exit-node-priority and --country (these will override config file settings)
+# --max-nodes-per-country, --max-nodes-per-city, and --country (these will override config file settings)
 
 [[actions]]
 display = "📡 DNS: Use DHCP server"
