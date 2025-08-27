@@ -55,22 +55,77 @@ fn update_action_list(list_box: &ListBox, actions: &[String], query: &str, indic
         let row = ListBoxRow::new();
         indices.push(idx); // Store the original index in our vector
 
+        // Create a horizontal box for the row content
+        let row_box = GtkBox::new(Orientation::Horizontal, 0);
+        row_box.set_spacing(8);
+
+        // Extract category prefix if present (like "action -", "system -", etc.)
+        // Parse action string to extract category and icon
+        let (category, item_text, icon) = if let Some(dash_pos) = action.find(" - ") {
+            let (cat, rest) = action.split_at(dash_pos + 3); // +3 to include " - "
+
+            // Check for icon at start of rest (usually inside brackets or specific emoji)
+            let (icon_str, main_text) = if rest.starts_with('🔴') || rest.starts_with('🟢') ||
+                                          rest.starts_with('🔵') || rest.starts_with('🟠') ||
+                                          rest.starts_with('✅') || rest.starts_with('❌') ||
+                                          rest.starts_with('📶') || rest.starts_with('🔒') ||
+                                          rest.starts_with('🔓') || rest.starts_with('🌐') {
+                // Split at the first space after the emoji
+                if let Some(space_pos) = rest[4..].find(' ') {
+                    (&rest[0..4], &rest[5+space_pos..])
+                } else {
+                    ("", rest)
+                }
+            } else {
+                ("", rest)
+            };
+
+            (cat.trim(), main_text, icon_str)
+        } else {
+            ("", action.as_str(), "")
+        };
+
+        // Create category label if category exists
+        if !category.is_empty() {
+            let category_label = Label::new(Some(&format!("{:<10} -", category)));
+            category_label.set_xalign(0.0);
+            category_label.set_width_chars(12);
+            category_label.set_max_width_chars(12);
+            category_label.add_css_class("category-label");
+            row_box.append(&category_label);
+        }
+
+        // Add icon if present
+        if !icon.is_empty() {
+            let icon_label = Label::new(Some(icon));
+            icon_label.set_width_chars(2);
+            icon_label.set_xalign(0.0);
+            icon_label.add_css_class("icon-label");
+            row_box.append(&icon_label);
+        }
+
+        // Create the main content label
         let label = Label::new(None);
         label.set_xalign(0.0);
-        label.set_margin_top(10);
-        label.set_margin_bottom(10);
-        label.set_margin_start(10);
-        label.set_margin_end(10);
+        label.set_hexpand(true);
+        label.set_margin_start(0);
+        label.set_margin_end(0);
 
         // Apply text with highlighting if there are matches
         if let Some(positions) = match_positions {
-            let mut markup = String::new();
-            let chars: Vec<char> = action.chars().collect();
+            let mut markup = String::with_capacity(item_text.len() * 2); // Pre-allocate space
+
+            // For highlighting, we need to adjust the match positions to the new text
+            let chars: Vec<char> = item_text.chars().collect();
+
+            // Create a mapping from the original positions to the new positions
+            let prefix_len = if category.is_empty() { 0 } else { category.len() + 3 }; // +3 for " - "
 
             for (i, c) in chars.iter().enumerate() {
-                if positions.contains(&i) {
+                let orig_pos = i + prefix_len;
+                if positions.contains(&orig_pos) {
                     // Highlight matched characters
-                    markup.push_str(&format!("<span foreground=\"#f0ad4e\" weight=\"bold\">{}</span>", glib::markup_escape_text(&c.to_string())));
+                    markup.push_str(&format!("<span foreground=\"#fcaf3e\" weight=\"bold\">{}</span>", glib::markup_escape_text(&c.to_string())));
                 } else {
                     markup.push_str(&glib::markup_escape_text(&c.to_string()));
                 }
@@ -78,10 +133,11 @@ fn update_action_list(list_box: &ListBox, actions: &[String], query: &str, indic
 
             label.set_markup(&markup);
         } else {
-            label.set_text(action);
+            label.set_text(item_text);
         }
 
-        row.set_child(Some(&label));
+        row_box.append(&label);
+        row.set_child(Some(&row_box));
         list_box.append(&row);
     }
 
@@ -98,39 +154,61 @@ fn setup_css() {
     provider.load_from_data(
         "
         window {
-            background-color: #292a2e;
+            background-color: #0c0c0c;
         }
         label {
-            color: #ffffff;
+            color: #d3d7cf;
             font-family: 'monospace';
-            font-size: 12pt;
+            font-size: 10pt;
+            padding: 0px;
+        }
+        .category-label {
+            color: #888a85;
+            margin-left: 2px;
+            min-width: 100px;
+            margin-right: 4px;
+        }
+        .icon-label {
+            margin-right: 4px;
         }
         entry {
+            color: #d3d7cf;
+            background-color: #2f2f2f;
+            padding: 4px 8px;
+            font-size: 11pt;
+            font-family: 'monospace';
+            border: none;
+            caret-color: #fcaf3e;
+            margin: 0px;
+        }
+        entry selection {
+            background-color: #215d9c;
             color: #ffffff;
-            background-color: #3a3b3f;
-            border-radius: 5px;
-            padding: 8px;
-            font-size: 14pt;
-            caret-color: #f0ad4e;
         }
         entry:focus {
-            border: 1px solid #4d90fe;
+            border: none;
+            outline: none;
         }
         listbox {
-            background-color: #292a2e;
+            background-color: #0c0c0c;
         }
         listboxrow {
-            padding: 4px;
-            transition: background-color 0.1s ease-in-out;
+            padding: 0px;
+            margin: 0px;
         }
         listboxrow:selected {
-            background-color: #4a4b4f;
+            background-color: #215d9c;
         }
         listboxrow:hover {
-            background-color: #3a3b3f;
+            background-color: #303030;
         }
         scrolledwindow {
             border: none;
+            background-color: #0c0c0c;
+        }
+        .counter-label {
+            color: #888a85;
+            font-size: 9pt;
         }
         "
     );
@@ -174,14 +252,22 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
         let indices_arc = Arc::new(Mutex::new(Vec::new()));
         let indices_clone = indices_arc.clone();
 
+        // Create an Arc for the matched count
+        let matched_count = Arc::new(Mutex::new(actions_clone.len()));
+        let matched_count_clone = matched_count.clone();
+
+        // Create an Arc for the label
+        let position_label = Arc::new(Mutex::new(None::<Label>));
+
         app.connect_activate(clone!(@strong actions_clone, @strong selected_clone, @strong indices_clone => move |app| {
             // Setup window
             let window = ApplicationWindow::builder()
                 .application(app)
                 .title("Network Menu")
-                .default_width(700)
-                .default_height(600)
+                .default_width(900)
+                .default_height(800)
                 .css_classes(["network-menu-window"])
+                .icon_name("network-wireless")
                 .build();
 
             // Setup CSS
@@ -192,12 +278,31 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
 
             // Add search entry
             let search_entry = SearchEntry::new();
-            search_entry.set_margin_top(15);
-            search_entry.set_margin_bottom(15);
-            search_entry.set_margin_start(15);
-            search_entry.set_margin_end(15);
+            search_entry.set_margin_top(2);
+            search_entry.set_margin_bottom(2);
+            search_entry.set_margin_start(2);
+            search_entry.set_margin_end(2);
             search_entry.set_hexpand(true);
             search_entry.set_placeholder_text(Some("Type to search..."));
+            search_entry.set_width_chars(30);
+            search_entry.set_max_width_chars(50);
+
+            // Add a counter label next to the search entry (showing something like "553/553")
+            let counter_label = Label::new(Some(&format!("{}/{}", actions_clone.len(), actions_clone.len())));
+            counter_label.set_margin_top(4);
+            counter_label.set_margin_end(6);
+            counter_label.add_css_class("counter-label");
+
+            // Show current position in list (e.g., "553/553")
+            let pos_label = Label::new(Some(""));
+            pos_label.set_margin_start(8);
+            pos_label.add_css_class("counter-label");
+
+            // Store in Arc for sharing
+            {
+                let mut label_ref = position_label.lock().unwrap();
+                *label_ref = Some(pos_label.clone());
+            }
 
             // Action list with scrolling
             let scrolled = ScrolledWindow::builder()
@@ -239,10 +344,20 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
             let action_list_ref = action_list.clone();
             let indices_ref = indices_clone.clone();
 
-            search_entry.connect_search_changed(clone!(@strong actions_ref, @strong action_list_ref, @strong indices_ref => move |entry| {
+            search_entry.connect_search_changed(clone!(@strong actions_ref, @strong action_list_ref, @strong indices_ref, @strong matched_count_clone, @strong counter_label, @strong position_label => move |entry| {
                 let text = entry.text().to_string();
                 let mut indices = indices_ref.lock().unwrap();
                 update_action_list(&action_list_ref, &actions_ref, &text, &mut indices);
+
+                // Update counter
+                let mut count = matched_count_clone.lock().unwrap();
+                *count = indices.len();
+                counter_label.set_text(&format!("{}/{}", indices.len(), actions_ref.len()));
+
+                // Reset position indicator when search changes
+                if let Some(label) = position_label.lock().unwrap().as_ref() {
+                    label.set_text("");
+                }
             }));
 
             // Add keyboard navigation
@@ -253,9 +368,8 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
             let selected_ref = selected_clone.clone();
             let app_ref = app.clone();
             let indices_ref = indices_clone.clone();
-
             controller.connect_key_pressed(
-                clone!(@strong action_list_ref, @strong search_entry_ref, @strong actions_ref, @strong selected_ref, @strong app_ref, @strong indices_ref => move |_, key, _, modifier| {
+                clone!(@strong action_list_ref, @strong search_entry_ref, @strong actions_ref, @strong selected_ref, @strong app_ref, @strong indices_ref, @strong position_label => move |_, key, _, modifier| {
                     match key {
                         // Enter key - activate selected row
                         Key::Return => {
@@ -289,6 +403,13 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
                             if let Some(next_row) = action_list_ref.row_at_index(next_idx) {
                                 action_list_ref.select_row(Some(&next_row));
                                 next_row.grab_focus();
+
+                                // Update position indicator
+                                let new_text = format!("{}↓", next_idx + 1);
+                                if let Some(label) = position_label.lock().unwrap().as_ref() {
+                                    label.set_text(&new_text);
+                                }
+
                                 glib::Propagation::Stop
                             } else {
                                 glib::Propagation::Proceed
@@ -304,6 +425,13 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
                                 if let Some(prev_row) = action_list_ref.row_at_index(current_idx - 1) {
                                     action_list_ref.select_row(Some(&prev_row));
                                     prev_row.grab_focus();
+
+                                    // Update position indicator
+                                    let new_text = format!("{}↑", current_idx);
+                                    if let Some(label) = position_label.lock().unwrap().as_ref() {
+                                        label.set_text(&new_text);
+                                    }
+
                                     glib::Propagation::Stop
                                 } else {
                                     glib::Propagation::Proceed
@@ -330,6 +458,13 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
                                 if let Some(next_row) = action_list_ref.row_at_index(next_idx) {
                                     action_list_ref.select_row(Some(&next_row));
                                     next_row.grab_focus();
+
+                                    // Update position indicator
+                                    let new_text = format!("{}↻", next_idx + 1);
+                                    if let Some(label) = position_label.lock().unwrap().as_ref() {
+                                        label.set_text(&new_text);
+                                    }
+
                                     glib::Propagation::Stop
                                 } else {
                                     glib::Propagation::Proceed
@@ -350,6 +485,13 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
                                     if let Some(next_row) = action_list_ref.row_at_index(next_idx) {
                                         action_list_ref.select_row(Some(&next_row));
                                         next_row.grab_focus();
+
+                                        // Update position indicator
+                                        let new_text = format!("{}↓", next_idx + 1);
+                                        if let Some(label) = position_label.lock().unwrap().as_ref() {
+                                            label.set_text(&new_text);
+                                        }
+
                                         glib::Propagation::Stop
                                     } else {
                                         glib::Propagation::Proceed
@@ -364,6 +506,13 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
                                         if let Some(prev_row) = action_list_ref.row_at_index(current_idx - 1) {
                                             action_list_ref.select_row(Some(&prev_row));
                                             prev_row.grab_focus();
+
+                                            // Update position indicator
+                                            let new_text = format!("{}↑", current_idx);
+                                            if let Some(label) = position_label.lock().unwrap().as_ref() {
+                                                label.set_text(&new_text);
+                                            }
+
                                             glib::Propagation::Stop
                                         } else {
                                             glib::Propagation::Proceed
@@ -383,9 +532,23 @@ pub async fn select_action_with_gtk(actions: Vec<String>) -> Result<Option<Strin
             // Ensure that all keys first go to the search entry
             search_entry.add_controller(controller);
 
+            // Create a search box with counter and position
+            let search_box = GtkBox::new(Orientation::Horizontal, 0);
+
+            // Add a small prefix label to mimic dmenu style
+            let prefix_label = Label::new(Some("|"));
+            prefix_label.set_margin_start(5);
+            prefix_label.set_margin_end(5);
+            prefix_label.add_css_class("counter-label");
+
+            search_box.append(&prefix_label);
+            search_box.append(&search_entry);
+            search_box.append(&counter_label);
+            search_box.append(&pos_label);
+
             // Assemble UI
             scrolled.set_child(Some(&action_list));
-            main_box.append(&search_entry);
+            main_box.append(&search_box);
             main_box.append(&scrolled);
             window.set_child(Some(&main_box));
 
