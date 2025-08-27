@@ -81,7 +81,10 @@ struct Args {
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
     )]
     country: Option<String>,
-    #[arg(long, help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)")]
+    #[arg(
+        long,
+        help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)"
+    )]
     use_gtk: bool,
 }
 
@@ -104,11 +107,6 @@ struct Config {
     use_gtk: bool,
     #[serde(default)]
     use_gtk_fallback: bool,
-    // Field to indicate whether to use dmenu as fallback if GTK UI fails
-    // Legacy field for backward compatibility
-    #[serde(default)]
-    #[serde(skip_serializing)]
-    min_exit_node_priority: Option<i32>,
 }
 
 /// Custom action structure for user-defined actions.
@@ -250,6 +248,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await?;
     }
+    // When action is empty (user pressed Escape or closed window), just exit silently
 
     Ok(())
 }
@@ -292,10 +291,11 @@ async fn select_action_from_menu(
             Ok(Some(selected)) => return Ok(selected),
             Ok(None) => {
                 if !config.use_gtk_fallback {
-                    return Err("User cancelled selection".into());
+                    // Just return empty string when user cancels or presses Escape
+                    return Ok(String::new());
                 }
                 // Falls through to dmenu if use_gtk_fallback is true
-            },
+            }
             Err(_) => {
                 // GTK UI failed to initialize, falling back to dmenu
                 eprintln!("GTK UI failed to initialize, falling back to dmenu");

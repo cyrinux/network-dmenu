@@ -38,6 +38,7 @@ gtk4 = { version = "0.8", optional = true }
 relm4 = { version = "0.8", features = ["macros"], optional = true }
 relm4-components = { version = "0.8", optional = true }
 libadwaita = { version = "0.6", optional = true }
+fuzzy-matcher = "0.3.7"
 
 [dev-dependencies]
 mockall = "0.12"
