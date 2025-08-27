@@ -13,8 +13,6 @@ use std::process::{Command, Stdio};
 #[cfg(feature = "gtk-ui")]
 use std::sync::{Arc, Mutex};
 
-// Helper functions for emoji detection will be handled directly in the update_action_list function
-
 // Application ID for GTK
 #[cfg(feature = "gtk-ui")]
 const APP_ID: &str = "org.cyrinux.network_dmenu";
@@ -100,7 +98,7 @@ fn update_action_list(list_box: &ListBox, actions: &[String], query: &str, indic
             if is_flag {
                 // Take exactly the flag emoji (2 chars)
                 let mut chars_iter = rest.char_indices();
-                if let (Some(_), Some((idx, _))) = (chars_iter.next(), chars_iter.next()) {
+                if let (Some(_), Some((_idx, _))) = (chars_iter.next(), chars_iter.next()) {
                     if let Some((end_idx, _)) = chars_iter.next() {
                         (&rest[..end_idx], rest[end_idx..].trim_start())
                     } else {

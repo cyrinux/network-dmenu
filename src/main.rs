@@ -46,7 +46,7 @@ use tailscale_prefs::parse_tailscale_prefs;
 
 use constants::*;
 // Make sure ICON_KEY is available
-use constants::ICON_KEY;
+use constants::{ICON_KEY, ICON_FIREWALL_BLOCK, ICON_FIREWALL_ALLOW};
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
@@ -132,8 +132,8 @@ enum ActionType {
 #[derive(Debug)]
 enum SystemAction {
     EditConnections,
-    RfkillBlock(String),
-    RfkillUnblock(String),
+    RfkillBlock(String, String), // (device_id, display_text)
+    RfkillUnblock(String, String), // (device_id, display_text)
     AirplaneMode(bool),
 }
 
@@ -322,57 +322,14 @@ async fn select_action_from_menu(
     Ok(selected)
 }
 
-/// Converts an action to a string for display.
-/// Format device information for rfkill block/unblock operations
-fn format_rfkill_device(device: &str, block: bool) -> String {
-    let (icon, action) = if block {
-        (ICON_CROSS, "Turn OFF")
-    } else {
-        (ICON_SIGNAL, "Turn ON")
-    };
-
-    // Check if this is a device ID (numeric) or a device type
-    if let Ok(id) = device.parse::<u32>() {
-        // Load devices from cache
-        let all_devices = rfkill::load_rfkill_devices_from_cache();
-
-        // Find device by ID
-        let device_info = all_devices.iter().find(|d| d.id == id);
-
-        match device_info {
-            Some(info) => format_entry(
-                ACTION_TYPE_SYSTEM,
-                icon,
-                &format!(
-                    "{} {} ({})",
-                    action,
-                    info.device_type_display(),
-                    info.device
-                ),
-            ),
-            None => format_entry(
-                ACTION_TYPE_SYSTEM,
-                icon,
-                &format!("{} device ID: {}", action, id),
-            ),
-        }
-    } else {
-        format_entry(
-            ACTION_TYPE_SYSTEM,
-            icon,
-            &format!("{} all {} devices", action, device),
-        )
-    }
-}
-
 fn action_to_string(action: &ActionType) -> String {
     match action {
         ActionType::Custom(custom_action) => {
             format_entry(ACTION_TYPE_ACTION, "", &custom_action.display)
         }
         ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock(device) => format_rfkill_device(device, true),
-            SystemAction::RfkillUnblock(device) => format_rfkill_device(device, false),
+            SystemAction::RfkillBlock(_, display_text) => display_text.clone(),
+            SystemAction::RfkillUnblock(_, display_text) => display_text.clone(),
             SystemAction::EditConnections => {
                 format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
             }
@@ -401,12 +358,12 @@ fn action_to_string(action: &ActionType) -> String {
                 },
             ),
             TailscaleAction::SetShields(enable) => {
-                let text = if *enable {
-                    TAILSCALE_SHIELDS_UP
+                let (icon, text) = if *enable {
+                    (ICON_FIREWALL_BLOCK, TAILSCALE_SHIELDS_UP)
                 } else {
-                    TAILSCALE_SHIELDS_DOWN
+                    (ICON_FIREWALL_ALLOW, TAILSCALE_SHIELDS_DOWN)
                 };
-                format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+                format_entry(ACTION_TYPE_TAILSCALE, icon, text)
             }
             TailscaleAction::SetAcceptRoutes(enable) => {
                 let text = if *enable {
@@ -515,10 +472,8 @@ fn find_selected_action<'a>(
                 format_entry(ACTION_TYPE_ACTION, "", &custom_action.display) == action
             }
             ActionType::System(system_action) => match system_action {
-                SystemAction::RfkillBlock(device) => action == format_rfkill_device(device, true),
-                SystemAction::RfkillUnblock(device) => {
-                    action == format_rfkill_device(device, false)
-                }
+                SystemAction::RfkillBlock(_, display_text) => action == display_text,
+                SystemAction::RfkillUnblock(_, display_text) => action == display_text,
                 SystemAction::EditConnections => {
                     action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
                 }
@@ -560,12 +515,12 @@ fn find_selected_action<'a>(
                         )
                 }
                 TailscaleAction::SetShields(enable) => {
-                    let text = if *enable {
-                        TAILSCALE_SHIELDS_UP
+                    let (icon, text) = if *enable {
+                        (ICON_FIREWALL_BLOCK, TAILSCALE_SHIELDS_UP)
                     } else {
-                        TAILSCALE_SHIELDS_DOWN
+                        (ICON_FIREWALL_ALLOW, TAILSCALE_SHIELDS_DOWN)
                     };
-                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+                    action == format_entry(ACTION_TYPE_TAILSCALE, icon, text)
                 }
                 TailscaleAction::SetAcceptRoutes(enable) => {
                     let text = if *enable {
@@ -826,41 +781,62 @@ async fn get_actions(
     async fn add_rfkill_device_actions(
         actions: &mut Vec<ActionType>,
         device_type: &str,
-        skip_cache: bool,
     ) -> Result<(), Box<dyn Error>> {
         // Check for specific devices first
         let devices = rfkill::get_rfkill_devices_by_type(device_type)
             .await
             .unwrap_or_default();
 
-        // Cache devices for later use in action_to_string
-        if !devices.is_empty() && !skip_cache {
-            // Cache rfkill devices for non-async functions to use
-            let _ = rfkill::cache_rfkill_devices().await;
-        }
 
         if !devices.is_empty() {
             // Add specific device actions
             for device in &devices {
+                let device_display = format!("{} ({})", device.device_type_display(), device.device);
+
                 // Use is_unblocked to determine status - uses both methods from RfkillDevice
-                if device.is_blocked() {
-                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                        device.id.to_string(),
-                    )));
-                } else if device.is_unblocked() {
-                    actions.push(ActionType::System(SystemAction::RfkillBlock(
-                        device.id.to_string(),
-                    )));
+                if device.is_unblocked() {
+                    let display_text = format_entry(
+                        ACTION_TYPE_SYSTEM,
+                        ICON_CROSS,
+                        &format!("Turn OFF {}", device_display),
+                    );
+                    actions.push(ActionType::System(SystemAction::RfkillBlock(device.id.to_string(), display_text)));
+                } else {
+                    let display_text = format_entry(
+                        ACTION_TYPE_SYSTEM,
+                        ICON_SIGNAL,
+                        &format!("Turn ON {}", device_display),
+                    );
+                    actions.push(ActionType::System(SystemAction::RfkillUnblock(device.id.to_string(), display_text)));
                 }
             }
-        } else {
-            // No specific devices found, add generic actions
-            actions.push(ActionType::System(SystemAction::RfkillBlock(
-                device_type.to_string(),
-            )));
-            actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                device_type.to_string(),
-            )));
+
+            // Add general actions for the device type only if there are devices
+            let type_display = match device_type {
+                "wlan" => "WiFi",
+                "bluetooth" => "Bluetooth",
+                "nfc" => "NFC",
+                "uwb" => "UWB",
+                "wimax" => "WiMAX",
+                "wwan" => "WWAN",
+                "gps" => "GPS",
+                "fm" => "FM",
+                _ => device_type,
+            };
+
+            let block_all_text = format_entry(
+                ACTION_TYPE_SYSTEM,
+                ICON_CROSS,
+                &format!("Turn OFF all {} devices", type_display),
+            );
+            let unblock_all_text = format_entry(
+                ACTION_TYPE_SYSTEM,
+                ICON_SIGNAL,
+                &format!("Turn ON all {} devices", type_display),
+            );
+
+            actions.push(ActionType::System(SystemAction::RfkillBlock(device_type.to_string(), block_all_text)));
+            actions.push(ActionType::System(SystemAction::RfkillUnblock(device_type.to_string(), unblock_all_text)));
         }
 
         Ok(())
@@ -873,7 +849,7 @@ async fn get_actions(
             None
         };
 
-        add_rfkill_device_actions(&mut actions, "wlan", false)
+        add_rfkill_device_actions(&mut actions, "wlan")
             .await
             .unwrap_or_default();
 
@@ -894,9 +870,7 @@ async fn get_actions(
             None
         };
 
-        // Skip caching if we already did it for WiFi devices
-        let skip_cache = std::path::Path::new(&rfkill::get_rfkill_cache_path()).exists();
-        add_rfkill_device_actions(&mut actions, "bluetooth", skip_cache)
+        add_rfkill_device_actions(&mut actions, "bluetooth")
             .await
             .unwrap_or_default();
 
@@ -1160,9 +1134,9 @@ async fn handle_system_action(
     };
 
     let result = match action {
-        SystemAction::RfkillBlock(device) => handle_rfkill_operation(device, true, profile).await,
-        SystemAction::RfkillUnblock(device) => {
-            handle_rfkill_operation(device, false, profile).await
+        SystemAction::RfkillBlock(device_id, _) => handle_rfkill_operation(device_id, true, profile).await,
+        SystemAction::RfkillUnblock(device_id, _) => {
+            handle_rfkill_operation(device_id, false, profile).await
         }
         SystemAction::EditConnections => {
             let status = Command::new("nm-connection-editor").status()?;
@@ -1193,8 +1167,8 @@ async fn handle_system_action(
     // Display profiling information if enabled
     if let Some(start) = start_time {
         let action_name = match action {
-            SystemAction::RfkillBlock(device) => format!("Block {}", device),
-            SystemAction::RfkillUnblock(device) => format!("Unblock {}", device),
+            SystemAction::RfkillBlock(device_id, _) => format!("Block {}", device_id),
+            SystemAction::RfkillUnblock(device_id, _) => format!("Unblock {}", device_id),
             SystemAction::EditConnections => "Edit connections".to_string(),
             SystemAction::AirplaneMode(enable) => {
                 format!("Airplane mode {}", if *enable { "ON" } else { "OFF" })
@@ -1508,16 +1482,18 @@ mod tests {
 
     #[test]
     fn test_action_to_string_system_rfkill_block() {
-        let action = ActionType::System(SystemAction::RfkillBlock("wifi".to_string()));
+        let display_text = format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, "Turn OFF all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), display_text.clone()));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - ❌ Turn OFF all wifi devices");
+        assert_eq!(result, display_text);
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
-        let action = ActionType::System(SystemAction::RfkillUnblock("wifi".to_string()));
+        let display_text = format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, "Turn ON all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillUnblock("wlan".to_string(), display_text.clone()));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - 📶 Turn ON all wifi devices");
+        assert_eq!(result, display_text);
     }
 
     #[test]
@@ -1574,14 +1550,14 @@ mod tests {
     fn test_action_to_string_tailscale_shields_up() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(true));
         let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - 🛡️ Shields up");
+        assert_eq!(result, "tailscale - 🚫 Block incoming connections");
     }
 
     #[test]
     fn test_action_to_string_tailscale_shields_down() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(false));
         let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - 🛡️ Shields down");
+        assert_eq!(result, "tailscale - 🔓 Allow incoming connections");
     }
 
     #[test]
@@ -1630,7 +1606,7 @@ mod tests {
     fn test_find_selected_action_success() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
+            ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), "system    - ❌ Turn OFF all WiFi devices".to_string())),
         ];
 
         let result = find_selected_action("wifi      - 📶 Connect", &actions);
@@ -1646,7 +1622,7 @@ mod tests {
     fn test_find_selected_action_not_found() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
+            ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), "system    - ❌ Turn OFF all WiFi devices".to_string())),
         ];
 
         let result = find_selected_action("nonexistent action", &actions);
@@ -1834,6 +1810,8 @@ mod tests {
             country_filter: Some("Sweden".to_string()),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
+            use_gtk: false,
+            use_gtk_fallback: false,
         };
 
         // When args are None, config values should be used
@@ -1848,6 +1826,7 @@ mod tests {
             max_nodes_per_country: None,
             max_nodes_per_city: None,
             country: None,
+            use_gtk: false,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);

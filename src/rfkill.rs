@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::process::Command;
-use std::fs;
 use tokio::process::Command as AsyncCommand;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +64,7 @@ impl RfkillDevice {
     pub fn is_unblocked(&self) -> bool {
         !self.is_blocked()
     }
+
 
     /// Get the device type as a more user-friendly string
     pub fn device_type_display(&self) -> &str {
@@ -242,82 +241,7 @@ pub async fn get_device_type_summary() -> Result<std::collections::HashMap<Strin
     Ok(summary)
 }
 
-/// Gets the path to the rfkill devices cache file.
-pub fn get_rfkill_cache_path() -> String {
-    // Try to use XDG_CACHE_HOME first
-    if let Ok(cache_home) = std::env::var("XDG_CACHE_HOME") {
-        let path = PathBuf::from(cache_home);
-        let cache_dir = path.join("network-dmenu");
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            eprintln!("Warning: Could not create cache directory: {e}");
-            return String::from("/tmp/rfkill_devices_cache.json");
-        }
-        return cache_dir.join("rfkill_devices.json").to_string_lossy().to_string();
-    }
 
-    // Fall back to $HOME/.cache
-    if let Ok(home) = std::env::var("HOME") {
-        let path = PathBuf::from(home);
-        let cache_dir = path.join(".cache").join("network-dmenu");
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            eprintln!("Warning: Could not create cache directory: {e}");
-            return String::from("/tmp/rfkill_devices_cache.json");
-        }
-        return cache_dir.join("rfkill_devices.json").to_string_lossy().to_string();
-    }
-
-    // Last resort: use /tmp
-    String::from("/tmp/rfkill_devices_cache.json")
-}
-
-/// Loads rfkill devices from cache file.
-pub fn load_rfkill_devices_from_cache() -> Vec<RfkillDevice> {
-    match std::fs::read_to_string(get_rfkill_cache_path()) {
-        Ok(cache) => match serde_json::from_str::<Vec<RfkillDevice>>(&cache) {
-            Ok(devices) => devices,
-            Err(e) => {
-                eprintln!("Warning: Could not parse rfkill cache: {e}");
-                Vec::new()
-            }
-        },
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Saves rfkill devices to cache file.
-///
-/// # Errors
-///
-/// Returns an error if creating the cache directory fails, if serializing the devices to JSON fails,
-/// or if writing to the cache file fails.
-pub fn save_rfkill_devices_to_cache(devices: &[RfkillDevice]) -> Result<(), Box<dyn std::error::Error>> {
-    let cache_path = get_rfkill_cache_path();
-
-    // Ensure parent directory exists
-    if let Some(parent) = PathBuf::from(&cache_path).parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-
-    let json = serde_json::to_string(devices)?;
-    fs::write(cache_path, json)?;
-    Ok(())
-}
-
-/// Caches all rfkill devices for use in non-async functions.
-///
-/// # Errors
-///
-/// Returns an error if saving the rfkill devices to the cache file fails.
-pub async fn cache_rfkill_devices() -> Result<(), Box<dyn std::error::Error>> {
-    let all_devices = get_rfkill_devices().await.unwrap_or_default();
-
-    if !all_devices.is_empty() {
-        save_rfkill_devices_to_cache(&all_devices)?;
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -342,22 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rfkill_device_methods() {
-        let device = RfkillDevice {
-            id: 0,
-            device_type: "bluetooth".to_string(),
-            device: "hci0".to_string(),
-            soft: "blocked".to_string(),
-            hard: "unblocked".to_string(),
-        };
-
-        assert!(device.is_soft_blocked());
-        assert!(!device.is_hard_blocked());
-        assert!(device.is_blocked());
-        assert!(!device.is_unblocked());
-    }
-
-    #[test]
     fn test_device_type_display() {
         let wifi_device = RfkillDevice {
             id: 1,
@@ -378,6 +286,25 @@ mod tests {
         assert_eq!(wifi_device.device_type_display(), "WiFi");
         assert_eq!(bt_device.device_type_display(), "Bluetooth");
     }
+
+
+    #[test]
+    fn test_rfkill_device_methods() {
+        let device = RfkillDevice {
+            id: 0,
+            device_type: "bluetooth".to_string(),
+            device: "hci0".to_string(),
+            soft: "blocked".to_string(),
+            hard: "unblocked".to_string(),
+        };
+
+        assert!(device.is_soft_blocked());
+        assert!(!device.is_hard_blocked());
+        assert!(device.is_blocked());
+        assert!(!device.is_unblocked());
+    }
+
+
 
     #[test]
     fn test_json_parsing() {

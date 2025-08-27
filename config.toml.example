@@ -2,10 +2,6 @@
 dmenu_cmd = "dmenu"
 dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')' -f --bind='alt-d:change-query('diagnostic')'"
 
-# Exit node filtering options
-# List of exit nodes to exclude
-# exclude_exit_node = ["hostname1.ts.net", "hostname2.ts.net"]
-
 # Limit the number of exit nodes shown per country (sorted by priority)
 # max_nodes_per_country = 2
 

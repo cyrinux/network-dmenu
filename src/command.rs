@@ -1,9 +1,6 @@
-use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Output};
-use std::sync::Mutex;
 
 /// Trait for running shell commands.
 pub trait CommandRunner {
@@ -23,30 +20,9 @@ impl CommandRunner for RealCommandRunner {
     }
 }
 
-// Static command cache to avoid repeated lookups
-static COMMAND_CACHE: Lazy<Mutex<HashMap<String, bool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-
 /// Checks if a command is installed on the system.
-/// Uses a cache to avoid repeated lookups.
 pub fn is_command_installed(cmd: &str) -> bool {
-    let mut cache = match COMMAND_CACHE.lock() {
-        Ok(cache) => cache,
-        Err(_) => {
-            // If we can't lock the cache (e.g., another thread panicked while holding the lock),
-            // just check the command directly without caching
-            return which::which(cmd).is_ok();
-        }
-    };
-
-    // Return cached result if available
-    if let Some(&installed) = cache.get(cmd) {
-        return installed;
-    }
-
-    // Otherwise check and cache the result
-    let installed = which::which(cmd).is_ok();
-    cache.insert(cmd.to_string(), installed);
-    installed
+    which::which(cmd).is_ok()
 }
 
 /// Reads the output of a command and returns it as a vector of lines.

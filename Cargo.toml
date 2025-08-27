@@ -13,24 +13,22 @@ repository = "https://github.com/cyrinux/network-dmenu"
 
 [features]
 default = []
-gtk-ui = ["dep:gtk4", "dep:relm4", "dep:relm4-components", "dep:libadwaita"]
+gtk-ui = ["dep:gtk4", "dep:relm4", "dep:relm4-components", "dep:libadwaita", "dep:fuzzy-matcher"]
 
 [dependencies]
 dirs = "6.0"
-serde = { version = "1", default-features = false }
-serde_json = "1"
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false }
 toml = { version = "0.9", features = ["parse", "serde"], default-features = false }
-regex = { version = "1.11", default-features = false }
-reqwest = { version = "0.12", features = ["blocking", "default-tls", "charset", "json"], default-features = false }
-notify-rust = { version = "4", features = ["default"], default-features = false }
+regex = { version = "1.11", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", features = ["blocking", "default-tls", "json"], default-features = false }
+notify-rust = { version = "4", default-features = false, features = ["dbus"] }
 which = "8.0"
-ipaddress = "0.1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process"], default-features = false }
 webbrowser = "1.0.3"
 reqwest-middleware = "0.4.2"
 reqwest-retry = "0.7.0"
 country-emoji = "0.2.0"
-once_cell = "1.19"
 clap = { version = "4", features = ["suggestions", "help", "usage", "color", "derive", "std"], default-features = false }
 
 # GTK UI dependencies (optional)
@@ -38,7 +36,7 @@ gtk4 = { version = "0.8", optional = true }
 relm4 = { version = "0.8", features = ["macros"], optional = true }
 relm4-components = { version = "0.8", optional = true }
 libadwaita = { version = "0.6", optional = true }
-fuzzy-matcher = "0.3.7"
+fuzzy-matcher = { version = "0.3.7", optional = true }
 
 [dev-dependencies]
 mockall = "0.12"
