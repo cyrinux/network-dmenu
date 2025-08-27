@@ -46,7 +46,7 @@ use tailscale_prefs::parse_tailscale_prefs;
 
 use constants::*;
 // Make sure ICON_KEY is available
-use constants::{ICON_KEY, ICON_FIREWALL_BLOCK, ICON_FIREWALL_ALLOW};
+use constants::{ICON_FIREWALL_ALLOW, ICON_FIREWALL_BLOCK, ICON_KEY};
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
@@ -81,6 +81,7 @@ struct Args {
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
     )]
     country: Option<String>,
+    // #[cfg(feature = "gtk-ui")]
     #[arg(
         long,
         help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)"
@@ -132,7 +133,7 @@ enum ActionType {
 #[derive(Debug)]
 enum SystemAction {
     EditConnections,
-    RfkillBlock(String, String), // (device_id, display_text)
+    RfkillBlock(String, String),   // (device_id, display_text)
     RfkillUnblock(String, String), // (device_id, display_text)
     AirplaneMode(bool),
 }
@@ -787,11 +788,11 @@ async fn get_actions(
             .await
             .unwrap_or_default();
 
-
         if !devices.is_empty() {
             // Add specific device actions
             for device in &devices {
-                let device_display = format!("{} ({})", device.device_type_display(), device.device);
+                let device_display =
+                    format!("{} ({})", device.device_type_display(), device.device);
 
                 // Use is_unblocked to determine status - uses both methods from RfkillDevice
                 if device.is_unblocked() {
@@ -800,14 +801,20 @@ async fn get_actions(
                         ICON_CROSS,
                         &format!("Turn OFF {}", device_display),
                     );
-                    actions.push(ActionType::System(SystemAction::RfkillBlock(device.id.to_string(), display_text)));
+                    actions.push(ActionType::System(SystemAction::RfkillBlock(
+                        device.id.to_string(),
+                        display_text,
+                    )));
                 } else {
                     let display_text = format_entry(
                         ACTION_TYPE_SYSTEM,
                         ICON_SIGNAL,
                         &format!("Turn ON {}", device_display),
                     );
-                    actions.push(ActionType::System(SystemAction::RfkillUnblock(device.id.to_string(), display_text)));
+                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
+                        device.id.to_string(),
+                        display_text,
+                    )));
                 }
             }
 
@@ -835,8 +842,14 @@ async fn get_actions(
                 &format!("Turn ON all {} devices", type_display),
             );
 
-            actions.push(ActionType::System(SystemAction::RfkillBlock(device_type.to_string(), block_all_text)));
-            actions.push(ActionType::System(SystemAction::RfkillUnblock(device_type.to_string(), unblock_all_text)));
+            actions.push(ActionType::System(SystemAction::RfkillBlock(
+                device_type.to_string(),
+                block_all_text,
+            )));
+            actions.push(ActionType::System(SystemAction::RfkillUnblock(
+                device_type.to_string(),
+                unblock_all_text,
+            )));
         }
 
         Ok(())
@@ -1134,7 +1147,9 @@ async fn handle_system_action(
     };
 
     let result = match action {
-        SystemAction::RfkillBlock(device_id, _) => handle_rfkill_operation(device_id, true, profile).await,
+        SystemAction::RfkillBlock(device_id, _) => {
+            handle_rfkill_operation(device_id, true, profile).await
+        }
         SystemAction::RfkillUnblock(device_id, _) => {
             handle_rfkill_operation(device_id, false, profile).await
         }
@@ -1482,16 +1497,24 @@ mod tests {
 
     #[test]
     fn test_action_to_string_system_rfkill_block() {
-        let display_text = format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, "Turn OFF all WiFi devices");
-        let action = ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), display_text.clone()));
+        let display_text =
+            format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, "Turn OFF all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillBlock(
+            "wlan".to_string(),
+            display_text.clone(),
+        ));
         let result = action_to_string(&action);
         assert_eq!(result, display_text);
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
-        let display_text = format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, "Turn ON all WiFi devices");
-        let action = ActionType::System(SystemAction::RfkillUnblock("wlan".to_string(), display_text.clone()));
+        let display_text =
+            format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, "Turn ON all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillUnblock(
+            "wlan".to_string(),
+            display_text.clone(),
+        ));
         let result = action_to_string(&action);
         assert_eq!(result, display_text);
     }
@@ -1606,7 +1629,10 @@ mod tests {
     fn test_find_selected_action_success() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), "system    - ❌ Turn OFF all WiFi devices".to_string())),
+            ActionType::System(SystemAction::RfkillBlock(
+                "wlan".to_string(),
+                "system    - ❌ Turn OFF all WiFi devices".to_string(),
+            )),
         ];
 
         let result = find_selected_action("wifi      - 📶 Connect", &actions);
@@ -1622,7 +1648,10 @@ mod tests {
     fn test_find_selected_action_not_found() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wlan".to_string(), "system    - ❌ Turn OFF all WiFi devices".to_string())),
+            ActionType::System(SystemAction::RfkillBlock(
+                "wlan".to_string(),
+                "system    - ❌ Turn OFF all WiFi devices".to_string(),
+            )),
         ];
 
         let result = find_selected_action("nonexistent action", &actions);

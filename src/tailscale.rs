@@ -282,7 +282,7 @@ pub fn get_mullvad_actions(
             .collect();
 
         // Process other non-Mullvad exit nodes
-        let other_nodes: Vec<String> = status
+        let mut other_nodes: Vec<String> = status
             .peer
             .iter()
             .filter(|(_, peer)| {
@@ -326,13 +326,22 @@ pub fn get_mullvad_actions(
                         existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
                     }
                     mullvad_results.insert(0, existing_action);
-                } else if let Some(_pos) = other_nodes.iter().position(|action| action.contains(&suggested_name)) {
-                    // Do nothing, we'll handle this when combining the lists
                 } else {
-                    // Add new suggested node
-                    let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
-                    mullvad_results.insert(0, suggested_action);
+                    if let Some(pos) = other_nodes.iter().position(|action| action.contains(&suggested_name)) {
+                        // Remove from other_nodes and add suggested marking
+                        let mut existing_action = other_nodes.remove(pos);
+                        if !existing_action.contains(SUGGESTED_CHECK) {
+                            existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
+                        }
+                        mullvad_results.insert(0, existing_action);
+                    } else {
+                        // Add new suggested node
+                        let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
+                        mullvad_results.insert(0, suggested_action);
+                    }
                 }
+
+
             }
         }
 
@@ -534,12 +543,19 @@ fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> St
 
 /// Get the suggested exit-node
 pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
-    let output = command_runner
-        .run_command("tailscale", &["exit-node", "suggest"])
-        .expect("Failed to execute command");
+    let output = match command_runner.run_command("tailscale", &["exit-node", "suggest"]) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("Failed to get suggested exit node: {e}");
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        return None;
+    }
 
     let exit_node = String::from_utf8_lossy(&output.stdout);
-
     parse_exit_node_suggest(&exit_node)
 }
 

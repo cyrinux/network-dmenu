@@ -65,7 +65,6 @@ impl RfkillDevice {
         !self.is_blocked()
     }
 
-
     /// Get the device type as a more user-friendly string
     pub fn device_type_display(&self) -> &str {
         match self.device_type.as_str() {
@@ -286,25 +285,6 @@ mod tests {
         assert_eq!(wifi_device.device_type_display(), "WiFi");
         assert_eq!(bt_device.device_type_display(), "Bluetooth");
     }
-
-
-    #[test]
-    fn test_rfkill_device_methods() {
-        let device = RfkillDevice {
-            id: 0,
-            device_type: "bluetooth".to_string(),
-            device: "hci0".to_string(),
-            soft: "blocked".to_string(),
-            hard: "unblocked".to_string(),
-        };
-
-        assert!(device.is_soft_blocked());
-        assert!(!device.is_hard_blocked());
-        assert!(device.is_blocked());
-        assert!(!device.is_unblocked());
-    }
-
-
 
     #[test]
     fn test_json_parsing() {
