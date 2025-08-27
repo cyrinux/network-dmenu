@@ -252,34 +252,33 @@ pub fn get_mullvad_actions(
 
             let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
             let is_active = active_exit_node == node_name;
-            let flag = get_flag(country);
-
-            // Include city in the display format
-            // Show check mark instead of flag when node is active
-            let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display = format!("{} ({}) {} {}",
-                country,
-                city,
+            // Store all node information before formatting
+            mullvad_actions.push((
+                country.to_string(),
+                city.to_string(),
+                node_name.clone(),
                 node_ip,
-                node_name
-            );
-
-            let action = format_entry("mullvad", display_icon, &display);
-            mullvad_actions.push((country.to_string(), city.to_string(), action));
+                is_active,
+            ));
         }
 
-        // Sort by country first, then by city
-        mullvad_actions.sort_by(|(country_a, city_a, _), (country_b, city_b, _)| {
+        // Sort nodes by country name first, then by city name
+        mullvad_actions.sort_by(|(country_a, city_a, _, _, _), (country_b, city_b, _, _, _)| {
             match country_a.cmp(country_b) {
                 std::cmp::Ordering::Equal => city_a.cmp(city_b),
                 other => other,
             }
         });
 
-        // Extract just the actions
+        // Now format the sorted nodes with proper icons
         let mut mullvad_results: Vec<String> = mullvad_actions
             .into_iter()
-            .map(|(_, _, action)| action)
+            .map(|(country, city, node_name, node_ip, is_active)| {
+                let flag = get_flag(&country);
+                let display_icon = if is_active { ICON_CHECK } else { &flag };
+                let display = format!("{} ({}) {} {}", country, city, node_ip, node_name);
+                format_entry("mullvad", display_icon, &display)
+            })
             .collect();
 
         // Process other non-Mullvad exit nodes
