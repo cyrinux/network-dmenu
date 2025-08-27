@@ -1,6 +1,8 @@
 use crate::command::{is_command_installed, CommandRunner};
 use crate::constants::{ACTION_TYPE_DIAGNOSTIC, ICON_CHECK, ICON_SIGNAL};
+use crate::dns_cache::{CachedDnsServer, DnsCacheStorage, get_current_network_id};
 use crate::format_entry;
+use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
@@ -20,6 +22,7 @@ pub enum DiagnosticAction {
     ShowInterfaces,
     SpeedTest,
     SpeedTestFast,
+    DnsBenchmark,
 }
 
 /// Result of a network diagnostic operation
@@ -27,6 +30,39 @@ pub enum DiagnosticAction {
 pub struct DiagnosticResult {
     pub success: bool,
     pub output: String,
+}
+
+// DNS Benchmark JSON structures
+#[derive(Debug, Serialize, Deserialize)]
+struct DnsBenchResult {
+    name: String,
+    ip: String,
+    #[serde(default)]
+    last_resolved_ip: String,
+    total_requests: u32,
+    successful_requests: u32,
+    successful_requests_percentage: f32,
+    first_duration: DnsDuration,
+    average_duration: DnsDuration,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum DnsDuration {
+    Succeeded { succeeded: DnsTime },
+    Failed { failed: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DnsTime {
+    secs: u64,
+    nanos: u32,
+}
+
+impl DnsTime {
+    fn to_millis(&self) -> f64 {
+        self.secs as f64 * 1000.0 + self.nanos as f64 / 1_000_000.0
+    }
 }
 
 // Speedtest-go JSON structures
@@ -139,6 +175,13 @@ pub fn get_diagnostic_actions() -> Vec<DiagnosticAction> {
         actions.push(DiagnosticAction::SpeedTestFast);
     }
 
+    // DNS benchmark action (requires dns-bench command)
+    let dns_bench_available = is_command_installed("dns-bench");
+
+    if dns_bench_available {
+        actions.push(DiagnosticAction::DnsBenchmark);
+    }
+
     actions
 }
 
@@ -159,6 +202,7 @@ pub async fn handle_diagnostic_action(
         DiagnosticAction::ShowInterfaces => show_network_interfaces(command_runner).await,
         DiagnosticAction::SpeedTest => run_speedtest(command_runner).await,
         DiagnosticAction::SpeedTestFast => run_speedtest_fast(command_runner).await,
+        DiagnosticAction::DnsBenchmark => run_dns_benchmark(command_runner).await,
     }
 }
 
@@ -201,6 +245,9 @@ pub fn diagnostic_action_to_string(action: &DiagnosticAction) -> String {
         DiagnosticAction::SpeedTest => format_entry(ACTION_TYPE_DIAGNOSTIC, "🚀", "Speed Test"),
         DiagnosticAction::SpeedTestFast => {
             format_entry(ACTION_TYPE_DIAGNOSTIC, "⚡", "Speed Test (Fast.com)")
+        }
+        DiagnosticAction::DnsBenchmark => {
+            format_entry(ACTION_TYPE_DIAGNOSTIC, "🔍", "DNS Benchmark & Optimize")
         }
     }
 }
@@ -624,6 +671,179 @@ async fn run_speedtest_fast(
     }
 }
 
+/// Run DNS benchmark and set the fastest DNS server
+async fn run_dns_benchmark(
+    command_runner: &dyn CommandRunner,
+) -> Result<DiagnosticResult, Box<dyn Error>> {
+    // Run dns-bench with JSON output
+    let output = command_runner.run_command(
+        "dns-bench",
+        &["--format", "json", "--skip-system-servers"],
+    )?;
+
+    if !output.status.success() {
+        return Ok(DiagnosticResult {
+            success: false,
+            output: "DNS benchmark failed to run".to_string(),
+        });
+    }
+
+    let json_output = String::from_utf8_lossy(&output.stdout);
+
+    // Parse the JSON output
+    let dns_results: Vec<DnsBenchResult> = match serde_json::from_str(&json_output) {
+        Ok(results) => results,
+        Err(e) => {
+            return Ok(DiagnosticResult {
+                success: false,
+                output: format!("Failed to parse DNS benchmark results: {}", e),
+            });
+        }
+    };
+
+    // Filter and sort DNS servers by average response time
+    let mut valid_results: Vec<_> = dns_results
+        .into_iter()
+        .filter_map(|result| {
+            // Only consider servers with 100% success rate
+            if result.successful_requests_percentage >= 100.0 {
+                if let DnsDuration::Succeeded { succeeded } = result.average_duration {
+                    return Some((
+                        result.name,
+                        result.ip,
+                        succeeded.to_millis(),
+                        result.successful_requests_percentage,
+                    ));
+                }
+            }
+            None
+        })
+        .collect();
+
+    // Sort by average response time (fastest first)
+    valid_results.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    if valid_results.is_empty() {
+        return Ok(DiagnosticResult {
+            success: false,
+            output: "No reliable DNS servers found".to_string(),
+        });
+    }
+
+    // Save results to cache
+    let network_id = get_current_network_id(command_runner).await.unwrap_or_else(|_| "default_network".to_string());
+
+    let cached_servers: Vec<CachedDnsServer> = valid_results
+        .iter()
+        .map(|(name, ip, latency, success_rate)| {
+            // Determine if server supports DNS over TLS
+            let supports_dot = name.to_lowercase().contains("cloudflare")
+                || name.to_lowercase().contains("google")
+                || name.to_lowercase().contains("quad9")
+                || name.to_lowercase().contains("nextdns")
+                || name.to_lowercase().contains("adguard")
+                || name.to_lowercase().contains("mullvad")
+                || name.to_lowercase().contains("controld")
+                || name.to_lowercase().contains("hagezi");
+
+            CachedDnsServer {
+                name: name.clone(),
+                ip: ip.clone(),
+                average_latency_ms: *latency,
+                success_rate: *success_rate as f64,
+                supports_dot,
+            }
+        })
+        .collect();
+
+    // Store in cache
+    if let Ok(mut cache_storage) = DnsCacheStorage::load() {
+        cache_storage.store_cache(network_id.clone(), cached_servers);
+        cache_storage.cleanup_old_caches();
+        let _ = cache_storage.save();
+    }
+
+    // Get the fastest DNS server
+    let (name, ip, avg_ms, _) = &valid_results[0];
+
+    // Get current network interface (assuming default route)
+    let route_output = command_runner.run_command("ip", &["route", "show", "default"])?;
+    let route_str = String::from_utf8_lossy(&route_output.stdout);
+
+    // Extract the interface name from the default route
+    let interface = route_str
+        .lines()
+        .next()
+        .and_then(|line| {
+            line.split_whitespace()
+                .skip_while(|&word| word != "dev")
+                .nth(1)
+        })
+        .unwrap_or("eth0");
+
+    // Set the DNS using systemd-resolved
+    let set_dns_output = command_runner.run_command(
+        "systemd-resolve",
+        &["--interface", interface, "--set-dns", ip],
+    )?;
+
+    let success = set_dns_output.status.success();
+
+    // Prepare the results summary
+    let mut summary = format!(
+        "🏆 Fastest DNS: {} ({}) - {:.2}ms average\n\n",
+        name, ip, avg_ms
+    );
+
+    summary.push_str("Top 5 DNS Servers:\n");
+    for (i, (name, ip, avg_ms, _)) in valid_results.iter().take(5).enumerate() {
+        summary.push_str(&format!(
+            "{}. {} ({}) - {:.2}ms\n",
+            i + 1,
+            name,
+            ip,
+            avg_ms
+        ));
+    }
+
+    if success {
+        summary.push_str(&format!(
+            "\n✅ DNS server set to {} on interface {}",
+            ip, interface
+        ));
+
+        // Send notification about the DNS change
+        let _ = Notification::new()
+            .summary("DNS Optimized")
+            .body(&format!(
+                "Set fastest DNS: {} ({})\nAverage response: {:.2}ms",
+                name, ip, avg_ms
+            ))
+            .timeout(5000)
+            .show();
+    } else {
+        summary.push_str(&format!(
+            "\n❌ Failed to set DNS. You may need to manually set DNS to {}",
+            ip
+        ));
+
+        // Send error notification
+        let _ = Notification::new()
+            .summary("DNS Benchmark Complete")
+            .body(&format!(
+                "Fastest DNS found: {} ({})\nManual configuration may be required.",
+                name, ip
+            ))
+            .timeout(5000)
+            .show();
+    }
+
+    Ok(DiagnosticResult {
+        success,
+        output: summary,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,6 +888,11 @@ mod tests {
         assert_eq!(
             diagnostic_action_to_string(&DiagnosticAction::SpeedTestFast),
             "diagnostic- ⚡ Speed Test (Fast.com)"
+        );
+
+        assert_eq!(
+            diagnostic_action_to_string(&DiagnosticAction::DnsBenchmark),
+            "diagnostic- 🔍 DNS Benchmark & Optimize"
         );
     }
 
@@ -752,6 +977,11 @@ mod tests {
 
         if is_command_installed("fast") {
             assert!(actions.contains(&DiagnosticAction::SpeedTestFast));
+        }
+
+        // Test DNS benchmark action (only if dns-bench is available)
+        if is_command_installed("dns-bench") {
+            assert!(actions.contains(&DiagnosticAction::DnsBenchmark));
         }
 
         // At least some actions should be available on most systems (ping is very common)

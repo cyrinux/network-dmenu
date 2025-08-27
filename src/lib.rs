@@ -7,26 +7,33 @@ pub mod bluetooth;
 pub mod command;
 pub mod constants;
 pub mod diagnostics;
+pub mod dns_cache;
 pub mod iwd;
 pub mod networkmanager;
+pub mod privilege;
 pub mod rfkill;
 pub mod tailscale;
 pub mod tailscale_prefs;
 pub mod utils;
-
-#[cfg(feature = "gtk-ui")]
-#[path = "gtk_ui.rs"]
-mod gtk_ui;
+pub mod nextdns;
+pub mod nextdns_api;
+pub mod logger;
 
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
 // Re-export commonly used types and functions
 pub use bluetooth::{get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction};
-pub use command::{
-    is_command_installed, read_output_lines, CommandRunner, RealCommandRunner,
-};
+pub use command::{is_command_installed, read_output_lines, CommandRunner, RealCommandRunner};
 pub use diagnostics::{
     diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
+};
+pub use dns_cache::{
+    CachedDnsServer, DnsBenchmarkCache, DnsCacheStorage, get_current_network_id,
+    generate_dns_actions_from_cache,
+};
+pub use privilege::{
+    get_privilege_command, wrap_privileged_command, wrap_privileged_commands,
+    has_privilege_escalation,
 };
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected,
@@ -42,9 +49,18 @@ pub use tailscale::{
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     TailscaleAction,
 };
+pub use nextdns::{
+    NextDnsAction, get_nextdns_actions, handle_nextdns_action,
+};
 
-#[cfg(feature = "gtk-ui")]
-pub use self::gtk_ui::select_action_with_gtk;
+// Re-export async functions
+pub use nextdns::{
+    fetch_profiles_blocking,
+};
+
+// Re-export logger
+pub use logger::Profiler;
+
 pub use utils::{
     check_captive_portal, convert_network_strength, prompt_for_password, prompt_for_ssid,
 };
@@ -58,6 +74,7 @@ pub enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    NextDns(NextDnsAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),

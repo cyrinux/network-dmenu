@@ -1,8 +1,39 @@
+mod bluetooth;
+mod command;
+mod constants;
+mod diagnostics;
+mod dns_cache;
+mod iwd;
+mod logger;
+mod networkmanager;
+mod nextdns;
+mod privilege;
+mod rfkill;
+mod tailscale;
+mod tailscale_prefs;
+mod utils;
+
+#[macro_use]
+extern crate log;
+use crate::utils::get_flag;
+use bluetooth::{
+    get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
+};
 use clap::Parser;
-use command::CommandRunner;
+use command::{is_command_installed, CommandRunner, RealCommandRunner};
+use constants::*;
+use diagnostics::{
+    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
+};
 use dirs::config_dir;
-#[cfg(feature = "gtk-ui")]
-use network_dmenu::select_action_with_gtk;
+use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
+use log::error;
+use networkmanager::{
+    connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
+    get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
+};
+use nextdns::NextDnsAction;
+use nextdns::{get_nextdns_actions, handle_nextdns_action};
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -10,43 +41,14 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Instant;
 
-use utils::check_captive_portal;
-
-mod bluetooth;
-mod command;
-mod constants;
-mod diagnostics;
-mod iwd;
-mod networkmanager;
-mod rfkill;
-mod tailscale;
-mod tailscale_prefs;
-mod utils;
-
-use bluetooth::{
-    get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
-};
-use command::{is_command_installed, RealCommandRunner};
-use diagnostics::{
-    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
-};
-use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
-use networkmanager::{
-    connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
-    get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
-};
 use tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
-    DefaultNotificationSender, TailscaleAction,
+    DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
 use tailscale_prefs::parse_tailscale_prefs;
-
-use constants::*;
-// Make sure ICON_KEY is available
-use constants::ICON_KEY;
+use utils::check_captive_portal;
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
@@ -63,9 +65,27 @@ struct Args {
     #[arg(long)]
     no_tailscale: bool,
     #[arg(long)]
-    no_diagnostics: bool,
+    no_nextdns: bool,
+    #[arg(
+        long,
+        default_value = "",
+        help = "Your NextDNS API key from https://my.nextdns.io/account"
+    )]
+    nextdns_api_key: String,
     #[arg(long)]
+    validate_nextdns_key: bool,
+    #[arg(long)]
+    refresh_nextdns_profiles: bool,
+    #[arg(long)]
+    no_diagnostics: bool,
+    #[arg(long, help = "Enable profile timings and debug output")]
     profile: bool,
+    #[arg(
+        long,
+        help = "Set log level (error, warn, info, debug, trace)",
+        default_value = "warn"
+    )]
+    log_level: String,
     #[arg(
         long,
         help = "Limit the number of exit nodes shown per country (sorted by priority)"
@@ -81,11 +101,8 @@ struct Args {
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
     )]
     country: Option<String>,
-    #[arg(
-        long,
-        help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)"
-    )]
-    use_gtk: bool,
+    #[arg(long, help = "Read dmenu selection from stdin (for testing)")]
+    stdin: bool,
 }
 
 /// Configuration structure for the application.
@@ -101,12 +118,14 @@ struct Config {
     max_nodes_per_city: Option<i32>,
     #[serde(default)]
     country_filter: Option<String>,
+    #[serde(default = "default_true")]
+    use_dns_cache: bool,
+    #[serde(default)]
+    nextdns_api_key: Option<String>,
+    #[serde(default)]
+    nextdns_toggle_profiles: Option<(String, String)>,
     dmenu_cmd: String,
     dmenu_args: String,
-    #[serde(default)]
-    use_gtk: bool,
-    #[serde(default)]
-    use_gtk_fallback: bool,
 }
 
 /// Custom action structure for user-defined actions.
@@ -122,6 +141,7 @@ enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    NextDns(nextdns::NextDnsAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
@@ -132,8 +152,8 @@ enum ActionType {
 #[derive(Debug)]
 enum SystemAction {
     EditConnections,
-    RfkillBlock(String),
-    RfkillUnblock(String),
+    RfkillBlock(String, String),   // (device_id, display_text)
+    RfkillUnblock(String, String), // (device_id, display_text)
     AirplaneMode(bool),
 }
 
@@ -162,14 +182,32 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
     }
 }
 
+/// Helper function for serde default value
+fn default_true() -> bool {
+    true
+}
+
 /// Returns the default configuration as a string.
 fn get_default_config() -> String {
     format!(
         r#"# General settings
 dmenu_cmd = "{}"
 dmenu_args = "{}"
-use_gtk = false
-use_gtk_fallback = true
+
+# DNS cache feature (automatically use fastest DNS from benchmark)
+# Set to false to disable cached DNS actions
+use_dns_cache = true
+
+# NextDNS configuration (no CLI required - uses API)
+# Get your API key from: https://my.nextdns.io/account
+# With API key, you can list and switch between all your profiles
+# nextdns_api_key = "your-api-key-here"
+
+# Quick toggle between two specific NextDNS profiles (optional)
+# Works even without API key if you know the profile IDs
+# Find your profile IDs at: https://my.nextdns.io
+# Example: Home/Work switching
+# nextdns_toggle_profiles = ["abc123", "xyz789"]
 
 # Exit node filtering options
 # List of exit nodes to exclude
@@ -197,14 +235,138 @@ cmd = "notify-send 'hello' 'world'"
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    // Initialize logger with appropriate level
+    if args.profile {
+        std::env::set_var("RUST_LOG", "debug");
+    } else {
+        std::env::set_var("RUST_LOG", &args.log_level);
+    }
+    logger::init();
+
+    // Start profiling total execution time
+    let list_generation_profiler = logger::Profiler::new("Generated list");
+
+    // Validate NextDNS API key if requested
+    if args.validate_nextdns_key && !args.nextdns_api_key.is_empty() {
+        println!("Validating NextDNS API key...");
+        debug!(
+            "Validating NextDNS API key (first 4 chars: {})",
+            if args.nextdns_api_key.len() > 4 {
+                &args.nextdns_api_key[0..4]
+            } else {
+                &args.nextdns_api_key
+            }
+        );
+
+        let client = reqwest::Client::new();
+        debug!("Sending request to NextDNS API...");
+        let response = client
+            .get("https://api.nextdns.io/profiles")
+            .header("X-Api-Key", &args.nextdns_api_key)
+            .send()
+            .await?;
+
+        let status = response.status();
+        debug!("API response status: {}", status);
+        if status.is_success() {
+            let body = response.text().await?;
+            debug!("API response body: {}", body);
+
+            // Parse the profiles from the response
+            let profiles_json: serde_json::Value = match serde_json::from_str(&body) {
+                Ok(json) => json,
+                Err(e) => {
+                    eprintln!("WARNING: Could not parse API response as JSON: {}", e);
+                    eprintln!("Raw response: {}", body);
+                    println!("NextDNS API key is valid, but response could not be parsed!");
+                    return Ok(());
+                }
+            };
+
+            println!("NextDNS API key is valid!");
+
+            // Extract and display profiles
+            let profiles_arr = if let Some(data) = profiles_json.get("data") {
+                // New format - object with a "data" array
+                data.as_array()
+            } else if let serde_json::Value::Array(arr) = &profiles_json {
+                // Old format - direct array
+                Some(arr)
+            } else {
+                None
+            };
+
+            if let Some(arr) = profiles_arr {
+                println!("Found {} NextDNS profiles:", arr.len());
+                for profile in arr {
+                    let id = profile
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let name = profile
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unnamed");
+                    println!(" - {} ({})", name, id);
+                }
+            } else {
+                println!("Warning: API response doesn't contain profiles in a recognized format.");
+                debug!("Response format: {:?}", profiles_json);
+            }
+            return Ok(());
+        } else {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error response".to_string());
+            debug!("API error response: {}", error_body);
+            eprintln!("Invalid NextDNS API key: {}", status);
+            return Err("Invalid NextDNS API key".into());
+        }
+    }
+
+    // Handle NextDNS profile refresh request
+    if args.refresh_nextdns_profiles {
+        println!("Refreshing NextDNS profiles...");
+        let api_key = if !args.nextdns_api_key.is_empty() {
+            args.nextdns_api_key.clone()
+        } else {
+            get_config()
+                .ok()
+                .and_then(|c| c.nextdns_api_key.clone())
+                .map(|k| k.trim().to_string())
+                .unwrap_or_default()
+        };
+
+        if api_key.is_empty() {
+            error!("NextDNS API key required for profile refresh");
+            error!("Provide with --nextdns-api-key or in config.toml");
+            return Err("Missing NextDNS API key".into());
+        }
+
+        debug!(
+            "Using API key (first 4 chars): {}",
+            if api_key.len() > 4 {
+                &api_key[0..4]
+            } else {
+                &api_key
+            }
+        );
+        let result = nextdns::fetch_profiles_blocking(&api_key).await?;
+        println!("Successfully refreshed {} NextDNS profiles:", result.len());
+        for profile in result {
+            println!(
+                " - {} ({})",
+                profile.name.unwrap_or_else(|| "Unnamed".to_string()),
+                profile.id
+            );
+        }
+        return Ok(());
+    }
+
     create_default_config_if_missing()?;
 
-    let mut config = get_config()?; // Load the configuration once
-
-    // Override config with command line args if specified
-    if args.use_gtk {
-        config.use_gtk = true;
-    }
+    let config = get_config()?; // Load the configuration once
 
     check_required_commands(&config)?;
 
@@ -213,27 +375,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let command_runner = RealCommandRunner;
 
     // Measure performance if profiling is enabled
-    let start_time = if args.profile {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
+    // List generation profiling is now handled by the logger::Profiler
 
     let actions = get_actions(&args, &config, &command_runner).await?;
 
     // Display profiling information if enabled
-    if let Some(start) = start_time {
-        let duration = start.elapsed();
-        eprintln!(">>> PROFILE: Generated list in {:.2?}", duration);
-        if args.profile {
-            let _ = Notification::new()
-                .summary("Network-dmenu Profiling")
-                .body(&format!("Generated list in {:.2?}", duration))
-                .show();
-        }
+    // Log the total execution time
+    list_generation_profiler.log();
+
+    if args.profile {
+        let _ = Notification::new()
+            .summary("Network-dmenu Profiling")
+            .body(&format!(
+                "Generated list in {:.2?}",
+                list_generation_profiler.elapsed()
+            ))
+            .show();
     }
 
-    let action = select_action_from_menu(&config, &actions).await?;
+    let action = select_action_from_menu(&config, &actions, args.stdin).await?;
 
     if !action.is_empty() {
         let selected_action = find_selected_action(&action, &actions)?;
@@ -254,56 +414,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Checks if required commands are installed.
-fn check_required_commands(config: &Config) -> Result<(), Box<dyn Error>> {
+fn check_required_commands(_config: &Config) -> Result<(), Box<dyn Error>> {
     if !is_command_installed("pinentry-gnome3") {
         eprintln!("Warning: pinentry-gnome3 command missing");
-    }
-
-    #[cfg(feature = "gtk-ui")]
-    let using_gtk = config.use_gtk;
-
-    #[cfg(not(feature = "gtk-ui"))]
-    let using_gtk = false;
-
-    if !using_gtk && !is_command_installed(&config.dmenu_cmd) {
-        panic!("dmenu command missing and GTK UI not enabled");
     }
 
     Ok(())
 }
 
-/// Selects an action from the menu using dmenu or GTK UI.
+/// Selects an action from the menu using dmenu
 async fn select_action_from_menu(
     config: &Config,
     actions: &[ActionType],
+    use_stdin: bool,
 ) -> Result<String, Box<dyn Error>> {
-    // Convert actions to string representation
-    let action_strings: Vec<String> = actions
-        .iter()
-        .map(|action| action_to_string(action))
-        .collect();
-
-    // Try GTK UI if feature is enabled and requested
-    #[cfg(feature = "gtk-ui")]
-    if config.use_gtk {
-        // Use blocking context to prevent thread initialization errors with GTK
-        match select_action_with_gtk(action_strings.clone()).await {
-            Ok(Some(selected)) => return Ok(selected),
-            Ok(None) => {
-                if !config.use_gtk_fallback {
-                    // Just return empty string when user cancels or presses Escape
-                    return Ok(String::new());
-                }
-                // Falls through to dmenu if use_gtk_fallback is true
-            }
-            Err(_) => {
-                // GTK UI failed to initialize, falling back to dmenu
-                eprintln!("GTK UI failed to initialize, falling back to dmenu");
-            }
-        }
+    if use_stdin {
+        // Read selection from stdin for testing
+        use std::io::{self, BufRead};
+        let stdin = io::stdin();
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        let selected = line.trim().to_string();
+        return Ok(selected);
     }
 
-    // Fall back to dmenu if GTK UI is not enabled, not requested, or failed
+    // Convert actions to string representation
+    let action_strings: Vec<String> = actions.iter().map(action_to_string).collect();
+
     let mut child = Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
@@ -322,57 +459,14 @@ async fn select_action_from_menu(
     Ok(selected)
 }
 
-/// Converts an action to a string for display.
-/// Format device information for rfkill block/unblock operations
-fn format_rfkill_device(device: &str, block: bool) -> String {
-    let (icon, action) = if block {
-        (ICON_CROSS, "Turn OFF")
-    } else {
-        (ICON_SIGNAL, "Turn ON")
-    };
-
-    // Check if this is a device ID (numeric) or a device type
-    if let Ok(id) = device.parse::<u32>() {
-        // Load devices from cache
-        let all_devices = rfkill::load_rfkill_devices_from_cache();
-
-        // Find device by ID
-        let device_info = all_devices.iter().find(|d| d.id == id);
-
-        match device_info {
-            Some(info) => format_entry(
-                ACTION_TYPE_SYSTEM,
-                icon,
-                &format!(
-                    "{} {} ({})",
-                    action,
-                    info.device_type_display(),
-                    info.device
-                ),
-            ),
-            None => format_entry(
-                ACTION_TYPE_SYSTEM,
-                icon,
-                &format!("{} device ID: {}", action, id),
-            ),
-        }
-    } else {
-        format_entry(
-            ACTION_TYPE_SYSTEM,
-            icon,
-            &format!("{} all {} devices", action, device),
-        )
-    }
-}
-
 fn action_to_string(action: &ActionType) -> String {
     match action {
         ActionType::Custom(custom_action) => {
             format_entry(ACTION_TYPE_ACTION, "", &custom_action.display)
         }
         ActionType::System(system_action) => match system_action {
-            SystemAction::RfkillBlock(device) => format_rfkill_device(device, true),
-            SystemAction::RfkillUnblock(device) => format_rfkill_device(device, false),
+            SystemAction::RfkillBlock(_, display_text) => display_text.clone(),
+            SystemAction::RfkillUnblock(_, display_text) => display_text.clone(),
             SystemAction::EditConnections => {
                 format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
             }
@@ -401,12 +495,12 @@ fn action_to_string(action: &ActionType) -> String {
                 },
             ),
             TailscaleAction::SetShields(enable) => {
-                let text = if *enable {
-                    TAILSCALE_SHIELDS_UP
+                let (icon, text) = if *enable {
+                    (ICON_FIREWALL_BLOCK, TAILSCALE_SHIELDS_UP)
                 } else {
-                    TAILSCALE_SHIELDS_DOWN
+                    (ICON_FIREWALL_ALLOW, TAILSCALE_SHIELDS_DOWN)
                 };
-                format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+                format_entry(ACTION_TYPE_TAILSCALE, icon, text)
             }
             TailscaleAction::SetAcceptRoutes(enable) => {
                 let text = if *enable {
@@ -460,10 +554,12 @@ fn action_to_string(action: &ActionType) -> String {
                 // Try to find the hostname for this node key from locked nodes
                 if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
                     if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
+                        let flag = get_flag(&node.country_code);
                         format_entry(
                             ACTION_TYPE_TAILSCALE,
-                            ICON_CHECK,
+                            ICON_KEY,
                             &TAILSCALE_SIGN_NODE_DETAILED
+                                .replace("{flag}", &flag)
                                 .replace("{hostname}", extract_short_hostname(&node.hostname))
                                 .replace("{machine}", &node.machine_name)
                                 .replace("{key}", &node_key[..8]),
@@ -471,14 +567,14 @@ fn action_to_string(action: &ActionType) -> String {
                     } else {
                         format_entry(
                             ACTION_TYPE_TAILSCALE,
-                            ICON_CHECK,
+                            ICON_KEY,
                             &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                         )
                     }
                 } else {
                     format_entry(
                         ACTION_TYPE_TAILSCALE,
-                        ICON_CHECK,
+                        ICON_KEY,
                         &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                     )
                 }
@@ -500,6 +596,9 @@ fn action_to_string(action: &ActionType) -> String {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
         },
         ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
+        ActionType::NextDns(nextdns_action) => {
+            format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
+        }
     }
 }
 
@@ -515,10 +614,8 @@ fn find_selected_action<'a>(
                 format_entry(ACTION_TYPE_ACTION, "", &custom_action.display) == action
             }
             ActionType::System(system_action) => match system_action {
-                SystemAction::RfkillBlock(device) => action == format_rfkill_device(device, true),
-                SystemAction::RfkillUnblock(device) => {
-                    action == format_rfkill_device(device, false)
-                }
+                SystemAction::RfkillBlock(_, display_text) => action == display_text,
+                SystemAction::RfkillUnblock(_, display_text) => action == display_text,
                 SystemAction::EditConnections => {
                     action == format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, SYSTEM_EDIT_CONNECTIONS)
                 }
@@ -560,12 +657,12 @@ fn find_selected_action<'a>(
                         )
                 }
                 TailscaleAction::SetShields(enable) => {
-                    let text = if *enable {
-                        TAILSCALE_SHIELDS_UP
+                    let (icon, text) = if *enable {
+                        (ICON_FIREWALL_BLOCK, TAILSCALE_SHIELDS_UP)
                     } else {
-                        TAILSCALE_SHIELDS_DOWN
+                        (ICON_FIREWALL_ALLOW, TAILSCALE_SHIELDS_DOWN)
                     };
-                    action == format_entry(ACTION_TYPE_TAILSCALE, ICON_SHIELD, text)
+                    action == format_entry(ACTION_TYPE_TAILSCALE, icon, text)
                 }
                 TailscaleAction::SetAcceptRoutes(enable) => {
                     let text = if *enable {
@@ -622,8 +719,9 @@ fn find_selected_action<'a>(
                             action
                                 == format_entry(
                                     ACTION_TYPE_TAILSCALE,
-                                    ICON_CHECK,
+                                    ICON_KEY,
                                     &TAILSCALE_SIGN_NODE_DETAILED
+                                        .replace("{flag}", &get_flag(&node.country_code))
                                         .replace(
                                             "{hostname}",
                                             extract_short_hostname(&node.hostname),
@@ -674,6 +772,9 @@ fn find_selected_action<'a>(
             },
             ActionType::Diagnostic(diagnostic_action) => {
                 action == diagnostic_action_to_string(diagnostic_action)
+            }
+            ActionType::NextDns(nextdns_action) => {
+                action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
             }
         })
         .ok_or(format!("Action not found: {action}").into())
@@ -731,61 +832,61 @@ async fn get_actions(
     config: &Config,
     command_runner: &dyn CommandRunner,
 ) -> Result<Vec<ActionType>, Box<dyn Error>> {
-    let mut actions = config
-        .actions
-        .clone()
+    // Start with user's custom actions from config
+    let mut custom_actions = config.actions.clone();
+
+    // Try to load DNS cache and add dynamic DNS actions
+    // Only add cached DNS actions if we have benchmark results for this network and feature is enabled
+    if config.use_dns_cache {
+        if let Ok(cache_storage) = dns_cache::DnsCacheStorage::load() {
+            if let Ok(network_id) = dns_cache::get_current_network_id(command_runner).await {
+                if let Some(dns_cache) = cache_storage.get_cache(&network_id) {
+                    // Generate DNS actions from cache
+                    let dns_actions = dns_cache::generate_dns_actions_from_cache(dns_cache);
+
+                    // Add the cached DNS actions at the beginning
+                    // These will appear before user's custom actions
+                    for dns_action in dns_actions.into_iter().rev() {
+                        custom_actions.insert(
+                            0,
+                            CustomAction {
+                                display: dns_action.display,
+                                cmd: dns_action.cmd,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut actions = custom_actions
         .into_iter()
         .map(ActionType::Custom)
         .collect::<Vec<_>>();
 
     // Performance optimization: Start with the fastest operations first
     // Collect Bluetooth devices early - usually very fast
-    let bluetooth_start = if args.profile {
-        Some(Instant::now())
-    } else {
-        None
-    };
+    let bluetooth_profiler = logger::Profiler::new("Bluetooth scan");
     let bluetooth_devices = if !args.no_bluetooth && is_command_installed("bluetoothctl") {
         get_paired_bluetooth_devices(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
-    if args.profile && bluetooth_start.is_some() {
-        let elapsed = bluetooth_start.unwrap().elapsed();
-        eprintln!(">>> PROFILE: Bluetooth scan took: {:.2?}", elapsed);
-        let _ = Notification::new()
-            .summary("Network-dmenu Profiling")
-            .body(&format!("Bluetooth scan took: {:.2?}", elapsed))
-            .show();
-    }
+    bluetooth_profiler.log();
 
     // Performance optimization: Collect VPN networks early - usually fast
-    let vpn_start = if args.profile {
-        Some(Instant::now())
-    } else {
-        None
-    };
+    let vpn_profiler = logger::Profiler::new("VPN scan");
     let vpn_networks = if !args.no_vpn && is_command_installed("nmcli") {
         get_nm_vpn_networks(command_runner).unwrap_or_default()
     } else {
         vec![]
     };
-    if args.profile && vpn_start.is_some() {
-        let elapsed = vpn_start.unwrap().elapsed();
-        eprintln!(">>> PROFILE: VPN scan took: {:.2?}", elapsed);
-        let _ = Notification::new()
-            .summary("Network-dmenu Profiling")
-            .body(&format!("VPN scan took: {:.2?}", elapsed))
-            .show();
-    }
+    vpn_profiler.log();
 
     // Performance optimization: Start WiFi scanning early as it can be slow
     // This is typically the most time-consuming network operation
-    let wifi_start = if args.profile {
-        Some(Instant::now())
-    } else {
-        None
-    };
+    let wifi_profiler = logger::Profiler::new("WiFi scan");
     let wifi_networks = if !args.no_wifi {
         if is_command_installed("nmcli") {
             get_nm_wifi_networks(command_runner).unwrap_or_default()
@@ -797,14 +898,7 @@ async fn get_actions(
     } else {
         vec![]
     };
-    if args.profile && wifi_start.is_some() {
-        let elapsed = wifi_start.unwrap().elapsed();
-        eprintln!(">>> PROFILE: WiFi scan took: {:.2?}", elapsed);
-        let _ = Notification::new()
-            .summary("Network-dmenu Profiling")
-            .body(&format!("WiFi scan took: {:.2?}", elapsed))
-            .show();
-    }
+    wifi_profiler.log();
 
     // Performance optimization: Add simple stateless items while network scans are processing
     // These operations are extremely fast and require no network interaction
@@ -815,102 +909,86 @@ async fn get_actions(
         actions.push(ActionType::System(SystemAction::EditConnections));
     }
 
-    // Start timing for all system actions
-    let system_actions_start = if args.profile {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
+    let system_profiler = logger::Profiler::new("All system actions");
 
     // Add rfkill device actions for a specific device type
     async fn add_rfkill_device_actions(
         actions: &mut Vec<ActionType>,
         device_type: &str,
-        skip_cache: bool,
     ) -> Result<(), Box<dyn Error>> {
         // Check for specific devices first
         let devices = rfkill::get_rfkill_devices_by_type(device_type)
             .await
             .unwrap_or_default();
 
-        // Cache devices for later use in action_to_string
-        if !devices.is_empty() && !skip_cache {
-            // Cache rfkill devices for non-async functions to use
-            let _ = rfkill::cache_rfkill_devices().await;
-        }
-
         if !devices.is_empty() {
             // Add specific device actions
             for device in &devices {
+                let device_display =
+                    format!("{} ({})", device.device_type_display(), device.device);
+
                 // Use is_unblocked to determine status - uses both methods from RfkillDevice
-                if device.is_blocked() {
-                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                        device.id.to_string(),
-                    )));
-                } else if device.is_unblocked() {
+                if device.is_unblocked() {
+                    let display_text = format_entry(
+                        ACTION_TYPE_SYSTEM,
+                        ICON_CROSS,
+                        &format!("Turn OFF {}", device_display),
+                    );
                     actions.push(ActionType::System(SystemAction::RfkillBlock(
                         device.id.to_string(),
+                        display_text,
+                    )));
+                } else {
+                    let display_text = format_entry(
+                        ACTION_TYPE_SYSTEM,
+                        ICON_SIGNAL,
+                        &format!("Turn ON {}", device_display),
+                    );
+                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
+                        device.id.to_string(),
+                        display_text,
                     )));
                 }
             }
-        } else {
-            // No specific devices found, add generic actions
-            actions.push(ActionType::System(SystemAction::RfkillBlock(
-                device_type.to_string(),
-            )));
-            actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                device_type.to_string(),
-            )));
+
+            // Add general actions for the device type only if there are devices
+            let _type_display = match device_type {
+                "wlan" => "WiFi",
+                "bluetooth" => "Bluetooth",
+                "nfc" => "NFC",
+                "uwb" => "UWB",
+                "wimax" => "WiMAX",
+                "wwan" => "WWAN",
+                "gps" => "GPS",
+                "fm" => "FM",
+                _ => device_type,
+            };
+
+            // Type-wide toggle actions removed as per requirement
+            // Only keeping per-device toggles
         }
 
         Ok(())
     }
 
     if !args.no_wifi && rfkill::is_rfkill_available() {
-        let wifi_rfkill_start = if args.profile {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        let wifi_rfkill_profiler = logger::Profiler::new("WiFi rfkill actions");
 
-        add_rfkill_device_actions(&mut actions, "wlan", false)
+        add_rfkill_device_actions(&mut actions, "wlan")
             .await
             .unwrap_or_default();
 
-        if args.profile && wifi_rfkill_start.is_some() {
-            let elapsed = wifi_rfkill_start.unwrap().elapsed();
-            eprintln!(">>> PROFILE: WiFi rfkill actions took: {:.2?}", elapsed);
-            let _ = Notification::new()
-                .summary("Network-dmenu Profiling")
-                .body(&format!("WiFi rfkill actions took: {:.2?}", elapsed))
-                .show();
-        }
+        wifi_rfkill_profiler.log();
     }
 
     if !args.no_bluetooth && rfkill::is_rfkill_available() {
-        let bt_rfkill_start = if args.profile {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        let bluetooth_rfkill_profiler = logger::Profiler::new("Bluetooth rfkill actions");
 
-        // Skip caching if we already did it for WiFi devices
-        let skip_cache = std::path::Path::new(&rfkill::get_rfkill_cache_path()).exists();
-        add_rfkill_device_actions(&mut actions, "bluetooth", skip_cache)
+        add_rfkill_device_actions(&mut actions, "bluetooth")
             .await
             .unwrap_or_default();
 
-        if args.profile && bt_rfkill_start.is_some() {
-            let elapsed = bt_rfkill_start.unwrap().elapsed();
-            eprintln!(
-                ">>> PROFILE: Bluetooth rfkill actions took: {:.2?}",
-                elapsed
-            );
-            let _ = Notification::new()
-                .summary("Network-dmenu Profiling")
-                .body(&format!("Bluetooth rfkill actions took: {:.2?}", elapsed))
-                .show();
-        }
+        bluetooth_rfkill_profiler.log();
     }
 
     // Determine if airplane mode is enabled and add appropriate toggle action
@@ -950,35 +1028,17 @@ async fn get_actions(
 
     // Add airplane mode toggle if rfkill is available
     if rfkill::is_rfkill_available() {
-        let airplane_mode_start = if args.profile {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        let airplane_profiler = logger::Profiler::new("Airplane mode action");
 
         add_airplane_mode_action(&mut actions)
             .await
             .unwrap_or_default();
 
-        if args.profile && airplane_mode_start.is_some() {
-            let elapsed = airplane_mode_start.unwrap().elapsed();
-            eprintln!(">>> PROFILE: Airplane mode action took: {:.2?}", elapsed);
-            let _ = Notification::new()
-                .summary("Network-dmenu Profiling")
-                .body(&format!("Airplane mode action took: {:.2?}", elapsed))
-                .show();
-        }
+        airplane_profiler.log();
     }
 
     // Display summary of all system actions timing
-    if args.profile && system_actions_start.is_some() {
-        let elapsed = system_actions_start.unwrap().elapsed();
-        eprintln!(">>> PROFILE: All system actions took: {:.2?}", elapsed);
-        let _ = Notification::new()
-            .summary("Network-dmenu Profiling")
-            .body(&format!("All system actions took: {:.2?}", elapsed))
-            .show();
-    }
+    system_profiler.log();
 
     // Performance optimization: Now add all the collected network information
     // By collecting the data first and then adding it all at once, we optimize the process
@@ -1006,11 +1066,7 @@ async fn get_actions(
     }
 
     // Performance optimization: Add Tailscale actions last as they can be expensive
-    let tailscale_start = if args.profile {
-        Some(Instant::now())
-    } else {
-        None
-    };
+    let tailscale_profiler = logger::Profiler::new("Tailscale operations");
 
     // Get current Tailscale preferences to determine what toggle options to show
     let prefs = parse_tailscale_prefs(command_runner).unwrap();
@@ -1034,7 +1090,11 @@ async fn get_actions(
         let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
         let country = args.country.as_deref().or(config.country_filter.as_deref());
 
+        // Create TailscaleState once to avoid multiple calls to tailscale status
+        let tailscale_state = TailscaleState::new(command_runner);
+
         let mullvad_actions = get_mullvad_actions(
+            &tailscale_state,
             command_runner,
             &config.exclude_exit_node,
             max_per_country,
@@ -1047,7 +1107,7 @@ async fn get_actions(
                 .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
         );
 
-        if is_exit_node_active(command_runner).unwrap_or(false) {
+        if is_exit_node_active(&tailscale_state) {
             actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
         }
 
@@ -1077,13 +1137,84 @@ async fn get_actions(
             }
         }
     }
-    if args.profile && tailscale_start.is_some() {
-        let elapsed = tailscale_start.unwrap().elapsed();
-        eprintln!(">>> PROFILE: Tailscale operations took: {:.2?}", elapsed);
-        let _ = Notification::new()
-            .summary("Network-dmenu Profiling")
-            .body(&format!("Tailscale operations took: {:.2?}", elapsed))
-            .show();
+    tailscale_profiler.log();
+
+    // Add NextDNS actions (API-based, no CLI required)
+    if !args.no_nextdns {
+        let nextdns_profiler = logger::Profiler::new("NextDNS operations");
+
+        let nextdns_toggle = config
+            .nextdns_toggle_profiles
+            .as_ref()
+            .map(|(a, b)| (a.as_str(), b.as_str()));
+
+        // Prioritize command-line API key over config file
+        let nextdns_api_key: String = if !args.nextdns_api_key.is_empty() {
+            debug!(
+                "Using NextDNS API key from command line (first 4 chars: {})",
+                if args.nextdns_api_key.len() > 4 {
+                    &args.nextdns_api_key[0..4]
+                } else {
+                    &args.nextdns_api_key
+                }
+            );
+            args.nextdns_api_key.clone().trim().to_string()
+        } else {
+            debug!("Command line API key is empty, checking config file");
+            let key = config.nextdns_api_key.clone().unwrap_or_default();
+            if !key.is_empty() {
+                let trimmed_key = key.trim().to_string();
+                debug!(
+                    "Using NextDNS API key from config file (first 4 chars: {})",
+                    if trimmed_key.len() > 4 {
+                        &trimmed_key[0..4]
+                    } else {
+                        &trimmed_key
+                    }
+                );
+                trimmed_key
+            } else {
+                debug!("No NextDNS API key found in config file");
+                String::new()
+            }
+        };
+
+        if nextdns_api_key.is_empty() && nextdns_toggle.is_none() {
+            debug!("Warning: No NextDNS API key provided. Some features will be limited.");
+            debug!("Set with --nextdns-api-key or in config.toml");
+        }
+
+        debug!(
+            "Calling get_nextdns_actions with API key: {}",
+            if nextdns_api_key.is_empty() {
+                "None"
+            } else if nextdns_api_key.len() > 4 {
+                &nextdns_api_key[0..4]
+            } else {
+                &nextdns_api_key
+            }
+        );
+
+        let nextdns_actions = get_nextdns_actions(
+            if nextdns_api_key.is_empty() {
+                None
+            } else {
+                Some(nextdns_api_key.as_str())
+            },
+            nextdns_toggle,
+        )
+        .await
+        .unwrap_or_default();
+
+        debug!(
+            "get_nextdns_actions returned {} actions",
+            nextdns_actions.len()
+        );
+
+        if !nextdns_actions.is_empty() {
+            actions.extend(nextdns_actions.into_iter().map(ActionType::NextDns));
+        }
+        nextdns_profiler.log();
     }
 
     // Add diagnostic actions (get_diagnostic_actions checks for tool availability internally)
@@ -1094,6 +1225,10 @@ async fn get_actions(
         }
     }
 
+    // Log overall performance
+    debug!("Generated list with {} actions", actions.len());
+
+    // Add any additional system actions here
     Ok(actions)
 }
 
@@ -1160,9 +1295,11 @@ async fn handle_system_action(
     };
 
     let result = match action {
-        SystemAction::RfkillBlock(device) => handle_rfkill_operation(device, true, profile).await,
-        SystemAction::RfkillUnblock(device) => {
-            handle_rfkill_operation(device, false, profile).await
+        SystemAction::RfkillBlock(device_id, _) => {
+            handle_rfkill_operation(device_id, true, profile).await
+        }
+        SystemAction::RfkillUnblock(device_id, _) => {
+            handle_rfkill_operation(device_id, false, profile).await
         }
         SystemAction::EditConnections => {
             let status = Command::new("nm-connection-editor").status()?;
@@ -1193,8 +1330,8 @@ async fn handle_system_action(
     // Display profiling information if enabled
     if let Some(start) = start_time {
         let action_name = match action {
-            SystemAction::RfkillBlock(device) => format!("Block {}", device),
-            SystemAction::RfkillUnblock(device) => format!("Unblock {}", device),
+            SystemAction::RfkillBlock(device_id, _) => format!("Block {}", device_id),
+            SystemAction::RfkillUnblock(device_id, _) => format!("Unblock {}", device_id),
             SystemAction::EditConnections => "Edit connections".to_string(),
             SystemAction::AirplaneMode(enable) => {
                 format!("Airplane mode {}", if *enable { "ON" } else { "OFF" })
@@ -1399,11 +1536,77 @@ async fn set_action(
 ) -> Result<bool, Box<dyn Error>> {
     match action {
         ActionType::Custom(custom_action) => handle_custom_action(custom_action),
+        ActionType::NextDns(nextdns_action) => {
+            // First check for command-line API key
+            let args = Args::parse();
+            let api_key = if !args.nextdns_api_key.is_empty() {
+                let trimmed_key = args.nextdns_api_key.trim().to_string();
+                debug!(
+                    "Using NextDNS API key from command line in set_action (first 4 chars: {})",
+                    if trimmed_key.len() > 4 {
+                        &trimmed_key[0..4]
+                    } else {
+                        &trimmed_key
+                    }
+                );
+                Some(trimmed_key)
+            } else {
+                // Fall back to config file API key
+                debug!("Command line API key is empty in set_action, checking config file");
+                let key_opt = get_config().ok().and_then(|c| c.nextdns_api_key.clone());
+                if let Some(key) = key_opt {
+                    let trimmed_key = key.trim().to_string();
+                    if !trimmed_key.is_empty() {
+                        debug!("Using NextDNS API key from config file in set_action (first 4 chars: {})",
+                                 if trimmed_key.len() > 4 { &trimmed_key[0..4] } else { &trimmed_key });
+                        Some(trimmed_key)
+                    } else {
+                        debug!("Empty NextDNS API key found in config file in set_action");
+                        None
+                    }
+                } else {
+                    debug!("No NextDNS API key found in config file in set_action");
+                    None
+                }
+            };
+
+            // Convert Option<String> to Option<&str> for the handler
+            let api_key_ref = api_key.as_deref();
+            debug!(
+                "Passing API key to handle_nextdns_action: {}",
+                if let Some(key) = api_key_ref {
+                    if key.len() > 4 {
+                        &key[0..4]
+                    } else {
+                        key
+                    }
+                } else {
+                    "None"
+                }
+            );
+
+            if api_key.is_none() && matches!(nextdns_action, &NextDnsAction::RefreshProfiles) {
+                error!("NextDNS API key required for this operation");
+                error!("Provide with --nextdns-api-key or in config.toml");
+                return Ok(false);
+            }
+
+            debug!("Action being handled: {:?}", nextdns_action);
+            let result = handle_nextdns_action(nextdns_action, command_runner, api_key_ref).await;
+            debug!("handle_nextdns_action result: {:?}", result);
+            result
+        }
         ActionType::System(system_action) => handle_system_action(system_action, profile).await,
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
-            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender))
-                .await
+            let tailscale_state = TailscaleState::new(command_runner);
+            handle_tailscale_action(
+                mullvad_action,
+                command_runner,
+                Some(&notification_sender),
+                Some(&tailscale_state),
+            )
+            .await
         }
         ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
         ActionType::Wifi(wifi_action) => {
@@ -1480,8 +1683,6 @@ mod tests {
         assert!(config.contains("dmenu_cmd = \"dmenu\""));
         assert!(config.contains("dmenu_args = \"--no-multi\""));
         assert!(config.contains("exclude_exit_node = [\"exit1\", \"exit2\"]"));
-        assert!(config.contains("use_gtk = false"));
-        assert!(config.contains("use_gtk_fallback = true"));
         assert!(config.contains("[[actions]]"));
         assert!(config.contains("display = \"🛡️ Example\""));
         assert!(config.contains("cmd = \"notify-send 'hello' 'world'\""));
@@ -1508,16 +1709,26 @@ mod tests {
 
     #[test]
     fn test_action_to_string_system_rfkill_block() {
-        let action = ActionType::System(SystemAction::RfkillBlock("wifi".to_string()));
+        let display_text =
+            format_entry(ACTION_TYPE_SYSTEM, ICON_CROSS, "Turn OFF all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillBlock(
+            "wlan".to_string(),
+            display_text.clone(),
+        ));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - ❌ Turn OFF all wifi devices");
+        assert_eq!(result, display_text);
     }
 
     #[test]
     fn test_action_to_string_system_rfkill_unblock() {
-        let action = ActionType::System(SystemAction::RfkillUnblock("wifi".to_string()));
+        let display_text =
+            format_entry(ACTION_TYPE_SYSTEM, ICON_SIGNAL, "Turn ON all WiFi devices");
+        let action = ActionType::System(SystemAction::RfkillUnblock(
+            "wlan".to_string(),
+            display_text.clone(),
+        ));
         let result = action_to_string(&action);
-        assert_eq!(result, "system    - 📶 Turn ON all wifi devices");
+        assert_eq!(result, display_text);
     }
 
     #[test]
@@ -1574,14 +1785,14 @@ mod tests {
     fn test_action_to_string_tailscale_shields_up() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(true));
         let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - 🛡️ Shields up");
+        assert_eq!(result, "tailscale - 🚫 Block incoming connections");
     }
 
     #[test]
     fn test_action_to_string_tailscale_shields_down() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(false));
         let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - 🛡️ Shields down");
+        assert_eq!(result, "tailscale - 🔓 Allow incoming connections");
     }
 
     #[test]
@@ -1630,7 +1841,10 @@ mod tests {
     fn test_find_selected_action_success() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
+            ActionType::System(SystemAction::RfkillBlock(
+                "wlan".to_string(),
+                "system    - ❌ Turn OFF all WiFi devices".to_string(),
+            )),
         ];
 
         let result = find_selected_action("wifi      - 📶 Connect", &actions);
@@ -1646,7 +1860,10 @@ mod tests {
     fn test_find_selected_action_not_found() {
         let actions = vec![
             ActionType::Wifi(WifiAction::Connect),
-            ActionType::System(SystemAction::RfkillBlock("wifi".to_string())),
+            ActionType::System(SystemAction::RfkillBlock(
+                "wlan".to_string(),
+                "system    - ❌ Turn OFF all WiFi devices".to_string(),
+            )),
         ];
 
         let result = find_selected_action("nonexistent action", &actions);
@@ -1785,7 +2002,7 @@ mod tests {
     fn test_action_to_string_tailscale_sign_locked_node() {
         let action = ActionType::Tailscale(TailscaleAction::SignLockedNode("abcd1234".to_string()));
         let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - ✅ Sign Node: abcd1234");
+        assert_eq!(result, "tailscale - 🔑 Sign Node: abcd1234");
     }
 
     #[test]
@@ -1824,6 +2041,13 @@ mod tests {
     }
 
     #[test]
+    fn test_action_to_string_diagnostic_dns_benchmark() {
+        let action = ActionType::Diagnostic(DiagnosticAction::DnsBenchmark);
+        let result = action_to_string(&action);
+        assert_eq!(result, "diagnostic- 🔍 DNS Benchmark & Optimize");
+    }
+
+    #[test]
     fn test_exit_node_filter_config_override() {
         // Test that command-line args override config file settings
         let config = Config {
@@ -1832,6 +2056,9 @@ mod tests {
             max_nodes_per_country: Some(2),
             max_nodes_per_city: None,
             country_filter: Some("Sweden".to_string()),
+            use_dns_cache: true,
+            nextdns_api_key: None,
+            nextdns_toggle_profiles: None,
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
         };
@@ -1843,11 +2070,17 @@ mod tests {
             no_vpn: false,
             no_bluetooth: false,
             no_tailscale: false,
+            no_nextdns: false,
+            nextdns_api_key: String::new(),
+            validate_nextdns_key: false,
+            refresh_nextdns_profiles: false,
             no_diagnostics: false,
             profile: false,
             max_nodes_per_country: None,
             max_nodes_per_city: None,
             country: None,
+            stdin: false,
+            log_level: "warn".to_string(),
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);

@@ -45,6 +45,7 @@ A simple dmenu-based selector to manage Tailscale exit nodes, networkmanager, iw
 - `ss` or `netstat`, optional, for network connection listings.
 - `speedtest-cli` or `speedtest`, optional, for internet speed testing.
 - `fast`, optional, for Netflix's Fast.com speed testing.
+- [`dns-bench`](https://github.com/qwerty541/dns-bench) optional
 
 ## Configuration
 
@@ -62,18 +63,9 @@ cmd = "notify-send 'hello' 'world'"
 
 ```toml
 dmenu_cmd = "dmenu"
-dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')'"
-[[actions]]
-display = "📡 DNS: Use DHCP server"
-cmd = "sudo resolvectl revert wlan0"
+dmenu_args = "-f --no-multi -f --bind='alt-a:change-query('action')' -f --bind='alt-r:change-query('system')' -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')' -f --bind='alt-d:change-query('diagnostic')' -f --no-multi -f --bind='alt-n:change-query('nextdns')'"
 
-[[actions]]
-display = "📡 DNS: Use 1.1.1.1 server"
-cmd = "sudo resolvectl dns wlan0 '1.1.1.1#cloudflare-dns.com'; sudo resolvectl dnsovertls wlan0 yes"
-
-[[actions]]
-display = "📡 DNS: Use Hagezi's server"
-cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.com'; sudo resolvectl dnsovertls wlan0 yes"
+max_nodes_per_city = 1
 ```
 
 You can add more actions by editing this file.
@@ -87,6 +79,7 @@ network-dmenu
 ```
 
 You can also disable specific features or filter exit nodes:
+
 ```sh
 network-dmenu --no-wifi --no-bluetooth --no-diagnostics --max-nodes-per-country 2 --max-nodes-per-city 1 --country USA
 ```
@@ -116,6 +109,7 @@ network-dmenu --max-nodes-per-country 2
 ```
 
 This will show only the top 2 highest-priority exit nodes for each country. This is particularly useful for:
+
 - Reducing the number of displayed options when many exit nodes are available
 - Ensuring variety by having options from multiple countries
 - Getting the best nodes from each country based on your needs
@@ -131,6 +125,7 @@ network-dmenu --max-nodes-per-city 1
 This will show only the top highest-priority exit node for each city (e.g., Paris, Marseille, New York). Cities are determined from the location data provided by Tailscale/Mullvad.
 
 This is useful for:
+
 - Getting more granular control over node selection
 - Ensuring variety across different cities within the same country
 - Selecting specific infrastructure within a geographical area
@@ -211,6 +206,7 @@ When you sign a node, you'll receive a notification confirming success or failur
 network-dmenu includes comprehensive network diagnostic tools to help troubleshoot connectivity issues. Each diagnostic tool appears only if the required binary is installed:
 
 **Ping-based diagnostics** (requires `ping`):
+
 - **🚀 Test Connectivity**: Quick check if internet is reachable
 - **📶 Ping Gateway**: Test connection to your default gateway
 - **📶 Ping DNS Servers**: Test connectivity to common DNS servers (8.8.8.8, 1.1.1.1, 9.9.9.9)
@@ -218,16 +214,20 @@ network-dmenu includes comprehensive network diagnostic tools to help troublesho
 - **⏱️ Check Latency**: Measure network latency with detailed statistics
 
 **Network tracing** (requires `traceroute`):
+
 - **🗺️ Trace Route**: Show the network path to a destination
 
 **System information** (requires `ip`):
+
 - **🛣️ Show Routing Table**: Display current network routing configuration
 - **🔌 Show Network Interfaces**: Display network interface information
 
 **Connection monitoring** (requires `ss` or `netstat`):
+
 - **📊 Show Network Connections**: List active network connections
 
 **Internet speed testing** (requires `speedtest-cli`, `speedtest`, or `fast`):
+
 - **🚀 Speed Test**: Comprehensive internet speed test using speedtest-cli or speedtest
 - **⚡ Speed Test (Fast.com)**: Quick speed test using Netflix's fast.com service
 
@@ -245,6 +245,7 @@ The diagnostic features can be disabled using the `--no-diagnostics` flag if not
 To enable internet speed testing functionality, install one or more of these tools:
 
 **speedtest-go** (Recommended - provides detailed JSON output with pretty notifications):
+
 ```sh
 # Using go install
 go install github.com/showwin/speedtest-go@latest
@@ -254,6 +255,7 @@ go install github.com/showwin/speedtest-go@latest
 ```
 
 **speedtest-cli** (Python-based alternative):
+
 ```sh
 # Using pip
 pip install speedtest-cli
@@ -264,6 +266,7 @@ brew install speedtest-cli        # macOS
 ```
 
 **speedtest** (Official Ookla tool):
+
 ```sh
 # Download from https://www.speedtest.net/apps/cli
 # Or using package managers
@@ -272,6 +275,7 @@ brew install speedtest-cli        # macOS
 ```
 
 **fast** (Netflix's fast.com CLI):
+
 ```sh
 # Using npm
 npm install -g fast-cli

@@ -3,6 +3,7 @@ use notify_rust::Notification;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use log::debug;
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -41,8 +42,7 @@ pub async fn check_captive_portal() -> Result<(), Box<dyn Error>> {
     let response = match response_result {
         Ok(Ok(resp)) => resp,
         Ok(Err(_e)) => {
-            #[cfg(debug_assertions)]
-            eprintln!("Captive portal check error: {}", _e);
+            debug!("Captive portal check error: {}", _e);
             // Return Ok instead of propagating the error
             return Ok(());
         }

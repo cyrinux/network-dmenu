@@ -36,15 +36,52 @@
           cargoBuildOptions = attrs: attrs ++ [ "--features" "gtk-ui" ];
         };
         devShell = with pkgs; mkShell {
-          buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy pkg-config cargo-bump cargo-deny cargo-bloat cargo-feature ] ++ libs;
+          buildInputs = [
+            # Build tools
+            cairo
+            cargo
+            cargo-bloat
+            cargo-bump
+            cargo-deny
+            cargo-feature
+            clippy
+            gcc
+            gdk-pixbuf
+            glib
+            glib.dev
+            gnumake
+            gobject-introspection
+            graphene
+            dbus
+            gtk4
+            gtk4.dev
+            # GTK4 development dependencies
+            libadwaita
+            pango
+            pkg-config
+            pre-commit
+            rust-analyzer
+            rustc
+            # Rust development
+            rustfmt
+            rustPackages.clippy
+          ] ++ libs;
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
 
           # Set environment variables for pkg-config to find GTK libraries
           shellHook = ''
-            export LD_LIBRARY_PATH=${lib.makeLibraryPath [ gtk4 libadwaita glib ]}:$LD_LIBRARY_PATH
-            export PKG_CONFIG_PATH="${gtk4.dev}/lib/pkgconfig:${libadwaita}/lib/pkgconfig:${glib.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
+            export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [
+              pkgs.gtk4
+              pkgs.libadwaita
+              pkgs.glib
+            ]}:$LD_LIBRARY_PATH
+
+            # For pkg-config to find .pc files
+            export PKG_CONFIG_PATH="${pkgs.gtk4.dev}/lib/pkgconfig:${pkgs.libadwaita}/lib/pkgconfig:${pkgs.glib.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
+
             echo "GTK4 development environment ready!"
           '';
+
         };
       }
     );
