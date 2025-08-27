@@ -328,12 +328,26 @@ pub fn get_mullvad_actions(
                     mullvad_results.insert(0, existing_action);
                 } else {
                     if let Some(pos) = other_nodes.iter().position(|action| action.contains(&suggested_name)) {
-                        // Remove from other_nodes and add suggested marking
-                        let mut existing_action = other_nodes.remove(pos);
-                        if !existing_action.contains(SUGGESTED_CHECK) {
-                            existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
+                        // Remove from other_nodes and create clean format with appropriate emoji
+                        other_nodes.remove(pos);
+
+                        // Get peer data to create clean format
+                        if let Some(peer) = status.peer.values().find(|p| p.dns_name.trim_end_matches('.') == suggested_name) {
+                            let node_short_name = extract_short_name(&suggested_name);
+                            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                            let is_active = active_exit_node == suggested_name;
+                            let icon = if is_active {
+                                ICON_CHECK
+                            } else {
+                                ICON_STAR
+                            };
+                            let suggested_action = format_entry(
+                                "exit-node",
+                                icon,
+                                &format!("{} - {} - {} (suggested)", node_short_name, node_ip, suggested_name)
+                            );
+                            mullvad_results.insert(0, suggested_action);
                         }
-                        mullvad_results.insert(0, existing_action);
                     } else {
                         // Add new suggested node
                         let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
