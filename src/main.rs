@@ -1,19 +1,3 @@
-use clap::Parser;
-use command::CommandRunner;
-use dirs::config_dir;
-#[cfg(feature = "gtk-ui")]
-use network_dmenu::select_action_with_gtk;
-use notify_rust::Notification;
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::Instant;
-
-use utils::check_captive_portal;
-
 mod bluetooth;
 mod command;
 mod constants;
@@ -24,29 +8,39 @@ mod rfkill;
 mod tailscale;
 mod tailscale_prefs;
 mod utils;
-
 use bluetooth::{
     get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
 };
-use command::{is_command_installed, RealCommandRunner};
+use clap::Parser;
+use command::{is_command_installed, CommandRunner, RealCommandRunner};
+use constants::*;
 use diagnostics::{
     diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
 };
+use dirs::config_dir;
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
 use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
     get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
 };
+use notify_rust::Notification;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::Instant;
 use tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
 use tailscale_prefs::parse_tailscale_prefs;
+use utils::check_captive_portal;
 
-use constants::*;
-// Make sure ICON_KEY is available
-use constants::{ICON_FIREWALL_ALLOW, ICON_FIREWALL_BLOCK, ICON_KEY};
+#[cfg(feature = "gtk-ui")]
+use network_dmenu::select_action_with_gtk;
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug)]
@@ -81,7 +75,7 @@ struct Args {
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
     )]
     country: Option<String>,
-    // #[cfg(feature = "gtk-ui")]
+    #[cfg(feature = "gtk-ui")]
     #[arg(
         long,
         help = "Use built-in GTK UI instead of dmenu (requires --features gtk-ui)"
@@ -203,6 +197,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut config = get_config()?; // Load the configuration once
 
     // Override config with command line args if specified
+    #[cfg(feature = "gtk-ui")]
     if args.use_gtk {
         config.use_gtk = true;
     }
@@ -1021,7 +1016,7 @@ async fn get_actions(
                 .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
         );
 
-        if is_exit_node_active(&tailscale_state).unwrap_or(false) {
+        if is_exit_node_active(&tailscale_state) {
             actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
         }
 
@@ -1379,8 +1374,13 @@ async fn set_action(
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
             let tailscale_state = TailscaleState::new(command_runner);
-            handle_tailscale_action(mullvad_action, command_runner, Some(&notification_sender), Some(&tailscale_state))
-                .await
+            handle_tailscale_action(
+                mullvad_action,
+                command_runner,
+                Some(&notification_sender),
+                Some(&tailscale_state),
+            )
+            .await
         }
         ActionType::Vpn(vpn_action) => handle_vpn_action(vpn_action, command_runner).await,
         ActionType::Wifi(wifi_action) => {
@@ -1843,6 +1843,7 @@ mod tests {
             max_nodes_per_country: None,
             max_nodes_per_city: None,
             country: None,
+            #[cfg(feature = "gtk-ui")]
             use_gtk: false,
         };
 

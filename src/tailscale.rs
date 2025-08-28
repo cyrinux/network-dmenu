@@ -146,24 +146,15 @@ impl TailscaleState {
                 }
 
                 // Get suggested exit node
-                state.suggested_exit_node = get_exit_node_suggested(command_runner).unwrap_or_default();
-            },
+                state.suggested_exit_node =
+                    get_exit_node_suggested(command_runner).unwrap_or_default();
+            }
             Err(e) => {
                 eprintln!("Failed to parse Tailscale status JSON: {e}");
             }
         };
 
         state
-    }
-
-    /// Checks if an exit node is currently active
-    pub fn is_exit_node_active(&self) -> bool {
-        for peer in self.status.peer.values() {
-            if peer.active && peer.exit_node {
-                return true;
-            }
-        }
-        false
     }
 }
 
@@ -209,218 +200,255 @@ pub fn get_mullvad_actions(
     // Use the pre-loaded status data
     let status = &state.status;
 
-        #[cfg(debug_assertions)]
-        println!("Found {} peers in Tailscale status", status.peer.len());
+    #[cfg(debug_assertions)]
+    println!("Found {} peers in Tailscale status", status.peer.len());
 
-        // Group nodes by country and city
-        let mut nodes_by_country: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
-        let mut nodes_by_city: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
+    // Group nodes by country and city
+    let mut nodes_by_country: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
+    let mut nodes_by_city: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
 
-        // Filter for Mullvad exit nodes
-        for (_, peer) in status.peer.iter() {
-            // Basic filter conditions
-            if !peer.dns_name.contains("mullvad.ts.net") ||
-               !peer.exit_node_option ||
-               exclude_set.iter().any(|excluded| *excluded == peer.dns_name.trim_end_matches('.')) {
-                continue;
-            }
+    // Filter for Mullvad exit nodes
+    for (_, peer) in status.peer.iter() {
+        // Basic filter conditions
+        if !peer.dns_name.contains("mullvad.ts.net")
+            || !peer.exit_node_option
+            || exclude_set
+                .iter()
+                .any(|excluded| *excluded == peer.dns_name.trim_end_matches('.'))
+        {
+            continue;
+        }
 
-            // Country filter check
-            if let Some(country_name) = country_filter {
-                if let Some(loc) = &peer.location {
-                    if loc.country.is_empty() || !loc.country.to_lowercase().contains(&country_name.to_lowercase()) {
-                        continue;
-                    }
-                } else {
+        // Country filter check
+        if let Some(country_name) = country_filter {
+            if let Some(loc) = &peer.location {
+                if loc.country.is_empty()
+                    || !loc
+                        .country
+                        .to_lowercase()
+                        .contains(&country_name.to_lowercase())
+                {
                     continue;
                 }
-            }
-
-            // Get country and city from location data
-            let country = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
-                if loc.country.is_empty() { "Unknown".to_string() } else { loc.country.clone() }
-            });
-
-            let city = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
-                if loc.city.is_empty() { "Unknown".to_string() } else { loc.city.clone() }
-            });
-
-            // Add to the country and city groups
-            nodes_by_country.entry(country).or_default().push(peer);
-            nodes_by_city.entry(city).or_default().push(peer);
-        }
-
-        // Function to sort nodes by priority (highest first)
-        let sort_by_priority = |nodes: &mut Vec<&TailscalePeer>| {
-            nodes.sort_by(|a, b| {
-                let a_priority = a.location.as_ref().and_then(|loc| loc.priority).unwrap_or(-1);
-                let b_priority = b.location.as_ref().and_then(|loc| loc.priority).unwrap_or(-1);
-                b_priority.cmp(&a_priority)
-            });
-        };
-
-        // Select nodes based on filtering parameters
-        let mut selected_nodes = HashMap::new();
-
-        if let Some(max) = max_per_city {
-            // Filter by city - take top N nodes per city
-            for (_, mut nodes) in nodes_by_city {
-                sort_by_priority(&mut nodes);
-                for peer in nodes.into_iter().take(max as usize) {
-                    let node_name = peer.dns_name.trim_end_matches('.').to_string();
-                    selected_nodes.insert(node_name, peer);
-                }
-            }
-        } else if let Some(max) = max_per_country {
-            // Filter by country - take top N nodes per country
-            for (_, mut nodes) in nodes_by_country {
-                sort_by_priority(&mut nodes);
-                for peer in nodes.into_iter().take(max as usize) {
-                    let node_name = peer.dns_name.trim_end_matches('.').to_string();
-                    selected_nodes.insert(node_name, peer);
-                }
-            }
-        } else {
-            // No filtering - include all nodes
-            for nodes in nodes_by_country.values() {
-                for &peer in nodes {
-                    let node_name = peer.dns_name.trim_end_matches('.').to_string();
-                    selected_nodes.insert(node_name, peer);
-                }
+            } else {
+                continue;
             }
         }
 
-        // Format the selected nodes for display
-        let mut mullvad_actions = Vec::new();
-
-        for (node_name, peer) in selected_nodes {
-            let country = peer.location.as_ref().map_or("Unknown", |loc| {
-                if loc.country.is_empty() { "Unknown" } else { &loc.country }
-            });
-
-            let city = peer.location.as_ref().map_or("Unknown", |loc| {
-                if loc.city.is_empty() { "Unknown" } else { &loc.city }
-            });
-
-            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
-            let is_active = active_exit_node == &node_name;
-            // Store all node information before formatting
-            mullvad_actions.push((
-                country.to_string(),
-                city.to_string(),
-                node_name.clone(),
-                node_ip,
-                is_active,
-            ));
-        }
-
-        // Sort nodes by country name first, then by city name
-        mullvad_actions.sort_by(|(country_a, city_a, _, _, _), (country_b, city_b, _, _, _)| {
-            match country_a.cmp(country_b) {
-                std::cmp::Ordering::Equal => city_a.cmp(city_b),
-                other => other,
+        // Get country and city from location data
+        let country = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+            if loc.country.is_empty() {
+                "Unknown".to_string()
+            } else {
+                loc.country.clone()
             }
         });
 
-        // Now format the sorted nodes with proper icons
-        let mut mullvad_results: Vec<String> = mullvad_actions
-            .into_iter()
-            .map(|(country, city, node_name, node_ip, is_active)| {
-                let flag = get_flag(&country);
-                let display_icon = if is_active { ICON_CHECK } else { &flag };
-                let display = format!("{} ({}) {} {}", country, city, node_ip, node_name);
-                format_entry("mullvad", display_icon, &display)
-            })
-            .collect();
+        let city = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+            if loc.city.is_empty() {
+                "Unknown".to_string()
+            } else {
+                loc.city.clone()
+            }
+        });
 
-        // Process other non-Mullvad exit nodes
-        let mut other_nodes: Vec<String> = status
-            .peer
-            .iter()
-            .filter(|(_, peer)| {
-                peer.dns_name.contains("ts.net")
-                    && !peer.dns_name.contains("mullvad.ts.net")
-                    && peer.exit_node_option
-                    && !exclude_set.iter().any(|excluded| *excluded == peer.dns_name.trim_end_matches('.'))
-            })
-            .map(|(_, peer)| {
+        // Add to the country and city groups
+        nodes_by_country.entry(country).or_default().push(peer);
+        nodes_by_city.entry(city).or_default().push(peer);
+    }
+
+    // Function to sort nodes by priority (highest first)
+    let sort_by_priority = |nodes: &mut Vec<&TailscalePeer>| {
+        nodes.sort_by(|a, b| {
+            let a_priority = a
+                .location
+                .as_ref()
+                .and_then(|loc| loc.priority)
+                .unwrap_or(-1);
+            let b_priority = b
+                .location
+                .as_ref()
+                .and_then(|loc| loc.priority)
+                .unwrap_or(-1);
+            b_priority.cmp(&a_priority)
+        });
+    };
+
+    // Select nodes based on filtering parameters
+    let mut selected_nodes = HashMap::new();
+
+    if let Some(max) = max_per_city {
+        // Filter by city - take top N nodes per city
+        for (_, mut nodes) in nodes_by_city {
+            sort_by_priority(&mut nodes);
+            for peer in nodes.into_iter().take(max as usize) {
                 let node_name = peer.dns_name.trim_end_matches('.').to_string();
-                let node_short_name = extract_short_name(&node_name);
-                let is_active = active_exit_node == &node_name;
-                let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
-
-                // Create display text with active check
-                let active_mark = if is_active { ICON_CHECK } else { "" };
-                let display_text = format!("{} {} - {} {}",
-                    active_mark,
-                    node_short_name,
-                    node_ip,
-                    node_name
-                );
-
-                format_entry(
-                    "exit-node",
-                    ICON_LEAF,
-                    &display_text
-                )
-            })
-            .collect();
-
-        // Handle suggested exit node
-        if !suggested_exit_node.is_empty() {
-            let suggested_node = suggested_exit_node.clone();
-            let suggested_name = suggested_node.clone();
-            if !exclude_set.contains(&suggested_name) {
-                // Check if node exists in mullvad_actions
-                if let Some(pos) = mullvad_results.iter().position(|action| action.contains(&suggested_name)) {
-                    // Mark as suggested and move to top
-                    let mut existing_action = mullvad_results.remove(pos);
-                    if !existing_action.contains(SUGGESTED_CHECK) {
-                        existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
-                    }
-                    mullvad_results.insert(0, existing_action);
-                } else {
-                    if let Some(pos) = other_nodes.iter().position(|action| action.contains(&suggested_name)) {
-                        // Remove from other_nodes and create clean format with appropriate emoji
-                        other_nodes.remove(pos);
-
-                        // Get peer data to create clean format
-                        if let Some(peer) = status.peer.values().find(|p| p.dns_name.trim_end_matches('.') == suggested_name) {
-                            let node_short_name = extract_short_name(&suggested_name);
-                            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
-                            let is_active = active_exit_node == &suggested_name;
-                            let icon = if is_active {
-                                ICON_CHECK
-                            } else {
-                                ICON_STAR
-                            };
-                            let suggested_action = format_entry(
-                                "exit-node",
-                                icon,
-                                &format!("{} - {} - {} (suggested)", node_short_name, node_ip, suggested_name)
-                            );
-                            mullvad_results.insert(0, suggested_action);
-                        }
-                    } else {
-                        // Add new suggested node
-                        let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
-                        mullvad_results.insert(0, suggested_action);
-                    }
-                }
-
-
+                selected_nodes.insert(node_name, peer);
             }
         }
+    } else if let Some(max) = max_per_country {
+        // Filter by country - take top N nodes per country
+        for (_, mut nodes) in nodes_by_country {
+            sort_by_priority(&mut nodes);
+            for peer in nodes.into_iter().take(max as usize) {
+                let node_name = peer.dns_name.trim_end_matches('.').to_string();
+                selected_nodes.insert(node_name, peer);
+            }
+        }
+    } else {
+        // No filtering - include all nodes
+        for nodes in nodes_by_country.values() {
+            for &peer in nodes {
+                let node_name = peer.dns_name.trim_end_matches('.').to_string();
+                selected_nodes.insert(node_name, peer);
+            }
+        }
+    }
 
-        // Combine all nodes (suggested first, then mullvad, then other)
-        let (suggested, non_suggested): (Vec<String>, Vec<String>) =
-            mullvad_results.into_iter().partition(|action| action.contains(SUGGESTED_CHECK));
+    // Format the selected nodes for display
+    let mut mullvad_actions = Vec::new();
 
-        suggested
-            .into_iter()
-            .chain(non_suggested)
-            .chain(other_nodes)
-            .collect()
+    for (node_name, peer) in selected_nodes {
+        let country = peer.location.as_ref().map_or("Unknown", |loc| {
+            if loc.country.is_empty() {
+                "Unknown"
+            } else {
+                &loc.country
+            }
+        });
+
+        let city = peer.location.as_ref().map_or("Unknown", |loc| {
+            if loc.city.is_empty() {
+                "Unknown"
+            } else {
+                &loc.city
+            }
+        });
+
+        let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+        let is_active = active_exit_node == &node_name;
+        // Store all node information before formatting
+        mullvad_actions.push((
+            country.to_string(),
+            city.to_string(),
+            node_name.clone(),
+            node_ip,
+            is_active,
+        ));
+    }
+
+    // Sort nodes by country name first, then by city name
+    mullvad_actions.sort_by(
+        |(country_a, city_a, _, _, _), (country_b, city_b, _, _, _)| match country_a.cmp(country_b)
+        {
+            std::cmp::Ordering::Equal => city_a.cmp(city_b),
+            other => other,
+        },
+    );
+
+    // Now format the sorted nodes with proper icons
+    let mut mullvad_results: Vec<String> = mullvad_actions
+        .into_iter()
+        .map(|(country, city, node_name, node_ip, is_active)| {
+            let flag = get_flag(&country);
+            let display_icon = if is_active { ICON_CHECK } else { &flag };
+            let display = format!("{} ({}) {} {}", country, city, node_ip, node_name);
+            format_entry("mullvad", display_icon, &display)
+        })
+        .collect();
+
+    // Process other non-Mullvad exit nodes
+    let mut other_nodes: Vec<String> = status
+        .peer
+        .iter()
+        .filter(|(_, peer)| {
+            peer.dns_name.contains("ts.net")
+                && !peer.dns_name.contains("mullvad.ts.net")
+                && peer.exit_node_option
+                && !exclude_set
+                    .iter()
+                    .any(|excluded| *excluded == peer.dns_name.trim_end_matches('.'))
+        })
+        .map(|(_, peer)| {
+            let node_name = peer.dns_name.trim_end_matches('.').to_string();
+            let node_short_name = extract_short_name(&node_name);
+            let is_active = active_exit_node == &node_name;
+            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+
+            // Create display text with active check
+            let active_mark = if is_active { ICON_CHECK } else { "" };
+            let display_text = format!(
+                "{} {} - {} {}",
+                active_mark, node_short_name, node_ip, node_name
+            );
+
+            format_entry("exit-node", ICON_LEAF, &display_text)
+        })
+        .collect();
+
+    // Handle suggested exit node
+    if !suggested_exit_node.is_empty() {
+        let suggested_node = suggested_exit_node.clone();
+        let suggested_name = suggested_node.clone();
+        if !exclude_set.contains(&suggested_name) {
+            // Check if node exists in mullvad_actions
+            if let Some(pos) = mullvad_results
+                .iter()
+                .position(|action| action.contains(&suggested_name))
+            {
+                // Mark as suggested and move to top
+                let mut existing_action = mullvad_results.remove(pos);
+                if !existing_action.contains(SUGGESTED_CHECK) {
+                    existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
+                }
+                mullvad_results.insert(0, existing_action);
+            } else {
+                if let Some(pos) = other_nodes
+                    .iter()
+                    .position(|action| action.contains(&suggested_name))
+                {
+                    // Remove from other_nodes and create clean format with appropriate emoji
+                    other_nodes.remove(pos);
+
+                    // Get peer data to create clean format
+                    if let Some(peer) = status
+                        .peer
+                        .values()
+                        .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
+                    {
+                        let node_short_name = extract_short_name(&suggested_name);
+                        let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                        let is_active = active_exit_node == &suggested_name;
+                        let icon = if is_active { ICON_CHECK } else { ICON_STAR };
+                        let suggested_action = format_entry(
+                            "exit-node",
+                            icon,
+                            &format!(
+                                "{} - {} - {} (suggested)",
+                                node_short_name, node_ip, suggested_name
+                            ),
+                        );
+                        mullvad_results.insert(0, suggested_action);
+                    }
+                } else {
+                    // Add new suggested node
+                    let suggested_action = format!("{} (suggested {})", suggested_node, ICON_STAR);
+                    mullvad_results.insert(0, suggested_action);
+                }
+            }
+        }
+    }
+
+    // Combine all nodes (suggested first, then mullvad, then other)
+    let (suggested, non_suggested): (Vec<String>, Vec<String>) = mullvad_results
+        .into_iter()
+        .partition(|action| action.contains(SUGGESTED_CHECK));
+
+    suggested
+        .into_iter()
+        .chain(non_suggested)
+        .chain(other_nodes)
+        .collect()
 }
 
 /// Parse the exit-node suggest output
@@ -502,13 +530,7 @@ fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> Stri
     format_entry(
         "mullvad",
         display_icon,
-        &format!(
-            "{:<15} ({}) - {:<16} {}",
-            country,
-            city,
-            node_ip,
-            node_name
-        ),
+        &format!("{:<15} ({}) - {:<16} {}", country, city, node_ip, node_name),
     )
 }
 
@@ -579,7 +601,10 @@ fn process_exit_node(hostname: &str, active_exit_node: &str, node_ip: &str) -> S
     let is_active = active_exit_node == hostname;
     let active_mark = if is_active { ICON_CHECK } else { "" };
 
-    format!("{} {} - {} {}", active_mark, node_short_name, node_ip, hostname)
+    format!(
+        "{} {} - {} {}",
+        active_mark, node_short_name, node_ip, hostname
+    )
 }
 
 /// Parses an exit node line from the Tailscale exit-node list output.
@@ -596,12 +621,7 @@ fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> St
     format_entry(
         "exit-node",
         display_icon,
-        &format!(
-            "{:<15} - {:<16} {}",
-            node_short_name,
-            node_ip,
-            node_name
-        ),
+        &format!("{:<15} - {:<16} {}", node_short_name, node_ip, node_name),
     )
 }
 
@@ -683,16 +703,14 @@ fn extract_node_ip(action: &str) -> Option<&str> {
         .map(|m| m.as_str())
 }
 
-/// Checks if an exit node is currently active for Tailscale.
-pub fn is_exit_node_active(state: &TailscaleState) -> Result<bool, Box<dyn Error>> {
-    Ok(state.is_exit_node_active())
-}
-
-/// Legacy function that's kept for backward compatibility.
-/// Prefer using the version that takes a TailscaleState.
-pub fn is_exit_node_active_legacy(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
-    let state = TailscaleState::new(command_runner);
-    Ok(state.is_exit_node_active())
+/// Checks if an exit node is currently active
+pub fn is_exit_node_active(state: &TailscaleState) -> bool {
+    for peer in state.status.peer.values() {
+        if peer.active && peer.exit_node {
+            return true;
+        }
+    }
+    false
 }
 
 /// Handles a tailscale action, executing the appropriate command.
@@ -709,10 +727,11 @@ pub async fn handle_tailscale_action(
     }
 
     // Only create the state when needed by specific actions
-    let need_state = matches!(action,
-        TailscaleAction::DisableExitNode |
-        TailscaleAction::ShowLockStatus |
-        TailscaleAction::SetExitNode(_)
+    let need_state = matches!(
+        action,
+        TailscaleAction::DisableExitNode
+            | TailscaleAction::ShowLockStatus
+            | TailscaleAction::SetExitNode(_)
     );
 
     let owned_state;
@@ -739,7 +758,7 @@ pub async fn handle_tailscale_action(
             // This is just to use state_ref to avoid the warning
             let _ = state_ref; // This prevents the unused variable warning
             Ok(true)
-        },
+        }
         TailscaleAction::DisableExitNode => {
             let status = command_runner
                 .run_command("tailscale", &["set", "--exit-node="])?
@@ -1955,69 +1974,7 @@ mod tests {
         let state = TailscaleState::new(&mock_runner);
         let result = is_exit_node_active(&state);
 
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
-    fn test_is_exit_node_active_false() {
-        let status_json = r#"{
-            "Version": "1.0.0",
-            "TUN": true,
-            "BackendState": "Running",
-            "Self": {
-                "ID": "test",
-                "HostName": "test-host",
-                "DNSName": "test-host.ts.net.",
-                "OS": "linux",
-                "TailscaleIPs": ["100.100.100.100"],
-                "Online": true,
-                "ExitNode": false,
-                "ExitNodeOption": true,
-            },
-            "MagicDNSSuffix": "test.ts.net",
-            "Peer": {
-                "key1": {
-                    "ID": "test1",
-                    "PublicKey": "test-key1",
-                    "HostName": "test-exit-node",
-                    "DNSName": "test-exit-node.ts.net.",
-                    "OS": "linux",
-                    "TailscaleIPs": ["100.65.216.68"],
-                    "Online": true,
-                    "ExitNode": false,
-                    "ExitNodeOption": true,
-                    "Active": true
-                }
-            }
-        }"#;
-        let output = Output {
-            status: ExitStatus::from_raw(0),
-            stdout: status_json.as_bytes().to_vec(),
-            stderr: vec![],
-        };
-
-        let mock_runner = MockCommandRunner::new("tailscale", &["status", "--json"], output);
-        let state = TailscaleState::new(&mock_runner);
-        let result = is_exit_node_active(&state);
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
-    }
-
-    #[test]
-    fn test_is_exit_node_active_command_failure() {
-        let output = Output {
-            status: ExitStatus::from_raw(1),
-            stdout: vec![],
-            stderr: vec![],
-        };
-
-        let mock_runner = MockCommandRunner::new("tailscale", &["status", "--json"], output);
-        let result = is_exit_node_active_legacy(&mock_runner);
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap()); // Should return false on command failure
+        assert!(result);
     }
 
     #[test]
@@ -2089,7 +2046,8 @@ mod tests {
         let action = TailscaleAction::DisableExitNode;
         let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2107,7 +2065,8 @@ mod tests {
         let action = TailscaleAction::SetEnable(true);
         let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2125,7 +2084,8 @@ mod tests {
         let action = TailscaleAction::SetEnable(false);
         let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2144,7 +2104,8 @@ mod tests {
         let action = TailscaleAction::SetShields(true);
         let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2163,7 +2124,8 @@ mod tests {
         let action = TailscaleAction::SetShields(false);
         let mock_notification = MockNotificationSender::new();
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2317,7 +2279,8 @@ mod tests {
 
         // Create a MockCommandRunner that expects the lock command
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2363,7 +2326,8 @@ mod tests {
 
         // Create a MockCommandRunner that expects the lock command
 
-        let result = handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
+        let result =
+            handle_tailscale_action(&action, &mock_runner, Some(&mock_notification), None).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -2481,40 +2445,60 @@ mod tests {
         assert_eq!(result.len(), 3);
 
         // With min priority of 75, only high-priority node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(75), None, None);
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(75), None, None);
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("high-priority"));
 
         // With min priority of 25, high and medium priority nodes should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(25), None, None);
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(25), None, None);
         assert_eq!(result.len(), 2);
 
         // With min priority of 200, no nodes should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(200), None, None);
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(200), None, None);
         assert_eq!(result.len(), 0);
 
         // With country filter "US", only the USA node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("high-priority"));
 
         // With country filter "Japan", only the Japan node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("low-priority"));
 
         // With both country filter "USA" and min priority 75, only the high-priority USA node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(75), None, Some("US"));
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            Some(75),
+            None,
+            Some("US"),
+        );
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("high-priority"));
 
         // With country filter "Japan", only the Japan node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("low-priority"));
 
         // If no nodes match the country filter, no results are returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("NONEXISTENT"));
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            None,
+            None,
+            Some("NONEXISTENT"),
+        );
         assert_eq!(result.len(), 0);
     }
 
@@ -2630,38 +2614,63 @@ mod tests {
         assert_eq!(result.len(), 3);
 
         // With country filter "US", only usa-node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
         assert!(result.len() > 0);
         assert!(result[0].contains("usa"));
 
         // With country filter "FR", only france-node should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("FR"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("FR"));
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("france-node"));
 
         // With country filter "SE", Sweden nodes should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("SE"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("SE"));
         if !result.is_empty() {
             assert!(result[0].contains("sweden"));
         }
 
         // Filter should be case-insensitive
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("fr"));
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("fr"));
         if !result.is_empty() {
             assert!(result[0].contains("france"));
         }
 
         // With non-existent country, no nodes should be returned
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("NONEXISTENT"));
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            None,
+            None,
+            Some("NONEXISTENT"),
+        );
         assert_eq!(result.len(), 0);
 
         // Combined with priority filter - only USA node with priority >= 45
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(45), None, Some("US"));
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            Some(45),
+            None,
+            Some("US"),
+        );
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("usa-node"));
 
         // Combined with priority filter - only Sweden node with priority >= 45 (not matched)
-        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(45), None, Some("SE"));
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            Some(45),
+            None,
+            Some("SE"),
+        );
         assert_eq!(result.len(), 0);
     }
 

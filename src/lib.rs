@@ -22,9 +22,7 @@ use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
 // Re-export commonly used types and functions
 pub use bluetooth::{get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction};
-pub use command::{
-    is_command_installed, read_output_lines, CommandRunner, RealCommandRunner,
-};
+pub use command::{is_command_installed, read_output_lines, CommandRunner, RealCommandRunner};
 pub use diagnostics::{
     diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
 };
