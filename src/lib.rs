@@ -9,15 +9,14 @@ pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
 pub mod iwd;
+pub mod logger;
 pub mod networkmanager;
+pub mod nextdns;
 pub mod privilege;
 pub mod rfkill;
 pub mod tailscale;
 pub mod tailscale_prefs;
 pub mod utils;
-pub mod nextdns;
-pub mod nextdns_api;
-pub mod logger;
 
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
 
@@ -28,12 +27,8 @@ pub use diagnostics::{
     diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
 };
 pub use dns_cache::{
-    CachedDnsServer, DnsBenchmarkCache, DnsCacheStorage, get_current_network_id,
-    generate_dns_actions_from_cache,
-};
-pub use privilege::{
-    get_privilege_command, wrap_privileged_command, wrap_privileged_commands,
-    has_privilege_escalation,
+    generate_dns_actions_from_cache, get_current_network_id, CachedDnsServer, DnsBenchmarkCache,
+    DnsCacheStorage,
 };
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected,
@@ -44,19 +39,19 @@ pub use networkmanager::{
     get_nm_vpn_networks, get_nm_wifi_networks, is_known_network as is_known_nm_network,
     is_nm_connected,
 };
+pub use nextdns::{get_nextdns_actions, handle_nextdns_action, NextDnsAction};
+pub use privilege::{
+    get_privilege_command, has_privilege_escalation, wrap_privileged_command,
+    wrap_privileged_commands,
+};
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
     TailscaleAction,
 };
-pub use nextdns::{
-    NextDnsAction, get_nextdns_actions, handle_nextdns_action,
-};
 
 // Re-export async functions
-pub use nextdns::{
-    fetch_profiles_blocking,
-};
+pub use nextdns::fetch_profiles_blocking;
 
 // Re-export logger
 pub use logger::Profiler;
