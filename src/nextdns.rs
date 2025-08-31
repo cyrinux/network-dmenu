@@ -9,6 +9,7 @@ use crate::command::CommandRunner;
 use crate::constants::ICON_CHECK;
 use crate::privilege::wrap_privileged_command;
 use log::{debug, error, warn};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -16,7 +17,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
-
+const NEXTDNS_API: &str = "https://api.nextdns.io/";
 
 /// Represents a NextDNS profile from the API
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,7 +34,10 @@ pub enum NextDnsAction {
     /// Switch to a specific profile
     SetProfile { profile: NextDnsProfile },
     /// Toggle between two profiles
-    ToggleProfiles { profile_a: NextDnsProfile, profile_b: NextDnsProfile },
+    ToggleProfiles {
+        profile_a: NextDnsProfile,
+        profile_b: NextDnsProfile,
+    },
     /// Disable NextDNS (revert to regular DNS)
     Disable,
     /// Refresh profiles from API
@@ -45,12 +49,24 @@ impl fmt::Display for NextDnsAction {
         match self {
             NextDnsAction::SetProfile { profile } => {
                 if profile.is_current {
-                    write!(f, "{} NextDNS: {} (current)", ICON_CHECK, profile.name.as_deref().unwrap_or(&profile.id))
+                    write!(
+                        f,
+                        "{} NextDNS: {} (current)",
+                        ICON_CHECK,
+                        profile.name.as_deref().unwrap_or(&profile.id)
+                    )
                 } else {
-                    write!(f, "🔄 NextDNS: Switch to {}", profile.name.as_deref().unwrap_or(&profile.id))
+                    write!(
+                        f,
+                        "🔄 NextDNS: Switch to {}",
+                        profile.name.as_deref().unwrap_or(&profile.id)
+                    )
                 }
             }
-            NextDnsAction::ToggleProfiles { profile_a, profile_b } => {
+            NextDnsAction::ToggleProfiles {
+                profile_a,
+                profile_b,
+            } => {
                 let name_a = profile_a.name.as_deref().unwrap_or(&profile_a.id);
                 let name_b = profile_b.name.as_deref().unwrap_or(&profile_b.id);
                 let current_mark = if profile_a.is_current {
@@ -69,8 +85,7 @@ impl fmt::Display for NextDnsAction {
 }
 
 /// State file for tracking current NextDNS profile
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct NextDnsState {
     current_profile_id: Option<String>,
     profiles: Vec<NextDnsProfile>,
@@ -106,13 +121,22 @@ fn save_state(state: &NextDnsState) -> Result<(), Box<dyn Error>> {
 
 /// Fetch profiles using blocking HTTP client (for non-async contexts)
 pub async fn fetch_profiles_blocking(api_key: &str) -> Result<Vec<NextDnsProfile>, Box<dyn Error>> {
-    debug!("Fetching NextDNS profiles with API key: {}", if api_key.len() > 4 { &api_key[0..4] } else { api_key });
+    debug!(
+        "Fetching NextDNS profiles with API key: {}",
+        if api_key.len() > 4 {
+            &api_key[0..4]
+        } else {
+            api_key
+        }
+    );
 
     // Use the async client within the async context
-    let client = reqwest::Client::new();
     debug!("Sending request to NextDNS API");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
     let response = client
-        .get("https://api.nextdns.io/profiles")
+        .get(format!("{NEXTDNS_API}/profiles"))
         .header("X-Api-Key", api_key)
         .send()
         .await?;
@@ -120,7 +144,10 @@ pub async fn fetch_profiles_blocking(api_key: &str) -> Result<Vec<NextDnsProfile
     debug!("NextDNS API response status: {}", response.status());
     if !response.status().is_success() {
         let status = response.status();
-        let error_body = response.text().await.unwrap_or_else(|_| "Could not read error response".to_string());
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Could not read error response".to_string());
         let error_msg = format!("API request failed: {} - {}", status, error_body);
         debug!("NextDNS API error: {}", error_msg);
         return Err(error_msg.into());
@@ -135,7 +162,10 @@ pub async fn fetch_profiles_blocking(api_key: &str) -> Result<Vec<NextDnsProfile
     let profiles_json: serde_json::Value = match serde_json::from_str(&response_text) {
         Ok(json) => json,
         Err(e) => {
-            let error_msg = format!("Failed to parse JSON response: {} - Response was: {}", e, response_text);
+            let error_msg = format!(
+                "Failed to parse JSON response: {} - Response was: {}",
+                e, response_text
+            );
             debug!("{}", error_msg);
             return Err(error_msg.into());
         }
@@ -189,16 +219,26 @@ pub async fn fetch_profiles_blocking(api_key: &str) -> Result<Vec<NextDnsProfile
             }
         }
     } else {
-        debug!("Response is neither an object with 'data' nor an array: {:?}", profiles_json);
+        debug!(
+            "Response is neither an object with 'data' nor an array: {:?}",
+            profiles_json
+        );
         return Err("API response is not in a recognized format".into());
     }
 
-    debug!("Extracted {} profiles from NextDNS API response", profiles.len());
+    debug!(
+        "Extracted {} profiles from NextDNS API response",
+        profiles.len()
+    );
     if profiles.is_empty() {
         warn!("No profiles found in the API response");
     } else {
         for profile in &profiles {
-            debug!("Profile: id={}, name={}", profile.id, profile.name.as_deref().unwrap_or("None"));
+            debug!(
+                "Profile: id={}, name={}",
+                profile.id,
+                profile.name.as_deref().unwrap_or("None")
+            );
         }
     }
 
@@ -242,22 +282,34 @@ pub fn get_current_profile() -> Result<Option<NextDnsProfile>, Box<dyn Error>> {
 }
 
 /// Set the current NextDNS profile
-pub fn set_current_profile(profile_id: &str, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
+pub fn set_current_profile(
+    profile_id: &str,
+    command_runner: &dyn CommandRunner,
+) -> Result<(), Box<dyn Error>> {
     // Build the command to set DNS servers and enable DoT
     let mut commands = Vec::new();
 
     // Detect the active network interface
-    commands.push("iface=$(ip route show default | grep -oP 'dev \\K\\S+' | head -1); iface=${iface:-wlan0}".to_string());
+    commands.push(
+        "iface=$(ip route show default | grep -oP 'dev \\K\\S+' | head -1); iface=${iface:-wlan0}"
+            .to_string(),
+    );
 
     // For DNS-over-TLS, we'll use the NextDNS DoT endpoint directly with the profile ID
     let dot_hostname = format!("{}.dns.nextdns.io", profile_id);
 
-    debug!("Setting up NextDNS with DoT for profile {} using hostname {}", profile_id, dot_hostname);
+    debug!(
+        "Setting up NextDNS with DoT for profile {} using hostname {}",
+        profile_id, dot_hostname
+    );
 
     // Set DNS-over-TLS with NextDNS
     // Use NextDNS anycast IPs with the DoT hostname
     // Format: IP#DoTHostname will automatically use DoT with the specified hostname
-    commands.push(format!("resolvectl dns \"${{iface}}\" '45.90.28.0#{}' '45.90.30.0#{}'", dot_hostname, dot_hostname));
+    commands.push(format!(
+        "resolvectl dns \"${{iface}}\" '45.90.28.0#{}' '45.90.30.0#{}'",
+        dot_hostname, dot_hostname
+    ));
     commands.push("resolvectl domain \"${{iface}}\" '~.'".to_string());
     commands.push("resolvectl dnssec \"${{iface}}\" allow-downgrade".to_string());
     commands.push("resolvectl dnsovertls \"${{iface}}\" yes".to_string());
@@ -272,7 +324,9 @@ pub fn set_current_profile(profile_id: &str, command_runner: &dyn CommandRunner)
 
     // Find the profile name if available
     let state = load_state().unwrap_or_default();
-    let profile_name = state.profiles.iter()
+    let profile_name = state
+        .profiles
+        .iter()
         .find(|p| p.id == profile_id)
         .and_then(|p| p.name.as_deref())
         .unwrap_or(profile_id);
@@ -298,7 +352,7 @@ pub fn disable_nextdns(command_runner: &dyn CommandRunner) -> Result<(), Box<dyn
         "iface=$(ip route show default | grep -oP 'dev \\K\\S+' | head -1); iface=${iface:-wlan0}",
         "resolvectl revert \"${iface}\"",
         "resolvectl dnsovertls \"${iface}\" no",
-        "resolvectl dnssec \"${iface}\" no"
+        "resolvectl dnssec \"${iface}\" no",
     ];
 
     debug!("Disabling NextDNS and reverting to system DNS");
@@ -348,18 +402,27 @@ pub async fn get_nextdns_actions(
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
 
-        debug!("Checking if profiles need refresh (empty={}, age={}s)",
-                 state.profiles.is_empty(), now - state.last_updated);
+        debug!(
+            "Checking if profiles need refresh (empty={}, age={}s)",
+            state.profiles.is_empty(),
+            now - state.last_updated
+        );
 
         let profiles = if state.profiles.is_empty() || (now - state.last_updated) > 3600 {
             // Fetch fresh profiles
-            debug!("Fetching fresh profiles with API key: {}",
-                     if api_key.len() > 4 { &api_key[0..4] } else { api_key });
+            debug!(
+                "Fetching fresh profiles with API key: {}",
+                if api_key.len() > 4 {
+                    &api_key[0..4]
+                } else {
+                    api_key
+                }
+            );
             match fetch_profiles_blocking(api_key).await {
                 Ok(profiles) => {
                     debug!("Successfully fetched {} profiles", profiles.len());
                     profiles
-                },
+                }
                 Err(e) => {
                     warn!("Error fetching profiles: {}", e);
                     debug!("Falling back to {} cached profiles", state.profiles.len());
@@ -367,7 +430,10 @@ pub async fn get_nextdns_actions(
                 }
             }
         } else {
-            debug!("Using {} cached profiles (cache is fresh)", state.profiles.len());
+            debug!(
+                "Using {} cached profiles (cache is fresh)",
+                state.profiles.len()
+            );
             state.profiles
         };
 
@@ -387,7 +453,10 @@ pub async fn get_nextdns_actions(
                 profiles.iter().find(|p| p.id == id_a).cloned(),
                 profiles.iter().find(|p| p.id == id_b).cloned(),
             ) {
-                actions.push(NextDnsAction::ToggleProfiles { profile_a, profile_b });
+                actions.push(NextDnsAction::ToggleProfiles {
+                    profile_a,
+                    profile_b,
+                });
             }
         }
     } else if let Some((id_a, id_b)) = toggle_profiles {
@@ -402,7 +471,10 @@ pub async fn get_nextdns_actions(
             name: None,
             is_current: current_profile_id.as_deref() == Some(id_b),
         };
-        actions.push(NextDnsAction::ToggleProfiles { profile_a, profile_b });
+        actions.push(NextDnsAction::ToggleProfiles {
+            profile_a,
+            profile_b,
+        });
     }
 
     Ok(actions)
@@ -417,12 +489,17 @@ pub async fn handle_nextdns_action(
     match action {
         NextDnsAction::SetProfile { profile } => {
             set_current_profile(&profile.id, command_runner)?;
-            println!("Switched to NextDNS profile: {}",
-                     profile.name.as_deref().unwrap_or(&profile.id));
+            println!(
+                "Switched to NextDNS profile: {}",
+                profile.name.as_deref().unwrap_or(&profile.id)
+            );
             Ok(true)
         }
 
-        NextDnsAction::ToggleProfiles { profile_a, profile_b } => {
+        NextDnsAction::ToggleProfiles {
+            profile_a,
+            profile_b,
+        } => {
             let current = get_current_profile()?;
             let next_profile = if current.as_ref().map(|p| &p.id) == Some(&profile_a.id) {
                 profile_b
@@ -431,8 +508,10 @@ pub async fn handle_nextdns_action(
             };
 
             set_current_profile(&next_profile.id, command_runner)?;
-            println!("Toggled to NextDNS profile: {}",
-                     next_profile.name.as_deref().unwrap_or(&next_profile.id));
+            println!(
+                "Toggled to NextDNS profile: {}",
+                next_profile.name.as_deref().unwrap_or(&next_profile.id)
+            );
             Ok(true)
         }
 
@@ -444,8 +523,14 @@ pub async fn handle_nextdns_action(
 
         NextDnsAction::RefreshProfiles => {
             if let Some(api_key) = api_key {
-                debug!("Manually refreshing profiles with API key: {}",
-                         if api_key.len() > 4 { &api_key[0..4] } else { api_key });
+                debug!(
+                    "Manually refreshing profiles with API key: {}",
+                    if api_key.len() > 4 {
+                        &api_key[0..4]
+                    } else {
+                        api_key
+                    }
+                );
 
                 // Use tokio spawn_blocking to run this operation in a separate thread
                 // that won't interfere with the Tokio runtime
@@ -470,11 +555,15 @@ pub async fn handle_nextdns_action(
                         } else {
                             println!("Refreshed {} NextDNS profiles", profiles.len());
                             for profile in &profiles {
-                                println!(" - {} ({})", profile.name.as_deref().unwrap_or("Unnamed"), profile.id);
+                                println!(
+                                    " - {} ({})",
+                                    profile.name.as_deref().unwrap_or("Unnamed"),
+                                    profile.id
+                                );
                             }
                         }
                         Ok(true)
-                    },
+                    }
                     Err(e) => {
                         error!("Failed to refresh profiles: {}", e);
                         println!("Error refreshing NextDNS profiles: {}", e);
@@ -516,7 +605,13 @@ mod tests {
     impl CommandRunner for MockCommandRunner {
         fn run_command(&self, command: &str, args: &[&str]) -> Result<Output, std::io::Error> {
             assert_eq!(command, self.expected_command);
-            assert_eq!(args, self.expected_args.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            assert_eq!(
+                args,
+                self.expected_args
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+            );
             Ok(Output {
                 status: self.return_output.status,
                 stdout: self.return_output.stdout.clone(),
@@ -542,7 +637,9 @@ mod tests {
             is_current: true,
         };
 
-        let action = NextDnsAction::SetProfile { profile: profile_current };
+        let action = NextDnsAction::SetProfile {
+            profile: profile_current,
+        };
         assert_eq!(action.to_string(), "✅ NextDNS: Home (current)");
     }
 
@@ -560,7 +657,10 @@ mod tests {
             is_current: false,
         };
 
-        let action = NextDnsAction::ToggleProfiles { profile_a, profile_b };
+        let action = NextDnsAction::ToggleProfiles {
+            profile_a,
+            profile_b,
+        };
         assert_eq!(action.to_string(), "🔄 NextDNS: Toggle Home ↔ Work");
     }
 
@@ -568,13 +668,11 @@ mod tests {
     fn test_state_serialization() {
         let state = NextDnsState {
             current_profile_id: Some("test123".to_string()),
-            profiles: vec![
-                NextDnsProfile {
-                    id: "test123".to_string(),
-                    name: Some("Test Profile".to_string()),
-                    is_current: true,
-                }
-            ],
+            profiles: vec![NextDnsProfile {
+                id: "test123".to_string(),
+                name: Some("Test Profile".to_string()),
+                is_current: true,
+            }],
             last_updated: 1234567890,
         };
 
