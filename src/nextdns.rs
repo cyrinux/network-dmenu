@@ -133,7 +133,7 @@ pub async fn fetch_profiles_blocking(api_key: &str) -> Result<Vec<NextDnsProfile
     // Use the async client within the async context
     debug!("Sending request to NextDNS API");
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
         .build()?;
     let response = client
         .get(format!("{NEXTDNS_API}/profiles"))

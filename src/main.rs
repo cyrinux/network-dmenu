@@ -103,6 +103,11 @@ struct Args {
     country: Option<String>,
     #[arg(long, help = "Read dmenu selection from stdin (for testing)")]
     stdin: bool,
+    #[arg(
+        long,
+        help = "Output actions to stdout instead of using dmenu (for debugging)"
+    )]
+    stdout: bool,
 }
 
 /// Configuration structure for the application.
@@ -393,7 +398,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .show();
     }
 
-    let action = select_action_from_menu(&config, &actions, args.stdin).await?;
+    let action = select_action_from_menu(&config, &actions, args.stdin, args.stdout).await?;
 
     if !action.is_empty() {
         let selected_action = find_selected_action(&action, &actions)?;
@@ -427,7 +432,19 @@ async fn select_action_from_menu(
     config: &Config,
     actions: &[ActionType],
     use_stdin: bool,
+    use_stdout: bool,
 ) -> Result<String, Box<dyn Error>> {
+    // Convert actions to string representation
+    let action_strings: Vec<String> = actions.iter().map(action_to_string).collect();
+
+    if use_stdout {
+        // Just print all actions to stdout and exit
+        for (i, action_string) in action_strings.iter().enumerate() {
+            println!("{}: {}", i + 1, action_string);
+        }
+        std::process::exit(0);
+    }
+
     if use_stdin {
         // Read selection from stdin for testing
         use std::io::{self, BufRead};
@@ -437,9 +454,6 @@ async fn select_action_from_menu(
         let selected = line.trim().to_string();
         return Ok(selected);
     }
-
-    // Convert actions to string representation
-    let action_strings: Vec<String> = actions.iter().map(action_to_string).collect();
 
     let mut child = Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
@@ -2076,11 +2090,12 @@ mod tests {
             refresh_nextdns_profiles: false,
             no_diagnostics: false,
             profile: false,
+            log_level: "warn".to_string(),
             max_nodes_per_country: None,
             max_nodes_per_city: None,
             country: None,
             stdin: false,
-            log_level: "warn".to_string(),
+            stdout: false,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
