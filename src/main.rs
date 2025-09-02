@@ -44,7 +44,7 @@ use std::process::{Command, Stdio};
 
 use tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
-    handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
+    handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
 use tailscale_prefs::parse_tailscale_prefs;
@@ -1079,79 +1079,81 @@ async fn get_actions(
         }
     }
 
-    // Performance optimization: Add Tailscale actions last as they can be expensive
-    let tailscale_profiler = logger::Profiler::new("Tailscale operations");
-
     // Get current Tailscale preferences to determine what toggle options to show
-    let prefs = parse_tailscale_prefs(command_runner).unwrap();
-
     if !args.no_tailscale && is_command_installed("tailscale") {
-        // Add basic Tailscale actions first (these are simple and fast)
-        actions.push(ActionType::Tailscale(TailscaleAction::SetShields(
-            !prefs.ShieldsUp,
-        )));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
-            !prefs.ExitNodeAllowLANAccess,
-        )));
-        actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
-            !prefs.RouteAll,
-        )));
-        actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
+        // Performance optimization: Add Tailscale actions last as they can be expensive
+        let tailscale_profiler = logger::Profiler::new("Tailscale operations");
+        match parse_tailscale_prefs(command_runner) {
+            Some(prefs) => {
+                // Add basic Tailscale actions first (these are simple and fast)
+                actions.push(ActionType::Tailscale(TailscaleAction::SetShields(
+                    !prefs.ShieldsUp,
+                )));
+                actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
+                    !prefs.ExitNodeAllowLANAccess,
+                )));
+                actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
+                    !prefs.RouteAll,
+                )));
+                actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
 
-        // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
-        // Command-line args override config file settings
-        let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
-        let country = args.country.as_deref().or(config.country_filter.as_deref());
+                // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
+                // Command-line args override config file settings
+                let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
+                let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
+                let country = args.country.as_deref().or(config.country_filter.as_deref());
 
-        // Create TailscaleState once to avoid multiple calls to tailscale status
-        let tailscale_state = TailscaleState::new(command_runner);
+                // Create TailscaleState once to avoid multiple calls to tailscale status
+                let tailscale_state = TailscaleState::new(command_runner);
 
-        let mullvad_actions = get_mullvad_actions(
-            &tailscale_state,
-            command_runner,
-            &config.exclude_exit_node,
-            max_per_country,
-            max_per_city,
-            country,
-        );
-        actions.extend(
-            mullvad_actions
-                .into_iter()
-                .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
-        );
+                let mullvad_actions = get_mullvad_actions(
+                    &tailscale_state,
+                    command_runner,
+                    &config.exclude_exit_node,
+                    max_per_country,
+                    max_per_city,
+                    country,
+                );
+                actions.extend(
+                    mullvad_actions
+                        .into_iter()
+                        .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
+                );
 
-        if is_exit_node_active(&tailscale_state) {
-            actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
-        }
+                if is_exit_node_active(&tailscale_state) {
+                    actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
+                }
 
-        actions.push(ActionType::Tailscale(TailscaleAction::SetEnable(
-            !is_tailscale_enabled(command_runner).unwrap_or(false),
-        )));
+                actions.push(ActionType::Tailscale(TailscaleAction::SetEnable(
+                    !prefs.WantRunning,
+                )));
 
-        // Performance optimization: Add Tailscale Lock actions last (these are the most expensive)
-        if is_tailscale_lock_enabled(command_runner).unwrap_or(false) {
-            actions.push(ActionType::Tailscale(TailscaleAction::ListLockedNodes));
+                // Performance optimization: Add Tailscale Lock actions last (these are the most expensive)
+                if is_tailscale_lock_enabled(command_runner).unwrap_or(false) {
+                    actions.push(ActionType::Tailscale(TailscaleAction::ListLockedNodes));
 
-            // Add individual sign node actions for each locked node
-            // This is potentially the slowest operation, so we do it last
-            if let Ok(locked_nodes) = get_locked_nodes(command_runner) {
-                if !locked_nodes.is_empty() {
-                    // Add a single action to sign all nodes at once, placing it FIRST
-                    // Count is displayed in the action text automatically
-                    actions.insert(0, ActionType::Tailscale(TailscaleAction::SignAllNodes));
+                    // Add individual sign node actions for each locked node
+                    // This is potentially the slowest operation, so we do it last
+                    if let Ok(locked_nodes) = get_locked_nodes(command_runner) {
+                        if !locked_nodes.is_empty() {
+                            // Add a single action to sign all nodes at once, placing it FIRST
+                            // Count is displayed in the action text automatically
+                            actions.insert(0, ActionType::Tailscale(TailscaleAction::SignAllNodes));
 
-                    // Also add individual node signing actions
-                    for node in locked_nodes {
-                        actions.push(ActionType::Tailscale(TailscaleAction::SignLockedNode(
-                            node.node_key,
-                        )));
+                            // Also add individual node signing actions
+                            for node in locked_nodes {
+                                actions.push(ActionType::Tailscale(
+                                    TailscaleAction::SignLockedNode(node.node_key),
+                                ));
+                            }
+                        }
                     }
                 }
+                tailscale_profiler.log();
             }
+            None => (),
         }
-    }
-    tailscale_profiler.log();
+    };
 
     // Add NextDNS actions (API-based, no CLI required)
     if !args.no_nextdns {

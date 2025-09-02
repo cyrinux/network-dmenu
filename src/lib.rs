@@ -46,8 +46,7 @@ pub use privilege::{
 };
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
-    handle_tailscale_action, is_exit_node_active, is_tailscale_enabled, is_tailscale_lock_enabled,
-    TailscaleAction,
+    handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
 };
 
 // Re-export async functions

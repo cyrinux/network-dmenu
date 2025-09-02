@@ -15,6 +15,8 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 
 use std::error::Error;
 
+const MULLVAD_CONNECTED_API: &str = "https://am.i.mullvad.net/connected";
+
 #[cfg(test)]
 use std::cell::RefCell;
 
@@ -252,8 +254,8 @@ pub fn get_mullvad_actions(
                 let filter_lower = country_name.to_lowercase();
 
                 // Match either on country name or country code
-                let contains = country_lower.contains(&filter_lower) ||
-                               country_code_lower.contains(&filter_lower);
+                let contains = country_lower.contains(&filter_lower)
+                    || country_code_lower.contains(&filter_lower);
 
                 if loc.country.is_empty() || !contains {
                     continue;
@@ -380,7 +382,7 @@ pub fn get_mullvad_actions(
         .map(|(country, city, node_name, node_ip, is_active)| {
             let flag = get_flag(&country);
             let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display = format!("{} ({}) {} {}", country, city, node_ip, node_name);
+            let display = format!("{} ({})\t{}\t{}", country, city, node_ip, node_name);
             format_entry("mullvad", display_icon, &display)
         })
         .collect();
@@ -517,11 +519,7 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
         .build();
 
     // Make a request and handle retries automatically
-    let response = match client
-        .get("https://am.i.mullvad.net/connected")
-        .send()
-        .await
-    {
+    let response = match client.get(MULLVAD_CONNECTED_API).send().await {
         Ok(resp) => resp,
         Err(_error) => {
             debug!("Mullvad check request error: {_error}");
@@ -1036,17 +1034,6 @@ pub async fn handle_tailscale_action(
             }
         },
     }
-}
-
-/// Checks if Tailscale is currently enabled.
-pub fn is_tailscale_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command("tailscale", &["status"])?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(!stdout.contains("Tailscale is stopped"));
-    }
-    Ok(false)
 }
 
 /// Represents a locked out node that cannot connect.
@@ -1758,53 +1745,6 @@ mod tests {
         assert!(result);
     }
 
-    #[test]
-    fn test_is_tailscale_enabled_true() {
-        let stdout = b"Tailscale is running normally";
-        let output = Output {
-            status: ExitStatus::from_raw(0),
-            stdout: stdout.to_vec(),
-            stderr: vec![],
-        };
-
-        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
-        let result = is_tailscale_enabled(&mock_runner);
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[test]
-    fn test_is_tailscale_enabled_false() {
-        let stdout = b"Tailscale is stopped";
-        let output = Output {
-            status: ExitStatus::from_raw(0),
-            stdout: stdout.to_vec(),
-            stderr: vec![],
-        };
-
-        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
-        let result = is_tailscale_enabled(&mock_runner);
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
-    }
-
-    #[test]
-    fn test_is_tailscale_enabled_command_failure() {
-        let output = Output {
-            status: ExitStatus::from_raw(1),
-            stdout: vec![],
-            stderr: vec![],
-        };
-
-        let mock_runner = MockCommandRunner::new("tailscale", &["status"], output);
-        let result = is_tailscale_enabled(&mock_runner);
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap()); // Should return false on command failure
-    }
-
     #[tokio::test]
     async fn test_check_mullvad_success() {
         // This test verifies the function doesn't panic
@@ -2133,11 +2073,15 @@ mod tests {
         }"#;
 
         // Create a mock runner
-        let mock_runner = MockCommandRunner::new("echo", &["dummy"], Output {
-            status: ExitStatus::from_raw(0),
-            stdout: vec![],
-            stderr: vec![],
-        });
+        let mock_runner = MockCommandRunner::new(
+            "echo",
+            &["dummy"],
+            Output {
+                status: ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            },
+        );
 
         // Create state directly
         let state = TailscaleState {
@@ -2244,58 +2188,60 @@ mod tests {
         }"#;
 
         // Create a mock runner for any extra operations in get_mullvad_actions
-        let mock_runner = MockCommandRunner::new("echo", &["dummy"], Output {
-            status: ExitStatus::from_raw(0),
-            stdout: vec![],
-        stderr: vec![],
-    });
+        let mock_runner = MockCommandRunner::new(
+            "echo",
+            &["dummy"],
+            Output {
+                status: ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            },
+        );
 
-    // Create state directly instead of using TailscaleState::new
-    let state = TailscaleState {
-        status: serde_json::from_str(json_output).unwrap(),
-        active_exit_node: String::new(),
-        suggested_exit_node: String::new(),
-    };
+        // Create state directly instead of using TailscaleState::new
+        let state = TailscaleState {
+            status: serde_json::from_str(json_output).unwrap(),
+            active_exit_node: String::new(),
+            suggested_exit_node: String::new(),
+        };
 
-    let exclude_nodes = vec![];
+        let exclude_nodes = vec![];
 
-    // With no filters, all nodes should be returned
-    let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, None);
-    assert_eq!(result.len(), 3);
+        // With no filters, all nodes should be returned
+        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, None);
+        assert_eq!(result.len(), 3);
 
-    // Test max_per_country parameter (1 node per country)
-    let result =
-        get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(1), None, None);
-    assert_eq!(result.len(), 3); // Still 3 as each node is in a different country
+        // Test max_per_country parameter (1 node per country)
+        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, Some(1), None, None);
+        assert_eq!(result.len(), 3); // Still 3 as each node is in a different country
 
-    // Test max_per_city parameter (1 node per city)
-    let result =
-        get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, Some(1), None);
-    assert_eq!(result.len(), 3); // Still 3 as each node is in a different city
+        // Test max_per_city parameter (1 node per city)
+        let result = get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, Some(1), None);
+        assert_eq!(result.len(), 3); // Still 3 as each node is in a different city
 
-    // Test country filter "US", only USA node should be returned
-    let result =
-        get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
-    assert_eq!(result.len(), 1);
-    assert!(result[0].contains("high-priority"));
+        // Test country filter "US", only USA node should be returned
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("US"));
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("high-priority"));
 
-    // Test with country code filter (JP = Japan)
-    let result =
-        get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
-    assert_eq!(result.len(), 1);
-    assert!(result[0].contains("low-priority"));
+        // Test with country code filter (JP = Japan)
+        let result =
+            get_mullvad_actions(&state, &mock_runner, &exclude_nodes, None, None, Some("JP"));
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("low-priority"));
 
-    // Test with both country filter "US" and max_per_country=1
-    let result = get_mullvad_actions(
-        &state,
-        &mock_runner,
-        &exclude_nodes,
-        Some(1),
-        None,
-        Some("US"),
-    );
-    assert_eq!(result.len(), 1);
-    assert!(result[0].contains("high-priority"));
+        // Test with both country filter "US" and max_per_country=1
+        let result = get_mullvad_actions(
+            &state,
+            &mock_runner,
+            &exclude_nodes,
+            Some(1),
+            None,
+            Some("US"),
+        );
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("high-priority"));
     }
 
     #[test]

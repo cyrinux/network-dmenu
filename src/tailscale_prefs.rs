@@ -6,6 +6,8 @@ use serde_json::Value;
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[allow(non_snake_case)]
 pub struct TailscalePrefs {
+    /// Want tailscale enabled or not
+    pub WantRunning: bool,
     /// Whether shields are up (blocks incoming connections)
     pub ShieldsUp: bool,
     /// Whether to accept advertised routes
