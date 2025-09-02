@@ -1,22 +1,15 @@
 [package]
 name = "network-dmenu"
-version = "1.11.2"
+version = "2.0.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
 keywords = ["tailscale", "dmenu", "network", "vpn", "wifi"]
-description = "A dmenu-based Tailscale and Wi-Fi network selector with support for NetworkManager and iwd."
+description = "A dmenu-based network knife tools, Tailscale, Wi-Fi network, mullvad, nextdns."
 readme = "README.md"
 license = "MIT"
 homepage = "https://github.com/cyrinux/network-dmenu"
 repository = "https://github.com/cyrinux/network-dmenu"
-
-[profile.release]
-codegen-units = 1
-lto = "thin"
-
-[features]
-default = []
 
 [dependencies]
 dirs = "6.0"

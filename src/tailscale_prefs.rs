@@ -88,6 +88,8 @@ mod tests {
             "RouteAll": true,
             "ExitNodeAllowLANAccess": true,
             "ExitNodeIP": "100.101.102.103",
+            "ExitNodeID": "1234",
+            "WantRunning": true,
             "AdvertiseRoutes": ["10.0.0.0/24"]
         }"#;
 

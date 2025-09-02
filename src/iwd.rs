@@ -151,22 +151,6 @@ pub fn disconnect_iwd_wifi(
     Ok(status.success())
 }
 
-/// Checks if IWD is currently connected to a network.
-pub fn is_iwd_connected(
-    command_runner: &dyn CommandRunner,
-    interface: &str,
-) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command("iwctl", &["station", interface, "show"])?;
-    if output.status.success() {
-        for line in read_output_lines(&output)? {
-            if line.contains("Connected") {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
 /// Checks if a Wi-Fi network is known (i.e., previously connected).
 pub fn is_known_network(
     ssid: &str,

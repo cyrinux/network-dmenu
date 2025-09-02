@@ -1,4 +1,3 @@
-
 //! This module contains all user-facing strings to facilitate easy translation and maintenance
 
 // Action types
@@ -50,7 +49,7 @@ pub const TAILSCALE_DISALLOW_LAN_ACCESS_EXIT_NODE: &str =
 pub const TAILSCALE_SHOW_LOCK_STATUS: &str = "Show Tailscale Lock Status";
 pub const TAILSCALE_LIST_LOCKED_NODES: &str = "List Locked Nodes";
 pub const TAILSCALE_SIGN_NODE: &str = "Sign Node: {}";
-pub const TAILSCALE_SIGN_NODE_DETAILED: &str = "Sign Node: {flag} {hostname} - {machine} ({key})";
+pub const TAILSCALE_SIGN_NODE_DETAILED: &str = "Sign Node: {flag} {hostname} ({key})";
 
 // WiFi actions
 pub const WIFI_DISCONNECT: &str = "Disconnect";
@@ -72,3 +71,6 @@ pub const DEFAULT_DMENU_ARGS: &str = "--no-multi";
 // Config file
 pub const CONFIG_FILENAME: &str = "config.toml";
 pub const CONFIG_DIR_NAME: &str = "network-dmenu";
+
+// Misc
+pub const MULLVAD_CONNECTED_API: &str = "https://am.i.mullvad.net/connected";

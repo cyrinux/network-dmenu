@@ -271,33 +271,6 @@ pub fn disconnect_nm_wifi(
     Ok(status.success())
 }
 
-/// Checks if NetworkManager is currently connected to a network.
-pub fn is_nm_connected(
-    command_runner: &dyn CommandRunner,
-    interface: &str,
-) -> Result<bool, Box<dyn Error>> {
-    let output = command_runner.run_command(
-        "nmcli",
-        &[
-            "--colors",
-            "no",
-            "-t",
-            "-f",
-            "DEVICE,STATE",
-            "device",
-            "status",
-        ],
-    )?;
-    let reader = read_output_lines(&output)?;
-    for line in reader {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() == 2 && parts[0].trim() == interface && parts[1].trim() == "connected" {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 /// Checks if a Wi-Fi network is known (i.e., previously connected).
 pub fn is_known_network(
     ssid: &str,

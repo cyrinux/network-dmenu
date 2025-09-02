@@ -9,6 +9,7 @@ mod networkmanager;
 mod nextdns;
 mod privilege;
 mod rfkill;
+mod streaming;
 mod tailscale;
 mod tailscale_prefs;
 mod utils;
@@ -16,42 +17,34 @@ mod utils;
 #[macro_use]
 extern crate log;
 use crate::utils::get_flag;
-use bluetooth::{
-    get_connected_devices, get_paired_bluetooth_devices, handle_bluetooth_action, BluetoothAction,
-};
+use bluetooth::{get_connected_devices, handle_bluetooth_action, BluetoothAction};
 use clap::Parser;
 use command::{is_command_installed, CommandRunner, RealCommandRunner};
 use constants::*;
-use diagnostics::{
-    diagnostic_action_to_string, get_diagnostic_actions, handle_diagnostic_action, DiagnosticAction,
-};
+use diagnostics::{diagnostic_action_to_string, handle_diagnostic_action, DiagnosticAction};
 use dirs::config_dir;
-use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected};
+use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi};
 use log::error;
 use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
-    get_nm_vpn_networks, get_nm_wifi_networks, is_nm_connected,
 };
+use nextdns::handle_nextdns_action;
 use nextdns::NextDnsAction;
-use nextdns::{get_nextdns_actions, handle_nextdns_action};
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use tailscale::{
-    check_mullvad, extract_short_hostname, get_locked_nodes, get_mullvad_actions,
-    handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled,
+    check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
-use tailscale_prefs::parse_tailscale_prefs;
 use utils::check_captive_portal;
 
 /// Command-line arguments structure for the application.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(long, default_value = "wlan0")]
@@ -164,6 +157,7 @@ enum SystemAction {
 
 /// Enum representing Wi-Fi-related actions.
 #[derive(Debug)]
+#[allow(dead_code)]
 enum WifiAction {
     Connect,
     ConnectHidden,
@@ -379,10 +373,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // that prioritizes faster operations first to improve perceived responsiveness
     let command_runner = RealCommandRunner;
 
-    // Measure performance if profiling is enabled
-    // List generation profiling is now handled by the logger::Profiler
-
-    let actions = get_actions(&args, &config, &command_runner).await?;
+    // Use streaming approach for better responsiveness
+    let (action, actions) = streaming::select_action_from_menu_streaming(
+        &config,
+        &args,
+        &command_runner,
+        args.stdin,
+        args.stdout,
+    )
+    .await?;
 
     // Display profiling information if enabled
     // Log the total execution time
@@ -397,8 +396,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ))
             .show();
     }
-
-    let action = select_action_from_menu(&config, &actions, args.stdin, args.stdout).await?;
 
     if !action.is_empty() {
         let selected_action = find_selected_action(&action, &actions)?;
@@ -428,51 +425,6 @@ fn check_required_commands(_config: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 /// Selects an action from the menu using dmenu
-async fn select_action_from_menu(
-    config: &Config,
-    actions: &[ActionType],
-    use_stdin: bool,
-    use_stdout: bool,
-) -> Result<String, Box<dyn Error>> {
-    // Convert actions to string representation
-    let action_strings: Vec<String> = actions.iter().map(action_to_string).collect();
-
-    if use_stdout {
-        // Just print all actions to stdout and exit
-        for (i, action_string) in action_strings.iter().enumerate() {
-            println!("{}: {}", i + 1, action_string);
-        }
-        std::process::exit(0);
-    }
-
-    if use_stdin {
-        // Read selection from stdin for testing
-        use std::io::{self, BufRead};
-        let stdin = io::stdin();
-        let mut line = String::new();
-        stdin.lock().read_line(&mut line)?;
-        let selected = line.trim().to_string();
-        return Ok(selected);
-    }
-
-    let mut child = Command::new(&config.dmenu_cmd)
-        .args(config.dmenu_args.split_whitespace())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
-
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        for action_string in action_strings {
-            writeln!(stdin, "{}", action_string)?;
-        }
-    }
-
-    let output = child.wait_with_output()?;
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(selected)
-}
-
 fn action_to_string(action: &ActionType) -> String {
     match action {
         ActionType::Custom(custom_action) => {
@@ -549,7 +501,8 @@ fn action_to_string(action: &ActionType) -> String {
                 TAILSCALE_LIST_LOCKED_NODES,
             ),
             TailscaleAction::SignAllNodes => {
-                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                let state = TailscaleState::new(&RealCommandRunner);
+                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner, Some(&state)) {
                     let count = locked_nodes.len();
                     if count > 0 {
                         format_entry(
@@ -566,7 +519,8 @@ fn action_to_string(action: &ActionType) -> String {
             }
             TailscaleAction::SignLockedNode(node_key) => {
                 // Try to find the hostname for this node key from locked nodes
-                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                let state = TailscaleState::new(&RealCommandRunner);
+                if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner, Some(&state)) {
                     if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                         let flag = get_flag(&node.country_code);
                         format_entry(
@@ -575,7 +529,6 @@ fn action_to_string(action: &ActionType) -> String {
                             &TAILSCALE_SIGN_NODE_DETAILED
                                 .replace("{flag}", &flag)
                                 .replace("{hostname}", extract_short_hostname(&node.hostname))
-                                .replace("{machine}", &node.machine_name)
                                 .replace("{key}", &node_key[..8]),
                         )
                     } else {
@@ -728,7 +681,8 @@ fn find_selected_action<'a>(
                 }
                 TailscaleAction::SignLockedNode(node_key) => {
                     // Try to find the hostname for this node key from locked nodes
-                    if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner) {
+                    let state = TailscaleState::new(&RealCommandRunner);
+                    if let Ok(locked_nodes) = get_locked_nodes(&RealCommandRunner, Some(&state)) {
                         if let Some(node) = locked_nodes.iter().find(|n| n.node_key == *node_key) {
                             action
                                 == format_entry(
@@ -740,14 +694,13 @@ fn find_selected_action<'a>(
                                             "{hostname}",
                                             extract_short_hostname(&node.hostname),
                                         )
-                                        .replace("{machine}", &node.machine_name)
                                         .replace("{key}", &node_key[..8]),
                                 )
                         } else {
                             action
                                 == format_entry(
                                     ACTION_TYPE_TAILSCALE,
-                                    ICON_CHECK,
+                                    ICON_KEY,
                                     &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                                 )
                         }
@@ -755,7 +708,7 @@ fn find_selected_action<'a>(
                         action
                             == format_entry(
                                 ACTION_TYPE_TAILSCALE,
-                                ICON_CHECK,
+                                ICON_KEY,
                                 &TAILSCALE_SIGN_NODE.replace("{}", &node_key[..8]),
                             )
                     }
@@ -820,432 +773,6 @@ fn get_config() -> Result<Config, Box<dyn Error>> {
     let config_content = fs::read_to_string(config_path)?;
     let config = toml::from_str(&config_content)?;
     Ok(config)
-}
-
-/// Retrieves the list of actions based on the command-line arguments and configuration.
-///
-/// # Performance Optimization Notes
-/// This function has been optimized for performance using the following strategies:
-/// 1. Prioritizes faster operations first to minimize perceived latency
-/// 2. Collects network information early in the process
-/// 3. Adds simple stateless items to the list while waiting for network scan results
-/// 4. Improves error handling to continue execution even if some network scans fail
-/// 5. Organizes code to follow a more logical flow for network scanning operations
-///
-/// Use the `--profile` flag when running the application to see performance metrics.
-///
-/// # Arguments
-/// * `args` - Command line arguments
-/// * `config` - Application configuration
-/// * `command_runner` - Interface for running shell commands
-///
-/// # Returns
-/// A vector of actions to display in the menu
-async fn get_actions(
-    args: &Args,
-    config: &Config,
-    command_runner: &dyn CommandRunner,
-) -> Result<Vec<ActionType>, Box<dyn Error>> {
-    // Start with user's custom actions from config
-    let mut custom_actions = config.actions.clone();
-
-    // Try to load DNS cache and add dynamic DNS actions
-    // Only add cached DNS actions if we have benchmark results for this network and feature is enabled
-    if config.use_dns_cache {
-        if let Ok(cache_storage) = dns_cache::DnsCacheStorage::load() {
-            if let Ok(network_id) = dns_cache::get_current_network_id(command_runner).await {
-                if let Some(dns_cache) = cache_storage.get_cache(&network_id) {
-                    // Generate DNS actions from cache
-                    let dns_actions = dns_cache::generate_dns_actions_from_cache(dns_cache);
-
-                    // Add the cached DNS actions at the beginning
-                    // These will appear before user's custom actions
-                    for dns_action in dns_actions.into_iter().rev() {
-                        custom_actions.insert(
-                            0,
-                            CustomAction {
-                                display: dns_action.display,
-                                cmd: dns_action.cmd,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    let mut actions = custom_actions
-        .into_iter()
-        .map(ActionType::Custom)
-        .collect::<Vec<_>>();
-
-    // Performance optimization: Start with the fastest operations first
-    // Collect Bluetooth devices early - usually very fast
-    let bluetooth_profiler = logger::Profiler::new("Bluetooth scan");
-    let bluetooth_devices = if !args.no_bluetooth && is_command_installed("bluetoothctl") {
-        get_paired_bluetooth_devices(command_runner).unwrap_or_default()
-    } else {
-        vec![]
-    };
-    bluetooth_profiler.log();
-
-    // Performance optimization: Collect VPN networks early - usually fast
-    let vpn_profiler = logger::Profiler::new("VPN scan");
-    let vpn_networks = if !args.no_vpn && is_command_installed("nmcli") {
-        get_nm_vpn_networks(command_runner).unwrap_or_default()
-    } else {
-        vec![]
-    };
-    vpn_profiler.log();
-
-    // Performance optimization: Start WiFi scanning early as it can be slow
-    // This is typically the most time-consuming network operation
-    let wifi_profiler = logger::Profiler::new("WiFi scan");
-    let wifi_networks = if !args.no_wifi {
-        if is_command_installed("nmcli") {
-            get_nm_wifi_networks(command_runner).unwrap_or_default()
-        } else if is_command_installed("iwctl") {
-            get_iwd_networks(&args.wifi_interface, command_runner).unwrap_or_default()
-        } else {
-            vec![]
-        }
-    } else {
-        vec![]
-    };
-    wifi_profiler.log();
-
-    // Performance optimization: Add simple stateless items while network scans are processing
-    // These operations are extremely fast and require no network interaction
-    if !args.no_wifi
-        && is_command_installed("nmcli")
-        && is_command_installed("nm-connection-editor")
-    {
-        actions.push(ActionType::System(SystemAction::EditConnections));
-    }
-
-    let system_profiler = logger::Profiler::new("All system actions");
-
-    // Add rfkill device actions for a specific device type
-    async fn add_rfkill_device_actions(
-        actions: &mut Vec<ActionType>,
-        device_type: &str,
-    ) -> Result<(), Box<dyn Error>> {
-        // Check for specific devices first
-        let devices = rfkill::get_rfkill_devices_by_type(device_type)
-            .await
-            .unwrap_or_default();
-
-        if !devices.is_empty() {
-            // Add specific device actions
-            for device in &devices {
-                let device_display =
-                    format!("{} ({})", device.device_type_display(), device.device);
-
-                // Use is_unblocked to determine status - uses both methods from RfkillDevice
-                if device.is_unblocked() {
-                    let display_text = format_entry(
-                        ACTION_TYPE_SYSTEM,
-                        ICON_CROSS,
-                        &format!("Turn OFF {}", device_display),
-                    );
-                    actions.push(ActionType::System(SystemAction::RfkillBlock(
-                        device.id.to_string(),
-                        display_text,
-                    )));
-                } else {
-                    let display_text = format_entry(
-                        ACTION_TYPE_SYSTEM,
-                        ICON_SIGNAL,
-                        &format!("Turn ON {}", device_display),
-                    );
-                    actions.push(ActionType::System(SystemAction::RfkillUnblock(
-                        device.id.to_string(),
-                        display_text,
-                    )));
-                }
-            }
-
-            // Add general actions for the device type only if there are devices
-            let _type_display = match device_type {
-                "wlan" => "WiFi",
-                "bluetooth" => "Bluetooth",
-                "nfc" => "NFC",
-                "uwb" => "UWB",
-                "wimax" => "WiMAX",
-                "wwan" => "WWAN",
-                "gps" => "GPS",
-                "fm" => "FM",
-                _ => device_type,
-            };
-
-            // Type-wide toggle actions removed as per requirement
-            // Only keeping per-device toggles
-        }
-
-        Ok(())
-    }
-
-    if !args.no_wifi && rfkill::is_rfkill_available() {
-        let wifi_rfkill_profiler = logger::Profiler::new("WiFi rfkill actions");
-
-        add_rfkill_device_actions(&mut actions, "wlan")
-            .await
-            .unwrap_or_default();
-
-        wifi_rfkill_profiler.log();
-    }
-
-    if !args.no_bluetooth && rfkill::is_rfkill_available() {
-        let bluetooth_rfkill_profiler = logger::Profiler::new("Bluetooth rfkill actions");
-
-        add_rfkill_device_actions(&mut actions, "bluetooth")
-            .await
-            .unwrap_or_default();
-
-        bluetooth_rfkill_profiler.log();
-    }
-
-    // Determine if airplane mode is enabled and add appropriate toggle action
-    async fn add_airplane_mode_action(actions: &mut Vec<ActionType>) -> Result<(), Box<dyn Error>> {
-        // Check if all devices are blocked (airplane mode is on)
-        // Only consider airplane mode if we have radio devices
-        // Use get_device_type_summary to efficiently check device status
-        let device_summary = rfkill::get_device_type_summary().await.unwrap_or_default();
-
-        if !device_summary.is_empty() {
-            // Check if all radio devices are blocked
-            let radio_types = ["wlan", "bluetooth", "wwan", "fm", "nfc", "gps"];
-            let radio_devices: Vec<_> = device_summary
-                .iter()
-                .filter(|(device_type, _)| radio_types.contains(&device_type.as_str()))
-                .collect();
-
-            if !radio_devices.is_empty() {
-                // Check if all radio devices are blocked
-                // (blocked_count, unblocked_count)
-                let all_blocked = radio_devices
-                    .iter()
-                    .all(|(_, (blocked, unblocked))| *blocked > 0 && *unblocked == 0);
-
-                if all_blocked {
-                    // All devices are blocked, offer to disable airplane mode
-                    actions.push(ActionType::System(SystemAction::AirplaneMode(false)));
-                } else {
-                    // Not all devices are blocked, offer to enable airplane mode
-                    actions.push(ActionType::System(SystemAction::AirplaneMode(true)));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    // Add airplane mode toggle if rfkill is available
-    if rfkill::is_rfkill_available() {
-        let airplane_profiler = logger::Profiler::new("Airplane mode action");
-
-        add_airplane_mode_action(&mut actions)
-            .await
-            .unwrap_or_default();
-
-        airplane_profiler.log();
-    }
-
-    // Display summary of all system actions timing
-    system_profiler.log();
-
-    // Performance optimization: Now add all the collected network information
-    // By collecting the data first and then adding it all at once, we optimize the process
-    actions.extend(bluetooth_devices.into_iter().map(ActionType::Bluetooth));
-    actions.extend(vpn_networks.into_iter().map(ActionType::Vpn));
-    actions.extend(wifi_networks.into_iter().map(ActionType::Wifi));
-
-    // Add WiFi connect/disconnect actions
-    if !args.no_wifi {
-        if is_command_installed("nmcli") {
-            if is_nm_connected(command_runner, &args.wifi_interface).unwrap_or(false) {
-                actions.push(ActionType::Wifi(WifiAction::Disconnect));
-            } else {
-                actions.push(ActionType::Wifi(WifiAction::Connect));
-                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
-            }
-        } else if is_command_installed("iwctl") {
-            if is_iwd_connected(command_runner, &args.wifi_interface).unwrap_or(false) {
-                actions.push(ActionType::Wifi(WifiAction::Disconnect));
-            } else {
-                actions.push(ActionType::Wifi(WifiAction::Connect));
-                actions.push(ActionType::Wifi(WifiAction::ConnectHidden));
-            }
-        }
-    }
-
-    // Get current Tailscale preferences to determine what toggle options to show
-    if !args.no_tailscale && is_command_installed("tailscale") {
-        // Performance optimization: Add Tailscale actions last as they can be expensive
-        let tailscale_profiler = logger::Profiler::new("Tailscale operations");
-        match parse_tailscale_prefs(command_runner) {
-            Some(prefs) => {
-                // Add basic Tailscale actions first (these are simple and fast)
-                actions.push(ActionType::Tailscale(TailscaleAction::SetShields(
-                    !prefs.ShieldsUp,
-                )));
-                actions.push(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
-                    !prefs.ExitNodeAllowLANAccess,
-                )));
-                actions.push(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
-                    !prefs.RouteAll,
-                )));
-                actions.push(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
-
-                // Performance optimization: Get Tailscale exit nodes (potentially slower operation)
-                // Command-line args override config file settings
-                let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-                let max_per_city = args.max_nodes_per_city.or(config.max_nodes_per_city);
-                let country = args.country.as_deref().or(config.country_filter.as_deref());
-
-                // Create TailscaleState once to avoid multiple calls to tailscale status
-                let tailscale_state = TailscaleState::new(command_runner);
-
-                let mullvad_actions = get_mullvad_actions(
-                    &tailscale_state,
-                    command_runner,
-                    &config.exclude_exit_node,
-                    max_per_country,
-                    max_per_city,
-                    country,
-                );
-                actions.extend(
-                    mullvad_actions
-                        .into_iter()
-                        .map(|m| ActionType::Tailscale(TailscaleAction::SetExitNode(m))),
-                );
-
-                if is_exit_node_active(&tailscale_state) {
-                    actions.push(ActionType::Tailscale(TailscaleAction::DisableExitNode));
-                }
-
-                actions.push(ActionType::Tailscale(TailscaleAction::SetEnable(
-                    !prefs.WantRunning,
-                )));
-
-                // Performance optimization: Add Tailscale Lock actions last (these are the most expensive)
-                if is_tailscale_lock_enabled(command_runner).unwrap_or(false) {
-                    actions.push(ActionType::Tailscale(TailscaleAction::ListLockedNodes));
-
-                    // Add individual sign node actions for each locked node
-                    // This is potentially the slowest operation, so we do it last
-                    if let Ok(locked_nodes) = get_locked_nodes(command_runner) {
-                        if !locked_nodes.is_empty() {
-                            // Add a single action to sign all nodes at once, placing it FIRST
-                            // Count is displayed in the action text automatically
-                            actions.insert(0, ActionType::Tailscale(TailscaleAction::SignAllNodes));
-
-                            // Also add individual node signing actions
-                            for node in locked_nodes {
-                                actions.push(ActionType::Tailscale(
-                                    TailscaleAction::SignLockedNode(node.node_key),
-                                ));
-                            }
-                        }
-                    }
-                }
-                tailscale_profiler.log();
-            }
-            None => (),
-        }
-    };
-
-    // Add NextDNS actions (API-based, no CLI required)
-    if !args.no_nextdns {
-        let nextdns_profiler = logger::Profiler::new("NextDNS operations");
-
-        let nextdns_toggle = config
-            .nextdns_toggle_profiles
-            .as_ref()
-            .map(|(a, b)| (a.as_str(), b.as_str()));
-
-        // Prioritize command-line API key over config file
-        let nextdns_api_key: String = if !args.nextdns_api_key.is_empty() {
-            debug!(
-                "Using NextDNS API key from command line (first 4 chars: {})",
-                if args.nextdns_api_key.len() > 4 {
-                    &args.nextdns_api_key[0..4]
-                } else {
-                    &args.nextdns_api_key
-                }
-            );
-            args.nextdns_api_key.clone().trim().to_string()
-        } else {
-            debug!("Command line API key is empty, checking config file");
-            let key = config.nextdns_api_key.clone().unwrap_or_default();
-            if !key.is_empty() {
-                let trimmed_key = key.trim().to_string();
-                debug!(
-                    "Using NextDNS API key from config file (first 4 chars: {})",
-                    if trimmed_key.len() > 4 {
-                        &trimmed_key[0..4]
-                    } else {
-                        &trimmed_key
-                    }
-                );
-                trimmed_key
-            } else {
-                debug!("No NextDNS API key found in config file");
-                String::new()
-            }
-        };
-
-        if nextdns_api_key.is_empty() && nextdns_toggle.is_none() {
-            debug!("Warning: No NextDNS API key provided. Some features will be limited.");
-            debug!("Set with --nextdns-api-key or in config.toml");
-        }
-
-        debug!(
-            "Calling get_nextdns_actions with API key: {}",
-            if nextdns_api_key.is_empty() {
-                "None"
-            } else if nextdns_api_key.len() > 4 {
-                &nextdns_api_key[0..4]
-            } else {
-                &nextdns_api_key
-            }
-        );
-
-        let nextdns_actions = get_nextdns_actions(
-            if nextdns_api_key.is_empty() {
-                None
-            } else {
-                Some(nextdns_api_key.as_str())
-            },
-            nextdns_toggle,
-        )
-        .await
-        .unwrap_or_default();
-
-        debug!(
-            "get_nextdns_actions returned {} actions",
-            nextdns_actions.len()
-        );
-
-        if !nextdns_actions.is_empty() {
-            actions.extend(nextdns_actions.into_iter().map(ActionType::NextDns));
-        }
-        nextdns_profiler.log();
-    }
-
-    // Add diagnostic actions (get_diagnostic_actions checks for tool availability internally)
-    if !args.no_diagnostics {
-        let diagnostic_actions = get_diagnostic_actions();
-        if !diagnostic_actions.is_empty() {
-            actions.extend(diagnostic_actions.into_iter().map(ActionType::Diagnostic));
-        }
-    }
-
-    // Log overall performance
-    debug!("Generated list with {} actions", actions.len());
-
-    // Add any additional system actions here
-    Ok(actions)
 }
 
 /// Handles a custom action by executing its command.

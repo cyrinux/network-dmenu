@@ -31,13 +31,12 @@ pub use dns_cache::{
     DnsCacheStorage,
 };
 pub use iwd::{
-    connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks, is_iwd_connected,
+    connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
 };
 pub use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
     get_nm_vpn_networks, get_nm_wifi_networks, is_known_network as is_known_nm_network,
-    is_nm_connected,
 };
 pub use nextdns::{get_nextdns_actions, handle_nextdns_action, NextDnsAction};
 pub use privilege::{
@@ -47,6 +46,7 @@ pub use privilege::{
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
+    TailscaleState,
 };
 
 // Re-export async functions
