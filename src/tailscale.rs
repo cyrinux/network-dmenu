@@ -116,6 +116,31 @@ pub struct TailscalePeer {
     pub tags: Vec<String>,
     #[serde(rename = "CapMap", default, skip_serializing_if = "Option::is_none")]
     pub cap_map: Option<HashMap<String, Option<serde_json::Value>>>,
+    // Additional fields for ML predictions
+    #[serde(rename = "LastHandshake", default)]
+    pub last_handshake: Option<String>,
+    #[serde(rename = "LastSeen", default)]
+    pub last_seen: Option<String>,
+    #[serde(rename = "RxBytes", default)]
+    pub rx_bytes: u64,
+    #[serde(rename = "TxBytes", default)]
+    pub tx_bytes: u64,
+    #[serde(rename = "Created", default)]
+    pub created: Option<String>,
+    #[serde(rename = "CurAddr", default)]
+    pub cur_addr: Option<String>,
+    #[serde(rename = "Relay", default)]
+    pub relay: Option<String>,
+    #[serde(rename = "PeerAPIURL", default)]
+    pub peer_api_url: Option<Vec<String>>,
+    #[serde(rename = "Capabilities", default)]
+    pub capabilities: Vec<String>,
+    #[serde(rename = "InNetworkMap", default)]
+    pub in_network_map: bool,
+    #[serde(rename = "InMagicSock", default)]
+    pub in_magic_sock: bool,
+    #[serde(rename = "InEngine", default)]
+    pub in_engine: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

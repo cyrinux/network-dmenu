@@ -2,8 +2,8 @@ mod streaming;
 
 // Import modules from the library crate
 use network_dmenu::{
-    bluetooth, command, constants, diagnostics, dns_cache, iwd, logger,
-    networkmanager, nextdns, privilege, rfkill, tailscale, tailscale_prefs, utils
+    bluetooth, command, constants, diagnostics, iwd, logger,
+    networkmanager, nextdns, rfkill, utils
 };
 
 #[macro_use]
