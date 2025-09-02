@@ -1,4 +1,9 @@
 use crate::{
+    ActionType, Args, Config, CustomAction, SystemAction, TailscaleAction,
+    VpnAction, WifiAction,
+    format_entry, ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
+};
+use network_dmenu::{
     bluetooth::get_paired_bluetooth_devices,
     command::{CommandRunner, RealCommandRunner, is_command_installed},
     diagnostics,
@@ -9,8 +14,6 @@ use crate::{
     rfkill,
     tailscale::{get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled, get_locked_nodes, TailscaleState},
     tailscale_prefs::parse_tailscale_prefs,
-    ActionType, Args, Config, CustomAction, SystemAction, TailscaleAction,
-    format_entry, ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
 };
 use std::error::Error;
 use std::process::Stdio;
@@ -29,7 +32,27 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdout mode - collect all actions first
     if use_stdout {
-        let actions = collect_all_actions(args.clone(), config.clone()).await?;
+        let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
+
+        // Apply ML personalization if enabled
+        #[cfg(feature = "ml")]
+        {
+            let action_strings: Vec<String> = actions.iter()
+                .map(|a| crate::action_to_string(a))
+                .collect();
+            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+            // Reorder actions based on personalized order
+            let mut reordered = Vec::new();
+            for action_str in personalized {
+                if let Some(pos) = actions.iter().position(|a| crate::action_to_string(a) == action_str) {
+                    reordered.push(actions.remove(pos));
+                }
+            }
+            // Add any remaining actions that weren't in the personalized list
+            reordered.extend(actions);
+            actions = reordered;
+        }
         for (i, action) in actions.iter().enumerate() {
             println!("{}: {}", i + 1, crate::action_to_string(action));
         }
@@ -38,7 +61,27 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdin mode - collect all actions first
     if use_stdin {
-        let actions = collect_all_actions(args.clone(), config.clone()).await?;
+        let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
+
+        // Apply ML personalization if enabled
+        #[cfg(feature = "ml")]
+        {
+            let action_strings: Vec<String> = actions.iter()
+                .map(|a| crate::action_to_string(a))
+                .collect();
+            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+            // Reorder actions based on personalized order
+            let mut reordered = Vec::new();
+            for action_str in personalized {
+                if let Some(pos) = actions.iter().position(|a| crate::action_to_string(a) == action_str) {
+                    reordered.push(actions.remove(pos));
+                }
+            }
+            // Add any remaining actions that weren't in the personalized list
+            reordered.extend(actions);
+            actions = reordered;
+        }
         use std::io::{self, BufRead};
         let stdin = io::stdin();
         let mut line = String::new();
@@ -69,8 +112,34 @@ pub async fn select_action_from_menu_streaming(
         stream_actions_simple(args_clone, config_clone, tx).await
     });
 
-    // Stream actions to dmenu as they arrive
+    // Collect all actions first for ML personalization
+    let mut all_actions = Vec::new();
     while let Some(action) = rx.recv().await {
+        all_actions.push(action);
+    }
+
+    // Apply ML personalization if enabled
+    #[cfg(feature = "ml")]
+    {
+        let action_strings: Vec<String> = all_actions.iter()
+            .map(|a| crate::action_to_string(a))
+            .collect();
+        let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+        // Reorder actions based on personalized order
+        let mut reordered = Vec::new();
+        for action_str in personalized {
+            if let Some(pos) = all_actions.iter().position(|a| crate::action_to_string(a) == action_str) {
+                reordered.push(all_actions.remove(pos));
+            }
+        }
+        // Add any remaining actions that weren't in the personalized list
+        reordered.extend(all_actions);
+        all_actions = reordered;
+    }
+
+    // Stream personalized actions to dmenu
+    for action in all_actions {
         let action_string = crate::action_to_string(&action);
         if stdin.write_all(format!("{}\n", action_string).as_bytes()).await.is_err() {
             break; // dmenu closed
@@ -364,7 +433,12 @@ async fn send_vpn_actions(tx: &mpsc::UnboundedSender<ActionType>) {
 
     if let Ok(actions) = get_nm_vpn_networks(&command_runner) {
         for action in actions {
-            let _ = tx.send(ActionType::Vpn(action));
+            // Convert library VpnAction to main VpnAction
+            let main_action = match action {
+                network_dmenu::VpnAction::Connect(name) => VpnAction::Connect(name),
+                network_dmenu::VpnAction::Disconnect(name) => VpnAction::Disconnect(name),
+            };
+            let _ = tx.send(ActionType::Vpn(main_action));
         }
     }
 }
@@ -375,13 +449,27 @@ async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interfac
     if is_command_installed("nmcli") {
         if let Ok(actions) = get_nm_wifi_networks(&command_runner) {
             for action in actions {
-                let _ = tx.send(ActionType::Wifi(action));
+                // Convert library WifiAction to main WifiAction
+                let main_action = match action {
+                    network_dmenu::WifiAction::Connect => WifiAction::Connect,
+                    network_dmenu::WifiAction::ConnectHidden => WifiAction::ConnectHidden,
+                    network_dmenu::WifiAction::Disconnect => WifiAction::Disconnect,
+                    network_dmenu::WifiAction::Network(name) => WifiAction::Network(name),
+                };
+                let _ = tx.send(ActionType::Wifi(main_action));
             }
         }
     } else if is_command_installed("iwctl") {
         if let Ok(actions) = get_iwd_networks(wifi_interface, &command_runner) {
             for action in actions {
-                let _ = tx.send(ActionType::Wifi(action));
+                // Convert library WifiAction to main WifiAction
+                let main_action = match action {
+                    network_dmenu::WifiAction::Connect => WifiAction::Connect,
+                    network_dmenu::WifiAction::ConnectHidden => WifiAction::ConnectHidden,
+                    network_dmenu::WifiAction::Disconnect => WifiAction::Disconnect,
+                    network_dmenu::WifiAction::Network(name) => WifiAction::Network(name),
+                };
+                let _ = tx.send(ActionType::Wifi(main_action));
             }
         }
     }

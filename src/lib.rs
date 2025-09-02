@@ -5,6 +5,9 @@
 
 pub mod bluetooth;
 pub mod command;
+#[cfg(feature = "ml")]
+pub mod ml;
+pub mod ml_integration;
 pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
@@ -47,6 +50,12 @@ pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
     TailscaleState,
+};
+pub use ml_integration::{
+    predict_best_exit_nodes, record_exit_node_performance, analyze_network_issues,
+    get_personalized_menu_order, record_user_action, predict_best_wifi_network,
+    record_wifi_performance, get_performance_summary, initialize_ml_system,
+    force_save_ml_models,
 };
 
 // Re-export async functions

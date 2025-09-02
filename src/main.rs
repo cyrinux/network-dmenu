@@ -1,18 +1,10 @@
-mod bluetooth;
-mod command;
-mod constants;
-mod diagnostics;
-mod dns_cache;
-mod iwd;
-mod logger;
-mod networkmanager;
-mod nextdns;
-mod privilege;
-mod rfkill;
 mod streaming;
-mod tailscale;
-mod tailscale_prefs;
-mod utils;
+
+// Import modules from the library crate
+use network_dmenu::{
+    bluetooth, command, constants, diagnostics, dns_cache, iwd, logger,
+    networkmanager, nextdns, privilege, rfkill, tailscale, tailscale_prefs, utils
+};
 
 #[macro_use]
 extern crate log;
@@ -37,7 +29,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use tailscale::{
+use network_dmenu::tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
@@ -157,7 +149,6 @@ enum SystemAction {
 
 /// Enum representing Wi-Fi-related actions.
 #[derive(Debug)]
-#[allow(dead_code)]
 enum WifiAction {
     Connect,
     ConnectHidden,
@@ -241,6 +232,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::env::set_var("RUST_LOG", &args.log_level);
     }
     logger::init();
+
+    // Initialize ML system if enabled
+    #[cfg(feature = "ml")]
+    {
+        network_dmenu::initialize_ml_system();
+    }
 
     // Start profiling total execution time
     let list_generation_profiler = logger::Profiler::new("Generated list");
@@ -398,6 +395,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if !action.is_empty() {
+        // Record user action for ML learning
+        #[cfg(feature = "ml")]
+        {
+            network_dmenu::record_user_action(&action);
+        }
+
         let selected_action = find_selected_action(&action, &actions)?;
         let connected_devices = get_connected_devices(&command_runner)?;
 
@@ -411,6 +414,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     }
     // When action is empty (user pressed Escape or closed window), just exit silently
+
+    // Save ML models before exit
+    #[cfg(feature = "ml")]
+    {
+        if let Err(e) = network_dmenu::force_save_ml_models() {
+            debug!("Failed to save ML models on exit: {}", e);
+        }
+    }
 
     Ok(())
 }

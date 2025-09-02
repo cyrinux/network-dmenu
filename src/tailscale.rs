@@ -275,6 +275,26 @@ pub fn get_mullvad_actions(
 
     log::debug!("Found {} peers in Tailscale status", status.peer.len());
 
+    // Get ML predictions for best exit nodes if ML feature is enabled
+    #[cfg(feature = "ml")]
+    let ml_predictions = {
+        let peers: Vec<crate::tailscale::TailscalePeer> = status.peer.values()
+            .filter(|p| p.exit_node_option && p.dns_name.contains("mullvad.ts.net"))
+            .cloned()
+            .collect();
+
+        if !peers.is_empty() {
+            let predictions = crate::ml_integration::predict_best_exit_nodes(&peers, 5);
+            log::debug!("ML predictions for exit nodes: {:?}", predictions);
+            predictions
+        } else {
+            Vec::new()
+        }
+    };
+
+    #[cfg(not(feature = "ml"))]
+    let ml_predictions: Vec<(String, f32)> = Vec::new();
+
     // Group nodes by country and city
     let mut nodes_by_country: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
     let mut nodes_by_city: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
@@ -383,7 +403,22 @@ pub fn get_mullvad_actions(
     // Format the selected nodes for display
     let mut mullvad_actions = Vec::new();
 
-    for (node_name, peer) in selected_nodes {
+    // Helper to get ML score for a node
+    let get_ml_score = |node_name: &str| -> Option<f32> {
+        ml_predictions.iter()
+            .find(|(name, _)| name == node_name || name.trim_end_matches('.') == node_name)
+            .map(|(_, score)| *score)
+    };
+
+    // Sort nodes by ML score if available
+    let mut sorted_nodes: Vec<_> = selected_nodes.into_iter().collect();
+    sorted_nodes.sort_by(|(name_a, _), (name_b, _)| {
+        let score_a = get_ml_score(name_a).unwrap_or(0.0);
+        let score_b = get_ml_score(name_b).unwrap_or(0.0);
+        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (node_name, peer) in sorted_nodes {
         let country = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.country.is_empty() {
                 "Unknown"
@@ -847,7 +882,34 @@ pub async fn handle_tailscale_action(
             Ok(status.success())
         }
         TailscaleAction::SetExitNode(node) => {
+            // Record ML action for learning
+            #[cfg(feature = "ml")]
+            {
+                crate::ml_integration::record_user_action(&format!("Select Exit Node: {}", node));
+            }
+
             let success = set_exit_node(command_runner, node).await;
+
+            // Record performance after connection (simplified - would need actual metrics)
+            #[cfg(feature = "ml")]
+            if success {
+                // Clone the node name for the async task
+                let node_name = node.clone();
+                // In a real implementation, you'd measure actual latency/packet loss
+                // For now, just record that the node was selected
+                tokio::spawn(async move {
+                    // Wait a bit for connection to stabilize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    // Would measure actual metrics here
+                    let simulated_latency = 30.0; // This would be actual measurement
+                    let simulated_packet_loss = 0.01;
+                    crate::ml_integration::record_exit_node_performance(
+                        &node_name,
+                        simulated_latency,
+                        simulated_packet_loss
+                    );
+                });
+            }
 
             // Log errors from mullvad check in debug mode but continue execution
             if let Err(_e) = check_mullvad().await {
