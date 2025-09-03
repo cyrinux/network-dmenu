@@ -117,6 +117,12 @@ impl Default for UsageConfig {
     }
 }
 
+impl Default for UsagePatternLearner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UsagePatternLearner {
     pub fn new() -> Self {
         Self {

@@ -118,13 +118,11 @@ impl SshProxyConfig {
         }
 
         // Kill the SSH process using the control socket
-        let kill_args = vec![
-            "-S".to_string(),
+        let kill_args = ["-S".to_string(),
             self.socket_path.clone(),
             "-O".to_string(),
             "exit".to_string(),
-            self.server.clone(),
-        ];
+            self.server.clone()];
 
         debug!("Stopping SSH SOCKS proxy: ssh {}", kill_args.join(" "));
 
@@ -165,7 +163,7 @@ impl SshProxyConfig {
 pub fn get_ssh_proxy_actions(ssh_configs: &HashMap<String, SshProxyConfig>) -> Vec<SshAction> {
     let mut actions = Vec::new();
 
-    for (_, config) in ssh_configs {
+    for config in ssh_configs.values() {
         if config.is_active() {
             actions.push(SshAction::StopProxy(config.clone()));
         } else {
@@ -213,8 +211,6 @@ pub fn handle_ssh_action(action: &SshAction, command_runner: &dyn CommandRunner)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::MockCommandRunner;
-    use std::process::{ExitStatus, Output};
 
     #[test]
     fn test_ssh_proxy_config_creation() {

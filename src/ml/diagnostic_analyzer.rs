@@ -100,6 +100,12 @@ impl Default for DiagnosticConfig {
     }
 }
 
+impl Default for DiagnosticAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiagnosticAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -266,8 +272,7 @@ impl DiagnosticAnalyzer {
 
     /// Convert symptoms to feature vector
     fn symptoms_to_vector(&self, symptoms: &[NetworkSymptom]) -> Vec<f32> {
-        let all_symptoms = vec![
-            NetworkSymptom::HighLatency,
+        let all_symptoms = [NetworkSymptom::HighLatency,
             NetworkSymptom::PacketLoss,
             NetworkSymptom::JitterSpike,
             NetworkSymptom::DnsFailure,
@@ -276,8 +281,7 @@ impl DiagnosticAnalyzer {
             NetworkSymptom::IntermittentConnection,
             NetworkSymptom::NoConnectivity,
             NetworkSymptom::AuthenticationFailure,
-            NetworkSymptom::CertificateError,
-        ];
+            NetworkSymptom::CertificateError];
 
         all_symptoms.iter()
             .map(|s| {

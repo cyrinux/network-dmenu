@@ -62,6 +62,12 @@ impl Default for ExitNodeConfig {
     }
 }
 
+impl Default for ExitNodePredictor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExitNodePredictor {
     pub fn new() -> Self {
         Self {
@@ -85,7 +91,7 @@ impl ExitNodePredictor {
     pub fn record_performance(&mut self, node_id: &str, metrics: NetworkMetrics) {
         let history = self.performance_history
             .entry(node_id.to_string())
-            .or_insert_with(Vec::new);
+            .or_default();
 
         history.push(metrics);
 
@@ -489,6 +495,7 @@ impl FeatureExtractor<TailscalePeer> for ExitNodePredictor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ml::NetworkType;
 
     fn create_test_peer(dns_name: &str, online: bool, priority: Option<i32>) -> TailscalePeer {
         TailscalePeer {

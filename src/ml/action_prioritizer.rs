@@ -119,6 +119,12 @@ struct NetworkStateCache {
     last_updated: i64,
 }
 
+impl Default for ActionPrioritizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActionPrioritizer {
     pub fn new() -> Self {
         Self {
@@ -418,7 +424,7 @@ impl ActionPrioritizer {
         let action = action_str.to_lowercase();
         
         // Check for potential emergency situations
-        let is_emergency = context.signal_strength.map_or(false, |s| s < 0.1) || 
+        let is_emergency = context.signal_strength.is_some_and(|s| s < 0.1) || 
                           context.network_type == NetworkType::Unknown;
         
         if is_emergency {

@@ -39,7 +39,7 @@ pub async fn select_action_from_menu_streaming(
         #[cfg(feature = "ml")]
         {
             let action_strings: Vec<String> = actions.iter()
-                .map(|a| crate::action_to_string(a))
+                .map(crate::action_to_string)
                 .collect();
             let personalized = network_dmenu::get_personalized_menu_order(action_strings);
 
@@ -69,7 +69,7 @@ pub async fn select_action_from_menu_streaming(
         #[cfg(feature = "ml")]
         {
             let action_strings: Vec<String> = actions.iter()
-                .map(|a| crate::action_to_string(a))
+                .map(crate::action_to_string)
                 .collect();
             let personalized = network_dmenu::get_personalized_menu_order(action_strings);
 
@@ -124,7 +124,7 @@ pub async fn select_action_from_menu_streaming(
     #[cfg(feature = "ml")]
     {
         let action_strings: Vec<String> = all_actions.iter()
-            .map(|a| crate::action_to_string(a))
+            .map(crate::action_to_string)
             .collect();
         let personalized = network_dmenu::get_personalized_menu_order(action_strings);
 

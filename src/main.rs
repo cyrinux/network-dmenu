@@ -1647,6 +1647,7 @@ mod tests {
             use_dns_cache: true,
             nextdns_api_key: None,
             nextdns_toggle_profiles: None,
+            ssh_proxies: std::collections::HashMap::new(),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
         };

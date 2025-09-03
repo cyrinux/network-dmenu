@@ -71,6 +71,12 @@ pub struct NetworkPredictor {
     config: NetworkPredictorConfig,
 }
 
+impl Default for NetworkPredictor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkPredictor {
     pub fn new() -> Self {
         Self {
@@ -216,7 +222,7 @@ impl NetworkPredictor {
     pub fn record_performance(&mut self, ssid: &str, metrics: NetworkMetrics) {
         let history = self.network_history
             .entry(ssid.to_string())
-            .or_insert_with(Vec::new);
+            .or_default();
 
         history.push(metrics);
 
@@ -347,6 +353,7 @@ impl ModelPersistence for NetworkPredictor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ml::NetworkType;
 
     fn create_test_network(ssid: &str, signal: i32) -> WifiNetwork {
         WifiNetwork {

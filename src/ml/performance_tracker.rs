@@ -71,6 +71,12 @@ pub struct PerformanceTracker {
     config: PerformanceConfig,
 }
 
+impl Default for PerformanceTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceTracker {
     pub fn new() -> Self {
         Self {
@@ -92,7 +98,7 @@ impl PerformanceTracker {
     pub fn record_metrics(&mut self, connection_id: &str, metrics: NetworkMetrics) {
         let history = self.metrics_history
             .entry(connection_id.to_string())
-            .or_insert_with(VecDeque::new);
+            .or_default();
 
         history.push_back(metrics.clone());
 

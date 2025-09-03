@@ -43,6 +43,13 @@ pub struct MlManager {
 }
 
 #[cfg(feature = "ml")]
+impl Default for MlManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "ml")]
 impl MlManager {
     pub fn new() -> Self {
         let config = MlConfig::default();
@@ -69,7 +76,7 @@ impl MlManager {
         let model_base = &self.config.model_path;
 
         // Create directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&model_base) {
+        if let Err(e) = std::fs::create_dir_all(model_base) {
             error!("Failed to create ML model directory: {}", e);
         }
 
@@ -157,7 +164,7 @@ fn get_location_hash() -> u64 {
 
     let mut hasher = DefaultHasher::new();
     if let Ok(output) = std::process::Command::new("ip")
-        .args(&["route", "show", "default"])
+        .args(["route", "show", "default"])
         .output()
     {
         output.stdout.hash(&mut hasher);
@@ -169,7 +176,7 @@ fn get_location_hash() -> u64 {
 fn detect_network_type() -> NetworkType {
     // Detect current network type
     if let Ok(output) = std::process::Command::new("ip")
-        .args(&["link", "show"])
+        .args(["link", "show"])
         .output()
     {
         let output_str = String::from_utf8_lossy(&output.stdout);
@@ -588,8 +595,7 @@ pub fn force_save_ml_models() -> Result<(), Box<dyn std::error::Error>> {
 pub fn get_performance_summary(connection_id: &str) -> Option<String> {
     let manager = ML_MANAGER.lock().unwrap();
 
-    if let Some(summary) = manager.performance_tracker.get_summary(connection_id) {
-        Some(format!(
+    manager.performance_tracker.get_summary(connection_id).map(|summary| format!(
             "📊 Performance Summary for {}\n\
              Average Latency: {:.1}ms\n\
              P95 Latency: {:.1}ms\n\
@@ -603,9 +609,6 @@ pub fn get_performance_summary(connection_id: &str) -> Option<String> {
             summary.uptime_percentage,
             summary.total_samples
         ))
-    } else {
-        None
-    }
 }
 
 // Non-ML fallback functions for when ML feature is disabled
