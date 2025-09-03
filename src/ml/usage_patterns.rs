@@ -978,29 +978,29 @@ use std::fmt;
 fn user_action_to_safe_string(action: &UserAction) -> String {
     match action {
         UserAction::ConnectWifi(name) => {
-            format!("ConnectWifi({})", name.replace('\\', "_").replace('"', "_"))
+            format!("ConnectWifi({})", name.replace(['\\', '"'], "_"))
         }
         UserAction::DisconnectWifi => "DisconnectWifi".to_string(),
         UserAction::ConnectBluetooth(name) => format!(
             "ConnectBluetooth({})",
-            name.replace('\\', "_").replace('"', "_")
+            name.replace(['\\', '"'], "_")
         ),
         UserAction::DisconnectBluetooth => "DisconnectBluetooth".to_string(),
         UserAction::EnableTailscale => "EnableTailscale".to_string(),
         UserAction::DisableTailscale => "DisableTailscale".to_string(),
         UserAction::SelectExitNode(name) => format!(
             "SelectExitNode({})",
-            name.replace('\\', "_").replace('"', "_")
+            name.replace(['\\', '"'], "_")
         ),
         UserAction::DisableExitNode => "DisableExitNode".to_string(),
         UserAction::RunDiagnostic(name) => format!(
             "RunDiagnostic({})",
-            name.replace('\\', "_").replace('"', "_")
+            name.replace(['\\', '"'], "_")
         ),
         UserAction::ToggleAirplaneMode => "ToggleAirplaneMode".to_string(),
         UserAction::CustomAction(name) => format!(
             "CustomAction({})",
-            name.replace('\\', "_").replace('"', "_")
+            name.replace(['\\', '"'], "_")
         ),
     }
 }
@@ -1039,13 +1039,10 @@ fn safe_string_to_user_action(s: &str) -> Option<UserAction> {
         .and_then(|n| n.strip_suffix(')'))
     {
         Some(UserAction::RunDiagnostic(name.to_string()))
-    } else if let Some(name) = s
-        .strip_prefix("CustomAction(")
-        .and_then(|n| n.strip_suffix(')'))
-    {
-        Some(UserAction::CustomAction(name.to_string()))
     } else {
-        None
+        s.strip_prefix("CustomAction(")
+         .and_then(|n| n.strip_suffix(')'))
+         .map(|name| UserAction::CustomAction(name.to_string()))
     }
 }
 
