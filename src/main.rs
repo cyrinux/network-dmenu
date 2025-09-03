@@ -3,7 +3,7 @@ mod streaming;
 // Import modules from the library crate
 use network_dmenu::{
     bluetooth, command, constants, diagnostics, iwd, logger,
-    networkmanager, nextdns, rfkill, ssh, tor, utils, SshProxyConfig, TorsocksConfig
+    networkmanager, nextdns, rfkill, ssh, utils, SshProxyConfig, TorsocksConfig
 };
 
 #[macro_use]
@@ -33,7 +33,7 @@ use network_dmenu::tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
-use network_dmenu::tor::{get_tor_actions, handle_tor_action, tor_action_to_string, TorAction};
+use network_dmenu::tor::{handle_tor_action, tor_action_to_string, TorAction};
 use utils::check_captive_portal;
 
 /// Command-line arguments structure for the application.
@@ -1712,6 +1712,7 @@ mod tests {
             nextdns_api_key: None,
             nextdns_toggle_profiles: None,
             ssh_proxies: std::collections::HashMap::new(),
+            torsocks_apps: std::collections::HashMap::new(),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
         };
@@ -1724,6 +1725,7 @@ mod tests {
             no_bluetooth: false,
             no_tailscale: false,
             no_nextdns: false,
+            no_tor: false,
             nextdns_api_key: String::new(),
             validate_nextdns_key: false,
             refresh_nextdns_profiles: false,
@@ -1742,7 +1744,7 @@ mod tests {
         let country = args
             .country
             .as_deref()
-            .or_else(|| config.country_filter.as_deref());
+            .or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(2));
         assert_eq!(country, Some("Sweden"));
@@ -1755,7 +1757,7 @@ mod tests {
         let country = args
             .country
             .as_deref()
-            .or_else(|| config.country_filter.as_deref());
+            .or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(3));
         assert_eq!(country, Some("USA"));

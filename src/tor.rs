@@ -135,7 +135,7 @@ impl TorManager {
         }
 
         // Try graceful shutdown via control port first
-        if let Err(_) = self.control_shutdown() {
+        if self.control_shutdown().is_err() {
             warn!("Graceful shutdown failed, attempting force kill");
             
             // Force kill Tor processes

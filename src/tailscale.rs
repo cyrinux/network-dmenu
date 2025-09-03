@@ -1807,9 +1807,10 @@ mod tests {
         ]);
 
         // Create a TailscaleState with the failed command runner
-        let mut state = TailscaleState::default();
-        // Make sure status is an empty default instance
-        state.status = TailscaleStatus::default();
+        let state = TailscaleState {
+            status: TailscaleStatus::default(),
+            ..Default::default()
+        };
 
         let exclude_nodes = vec![];
 
@@ -2082,10 +2083,12 @@ mod tests {
     #[test]
     fn test_is_tailscale_lock_enabled_with_state() {
         // Create a TailscaleState with a lock_output that indicates lock is enabled
-        let mut state = TailscaleState::default();
-        state.lock_output = Some(
-            "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock.".to_string(),
-        );
+        let state = TailscaleState {
+            lock_output: Some(
+                "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock.".to_string(),
+            ),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2106,8 +2109,10 @@ mod tests {
     #[test]
     fn test_is_tailscale_lock_disabled_with_state() {
         // Create a TailscaleState with a lock_output that indicates lock is disabled
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is DISABLED.".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is DISABLED.".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2128,8 +2133,10 @@ mod tests {
     #[test]
     fn test_get_locked_nodes_with_state() {
         // Create a TailscaleState with a lock_output that contains locked nodes
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is ENABLED.\n\nThe following nodes are locked out by tailnet lock and cannot connect to other nodes:\n\tus-atl-wg-302.mullvad.ts.net.\t100.117.10.73,fd7a:115c:a1e0::cc01:a51\tncqp5kyPF311CNTRL\tnodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48\n\tgb-mnc-wg-005.mullvad.ts.net.\t100.119.6.58,fd7a:115c:a1e0::9801:63a\tnFgKB4hfb411CNTRL\tnodekey:91b56549aa87412a677b0427d57d23e51f962a2496d9ed86abe2385d98f70639".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is ENABLED.\n\nThe following nodes are locked out by tailnet lock and cannot connect to other nodes:\n\tus-atl-wg-302.mullvad.ts.net.\t100.117.10.73,fd7a:115c:a1e0::cc01:a51\tncqp5kyPF311CNTRL\tnodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48\n\tgb-mnc-wg-005.mullvad.ts.net.\t100.119.6.58,fd7a:115c:a1e0::9801:63a\tnFgKB4hfb411CNTRL\tnodekey:91b56549aa87412a677b0427d57d23e51f962a2496d9ed86abe2385d98f70639".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2161,8 +2168,10 @@ mod tests {
     #[test]
     fn test_get_locked_nodes_empty_with_state() {
         // Create a TailscaleState with a lock_output that indicates no locked nodes
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is ENABLED.\n\nNo locked nodes found.".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is ENABLED.\n\nNo locked nodes found.".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {

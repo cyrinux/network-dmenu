@@ -6,7 +6,9 @@
       "Bash(grep:*)",
       "Bash(cargo check:*)",
       "Bash(./target/debug/network-dmenu:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

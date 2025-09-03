@@ -154,7 +154,8 @@ mod tests {
     fn test_has_privilege_escalation() {
         // This should be true on most systems with either sudo or pkexec
         let has_priv = has_privilege_escalation();
-        assert!(has_priv || !has_priv); // Always passes, just checking it doesn't panic
+        // Test passed if we reach this point - function doesn't panic
+        let _ = has_priv; // Use the variable to avoid unused variable warning
     }
 
     #[test]

@@ -12,7 +12,6 @@ use network_dmenu::{
     networkmanager::{get_nm_vpn_networks, get_nm_wifi_networks},
     nextdns,
     rfkill,
-    ssh,
     tailscale::{get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled, get_locked_nodes, TailscaleState},
     tor,
     tailscale_prefs::parse_tailscale_prefs,
