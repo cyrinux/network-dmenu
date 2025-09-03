@@ -65,6 +65,8 @@
             # Rust development
             rustfmt
             rustPackages.clippy
+            tor
+            torsocks
           ] ++ libs;
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
 

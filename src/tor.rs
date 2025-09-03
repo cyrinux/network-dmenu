@@ -49,20 +49,34 @@ impl TorManager {
         Self::default()
     }
 
-    /// Check if Tor daemon is running
-    pub fn is_tor_running(&self) -> bool {
+    /// Check if Tor daemon is running (async version)
+    pub async fn is_tor_running_async(&self) -> bool {
         // Check if Tor is listening on the control port
-        self.is_port_listening(self.control_port) || 
+        self.is_port_listening_async(self.control_port).await || 
         // Also check SOCKS port as fallback
-        self.is_port_listening(self.socks_port)
+        self.is_port_listening_async(self.socks_port).await
     }
 
-    fn is_port_listening(&self, port: u16) -> bool {
+    /// Check if Tor daemon is running (sync version for backward compatibility)
+    pub fn is_tor_running(&self) -> bool {
+        // Use a simple heuristic check - look for tor processes
+        // This is much faster than port checking
+        match std::process::Command::new("pgrep")
+            .args(["-x", "tor"])
+            .output()
+        {
+            Ok(output) => !output.stdout.is_empty(),
+            Err(_) => false,
+        }
+    }
+
+    async fn is_port_listening_async(&self, port: u16) -> bool {
         // Check if a process is listening on the specified port
         // Try ss first (modern and widely available)
-        match std::process::Command::new("ss")
+        match tokio::process::Command::new("ss")
             .args(["-tln"])
             .output()
+            .await
         {
             Ok(output) => {
                 let output_str = String::from_utf8_lossy(&output.stdout);
@@ -72,16 +86,18 @@ impl TorManager {
             }
             Err(_) => {
                 // Fallback: try lsof
-                match std::process::Command::new("lsof")
+                match tokio::process::Command::new("lsof")
                     .args(["-i", &format!("tcp:{}", port)])
                     .output()
+                    .await
                 {
                     Ok(output) => !output.stdout.is_empty(),
                     Err(_) => {
                         // Last fallback: try netstat
-                        match std::process::Command::new("netstat")
+                        match tokio::process::Command::new("netstat")
                             .args(["-tln"])
                             .output()
+                            .await
                         {
                             Ok(output) => {
                                 let output_str = String::from_utf8_lossy(&output.stdout);
@@ -285,6 +301,19 @@ impl TorsocksConfig {
         }
     }
 
+    /// Check if the application is running with torsocks (async version)
+    pub async fn is_running_async(&self) -> bool {
+        // Check if there are processes matching our command
+        match tokio::process::Command::new("pgrep")
+            .args(["-f", &format!("torsocks {}", self.command)])
+            .output()
+            .await
+        {
+            Ok(output) => !output.stdout.is_empty(),
+            Err(_) => false,
+        }
+    }
+
     /// Start application with torsocks
     pub fn start(&self, command_runner: &dyn CommandRunner) -> Result<(), String> {
         if self.is_running() {
@@ -354,6 +383,37 @@ pub fn get_tor_actions(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Ve
     if tor_manager.is_tor_running() && is_command_installed("torsocks") {
         for config in torsocks_configs.values() {
             if config.is_running() {
+                actions.push(TorAction::StopTorsocks(config.clone()));
+            } else {
+                actions.push(TorAction::StartTorsocks(config.clone()));
+            }
+        }
+    }
+
+    actions
+}
+
+/// Get Tor proxy actions based on current state (async version for streaming)
+pub async fn get_tor_actions_async(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Vec<TorAction> {
+    let mut actions = Vec::new();
+    let tor_manager = TorManager::new();
+
+    // Tor daemon management - use faster process check for streaming
+    let is_running = tor_manager.is_tor_running();
+    if is_running {
+        actions.push(TorAction::StopTor);
+        actions.push(TorAction::RestartTor);
+        actions.push(TorAction::RefreshCircuit);
+        actions.push(TorAction::TestConnection);
+    } else {
+        actions.push(TorAction::StartTor);
+    }
+
+    // Torsocks application management (only if Tor is running and torsocks is available)
+    if is_running && is_command_installed("torsocks") {
+        for config in torsocks_configs.values() {
+            // Use async version of is_running check
+            if config.is_running_async().await {
                 actions.push(TorAction::StopTorsocks(config.clone()));
             } else {
                 actions.push(TorAction::StartTorsocks(config.clone()));

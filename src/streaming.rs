@@ -719,7 +719,7 @@ async fn send_tor_actions(
     // Only show Tor daemon actions if tor command is available
     if is_command_installed("tor") {
         debug!("Tor command found, getting actions");
-        let actions = tor::get_tor_actions(torsocks_apps);
+        let actions = tor::get_tor_actions_async(torsocks_apps).await;
         debug!("Got {} Tor actions", actions.len());
         for action in actions {
             debug!("Sending Tor action: {:?}", action);
