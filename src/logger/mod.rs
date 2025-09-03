@@ -5,7 +5,10 @@
 //! to track operation durations.
 use chrono::Local;
 use env_logger::{Builder, Env};
+#[cfg(any(debug_assertions, test))]
 use log::{debug, log_enabled, Level};
+#[cfg(not(any(debug_assertions, test)))]
+use log::debug;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -37,29 +40,34 @@ pub fn init() {
 
 /// A simple profiler for measuring operation durations
 pub struct Profiler {
+    #[allow(dead_code)]
     name: String,
     start: Instant,
+    #[allow(dead_code)]
     enabled: bool,
 }
 
-#[cfg(any(debug_assertions, test))]
 impl Profiler {
     /// Create a new profiler with the given operation name
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
             start: Instant::now(),
+            #[cfg(any(debug_assertions, test))]
             enabled: log_enabled!(target: module_path!(), Level::Debug),
+            #[cfg(not(any(debug_assertions, test)))]
+            enabled: false,
         }
     }
 
     /// Log the elapsed time since profiler creation with a custom message
-    pub fn log_with_message(&self, message: &str) {
+    pub fn log_with_message(&self, _message: &str) {
+        #[cfg(any(debug_assertions, test))]
         if self.enabled {
             let elapsed = self.start.elapsed();
             debug!(
                 "PROFILE: {} {} took: {}",
-                message,
+                _message,
                 self.name,
                 format_duration(elapsed)
             );
@@ -68,6 +76,7 @@ impl Profiler {
 
     /// Log the elapsed time since profiler creation
     pub fn log(&self) {
+        #[cfg(any(debug_assertions, test))]
         if self.enabled {
             let elapsed = self.start.elapsed();
             debug!("PROFILE: {} took: {}", self.name, format_duration(elapsed));
@@ -86,6 +95,7 @@ impl Profiler {
 }
 
 /// Format a duration in a human-readable way
+#[cfg(any(debug_assertions, test))]
 fn format_duration(duration: Duration) -> String {
     let nanos = duration.as_nanos();
 
