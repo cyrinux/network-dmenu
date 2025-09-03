@@ -484,10 +484,10 @@ pub fn get_mullvad_actions(
     // Now format the sorted nodes with proper icons
     let mut mullvad_results: Vec<String> = mullvad_actions
         .into_iter()
-        .map(|(country, city, node_name, node_ip, is_active)| {
+        .map(|(country, city, node_name, _node_ip, is_active)| {
             let flag = get_flag(&country);
             let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display = format!("{} ({})\t{}\t{}", country, city, node_ip, node_name);
+            let display = format!("{} ({})\t{}", country, city, node_name);
             format_entry("mullvad", display_icon, &display)
         })
         .collect();
@@ -508,7 +508,7 @@ pub fn get_mullvad_actions(
             let node_name = peer.dns_name.trim_end_matches('.').to_string();
             let node_short_name = extract_short_name(&node_name);
             let is_active = active_exit_node == &node_name;
-            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+            let _node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
 
             // Get country code and flag
             let country = peer.location.as_ref().map_or_else(
@@ -526,8 +526,8 @@ pub fn get_mullvad_actions(
             // Create display text with active check
             let active_mark = if is_active { ICON_CHECK } else { &flag };
             let display_text = format!(
-                "{} {} - {} {} [{}]",
-                active_mark, node_short_name, node_ip, node_name, country
+                "{} {} - {} [{}]",
+                active_mark, node_short_name, node_name, country
             );
 
             format_entry("exit-node", ICON_LEAF, &display_text)
@@ -564,15 +564,15 @@ pub fn get_mullvad_actions(
                     .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
                 {
                     let node_short_name = extract_short_name(&suggested_name);
-                    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                    let _node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
                     let is_active = active_exit_node == &suggested_name;
                     let icon = if is_active { ICON_CHECK } else { ICON_STAR };
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
                         &format!(
-                            "{} - {} - {} (suggested)",
-                            node_short_name, node_ip, suggested_name
+                            "{} - {} (suggested)",
+                            node_short_name, suggested_name
                         ),
                     );
                     mullvad_results.insert(0, suggested_action);
@@ -655,7 +655,7 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
 #[allow(dead_code)]
 fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
     let parts: Vec<&str> = regex.split(line).collect();
-    let node_ip = parts.first().unwrap_or(&"").trim();
+    let _node_ip = parts.first().unwrap_or(&"").trim();
     let node_name = parts.get(1).unwrap_or(&"").trim();
     let country = parts.get(2).unwrap_or(&"").trim();
     let city = parts.get(3).unwrap_or(&"").trim();
@@ -669,7 +669,7 @@ fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> Stri
     format_entry(
         "mullvad",
         display_icon,
-        &format!("{:<15} ({}) - {:<16} {}", country, city, node_ip, node_name),
+        &format!("{} ({}) - {}", country, city, node_name),
     )
 }
 
@@ -735,14 +735,14 @@ fn extract_region_code(hostname: &str) -> Option<String> {
 /// For example, from "fr-par-wg-302.mullvad.ts.net" it extracts "fr-par"
 // Helper function to process exit nodes
 #[allow(dead_code)]
-fn process_exit_node(hostname: &str, active_exit_node: &str, node_ip: &str) -> String {
+fn process_exit_node(hostname: &str, active_exit_node: &str, _node_ip: &str) -> String {
     let node_short_name = extract_short_name(hostname);
     let is_active = active_exit_node == hostname;
     let active_mark = if is_active { ICON_CHECK } else { "" };
 
     format!(
-        "{} {} - {} {}",
-        active_mark, node_short_name, node_ip, hostname
+        "{} {} - {}",
+        active_mark, node_short_name, hostname
     )
 }
 
@@ -750,7 +750,7 @@ fn process_exit_node(hostname: &str, active_exit_node: &str, node_ip: &str) -> S
 #[allow(dead_code)]
 fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
     let parts: Vec<&str> = regex.split(line).collect();
-    let node_ip = parts.first().unwrap_or(&"").trim();
+    let _node_ip = parts.first().unwrap_or(&"").trim();
     let node_name = parts.get(1).unwrap_or(&"").trim();
     let node_short_name = extract_short_name(node_name);
     let is_active = active_exit_node == node_name;
@@ -760,7 +760,7 @@ fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> St
     format_entry(
         "exit-node",
         display_icon,
-        &format!("{:<15} - {:<16} {}", node_short_name, node_ip, node_name),
+        &format!("{} - {}", node_short_name, node_name),
     )
 }
 

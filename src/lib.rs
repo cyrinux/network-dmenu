@@ -17,6 +17,7 @@ pub mod networkmanager;
 pub mod nextdns;
 pub mod privilege;
 pub mod rfkill;
+pub mod ssh;
 pub mod tailscale;
 pub mod tailscale_prefs;
 pub mod utils;
@@ -46,6 +47,7 @@ pub use privilege::{
     get_privilege_command, has_privilege_escalation, wrap_privileged_command,
     wrap_privileged_commands,
 };
+pub use ssh::{get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig};
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,

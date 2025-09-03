@@ -3,7 +3,7 @@ mod streaming;
 // Import modules from the library crate
 use network_dmenu::{
     bluetooth, command, constants, diagnostics, iwd, logger,
-    networkmanager, nextdns, rfkill, utils
+    networkmanager, nextdns, rfkill, ssh, utils, SshProxyConfig
 };
 
 #[macro_use]
@@ -114,6 +114,8 @@ struct Config {
     nextdns_api_key: Option<String>,
     #[serde(default)]
     nextdns_toggle_profiles: Option<(String, String)>,
+    #[serde(default)]
+    ssh_proxies: std::collections::HashMap<String, SshProxyConfig>,
     dmenu_cmd: String,
     dmenu_args: String,
 }
@@ -132,6 +134,7 @@ enum ActionType {
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
     NextDns(nextdns::NextDnsAction),
+    Ssh(network_dmenu::SshAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
     Vpn(VpnAction),
@@ -577,6 +580,7 @@ fn action_to_string(action: &ActionType) -> String {
         ActionType::NextDns(nextdns_action) => {
             format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
         }
+        ActionType::Ssh(ssh_action) => ssh::ssh_action_to_string(ssh_action),
     }
 }
 
@@ -753,6 +757,9 @@ fn find_selected_action<'a>(
             }
             ActionType::NextDns(nextdns_action) => {
                 action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
+            }
+            ActionType::Ssh(ssh_action) => {
+                action == ssh::ssh_action_to_string(ssh_action)
             }
         })
         .ok_or(format!("Action not found: {action}").into())
@@ -1182,6 +1189,33 @@ async fn set_action(
                 .body(&result.output)
                 .show();
             Ok(result.success)
+        }
+        ActionType::Ssh(ssh_action) => {
+            match ssh::handle_ssh_action(ssh_action, command_runner) {
+                Ok(_) => {
+                    let message = match ssh_action {
+                        network_dmenu::SshAction::StartProxy(config) => {
+                            format!("SSH SOCKS proxy {} started on port {}", config.name, config.port)
+                        }
+                        network_dmenu::SshAction::StopProxy(config) => {
+                            format!("SSH SOCKS proxy {} stopped", config.name)
+                        }
+                    };
+                    let _ = Notification::new()
+                        .summary("SSH Proxy")
+                        .body(&message)
+                        .show();
+                    Ok(true)
+                }
+                Err(e) => {
+                    let error_msg = format!("SSH proxy operation failed: {}", e);
+                    let _ = Notification::new()
+                        .summary("SSH Proxy Error")
+                        .body(&error_msg)
+                        .show();
+                    Ok(false)
+                }
+            }
         }
     }
 }

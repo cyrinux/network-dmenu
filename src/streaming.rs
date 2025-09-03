@@ -258,6 +258,13 @@ async fn stream_actions_simple(
         }));
     }
 
+    // SSH proxies
+    let tx_clone = tx.clone();
+    let ssh_proxies = config.ssh_proxies.clone();
+    handles.push(tokio::spawn(async move {
+        send_ssh_actions(&tx_clone, &ssh_proxies).await;
+    }));
+
     // Wait for all tasks
     for handle in handles {
         let _ = handle.await;
@@ -371,6 +378,13 @@ async fn produce_actions_streaming(
             send_rfkill_actions(&tx_clone, no_wifi, no_bluetooth).await;
         }));
     }
+
+    // SSH proxies
+    let tx_clone = tx.clone();
+    let ssh_proxies = config.ssh_proxies.clone();
+    tasks.push(tokio::spawn(async move {
+        send_ssh_actions(&tx_clone, &ssh_proxies).await;
+    }));
 
     // Wait for all tasks to complete
     for task in tasks {
@@ -566,6 +580,18 @@ async fn send_nextdns_actions(
 fn send_diagnostic_actions(tx: &mpsc::UnboundedSender<ActionType>) {
     for action in diagnostics::get_diagnostic_actions() {
         let _ = tx.send(ActionType::Diagnostic(action));
+    }
+}
+
+async fn send_ssh_actions(
+    tx: &mpsc::UnboundedSender<ActionType>,
+    ssh_proxies: &std::collections::HashMap<String, network_dmenu::SshProxyConfig>,
+) {
+    if is_command_installed("ssh") {
+        let actions = network_dmenu::get_ssh_proxy_actions(ssh_proxies);
+        for action in actions {
+            let _ = tx.send(ActionType::Ssh(action));
+        }
     }
 }
 
