@@ -1,4 +1,4 @@
-use crate::command::CommandRunner;
+use crate::command::{CommandRunner, is_command_installed};
 use crate::constants::{ICON_CHECK, ICON_CROSS};
 use crate::format_entry;
 use log::{debug, error, warn};
@@ -209,6 +209,10 @@ impl TorsocksConfig {
             return Ok(());
         }
 
+        if !is_command_installed("torsocks") {
+            return Err("torsocks command not found. Please install torsocks package".to_string());
+        }
+
         let mut torsocks_args = vec!["torsocks".to_string(), self.command.clone()];
         torsocks_args.extend(self.args.iter().cloned());
 
@@ -262,8 +266,8 @@ pub fn get_tor_actions(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Ve
         actions.push(TorAction::StartTor);
     }
 
-    // Torsocks application management (only if Tor is running)
-    if tor_manager.is_tor_running() {
+    // Torsocks application management (only if Tor is running and torsocks is available)
+    if tor_manager.is_tor_running() && is_command_installed("torsocks") {
         for config in torsocks_configs.values() {
             if config.is_running() {
                 actions.push(TorAction::StopTorsocks(config.clone()));
@@ -326,6 +330,9 @@ pub fn handle_tor_action(action: &TorAction, command_runner: &dyn CommandRunner)
             debug!("Starting {} with torsocks", config.name);
             if !tor_manager.is_tor_running() {
                 return Err("Tor daemon must be running to use torsocks".to_string());
+            }
+            if !is_command_installed("torsocks") {
+                return Err("torsocks command not found. Please install torsocks package".to_string());
             }
             config.start(command_runner)
         }

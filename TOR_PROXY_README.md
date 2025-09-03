@@ -4,13 +4,14 @@ Network-dmenu now supports comprehensive Tor proxy management with daemon contro
 
 ## Features
 
-- **Start/Stop/Restart Tor daemon** from dmenu interface
-- **Launch applications via torsocks** for Tor routing
+- **Start/Stop/Restart Tor daemon** from dmenu interface (requires `tor` command)
+- **Launch applications via torsocks** for Tor routing (requires `torsocks` command)
 - **Automatic Tor status detection** using port monitoring
 - **Multiple torsocks configurations** for different applications
 - **Smart menu ordering** - Tor daemon management appears first, apps when Tor is running
 - **Desktop notifications** for all operations
 - **Secure defaults** with proper data directory isolation
+- **Command availability checking** - only shows relevant actions when commands are installed
 
 ## 🔒 Security & Privacy Benefits
 
@@ -127,14 +128,19 @@ torsocks curl https://httpbin.org/ip  # Shows your Tor exit IP
 
 ## Menu Integration
 
-Actions appear in dmenu based on current state:
+Actions appear in dmenu based on current state and command availability:
 
-**When Tor is stopped:**
+**When `tor` command not installed:**
+- No Tor actions shown
+
+**When Tor is stopped (`tor` installed):**
 - 🧅 Start Tor daemon
 
-**When Tor is running:**
+**When Tor is running (`tor` installed):**
 - ❌ Stop Tor daemon  
 - 🔄 Restart Tor daemon
+
+**When Tor is running + `torsocks` installed:**
 - 🧅 Start Firefox via Tor
 - 🧅 Start Telegram Desktop  
 - 🧅 Test Tor Connection

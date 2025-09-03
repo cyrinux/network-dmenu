@@ -706,6 +706,7 @@ async fn send_tor_actions(
     tx: &mpsc::UnboundedSender<ActionType>,
     torsocks_apps: &std::collections::HashMap<String, network_dmenu::TorsocksConfig>,
 ) {
+    // Only show Tor daemon actions if tor command is available
     if is_command_installed("tor") {
         let actions = tor::get_tor_actions(torsocks_apps);
         for action in actions {
