@@ -67,7 +67,6 @@ pub fn wrap_privileged_command(command: &str, use_shell: bool) -> String {
 /// let cmd = wrap_privileged_commands(&cmds);
 /// // Returns appropriate command for pkexec or sudo
 /// ```
-#[allow(dead_code)]
 pub fn wrap_privileged_commands(commands: &[&str]) -> String {
     let priv_cmd = get_privilege_command();
     let joined = commands.join(" && ");
@@ -86,19 +85,16 @@ pub fn wrap_privileged_commands(commands: &[&str]) -> String {
 /// Check if the current user has privilege escalation available
 ///
 /// Returns true if either pkexec or sudo is available and configured
-#[allow(dead_code)]
 pub fn has_privilege_escalation() -> bool {
     which("pkexec").is_ok() || which("sudo").is_ok()
 }
 
 /// Check if GUI privilege escalation (pkexec) is available
-#[allow(dead_code)]
 pub fn has_gui_privilege_escalation() -> bool {
     which("pkexec").is_ok()
 }
 
 /// Get a user-friendly description of the privilege method
-#[allow(dead_code)]
 pub fn get_privilege_method_description() -> &'static str {
     if which("pkexec").is_ok() {
         "GUI authentication (pkexec)"

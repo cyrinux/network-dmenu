@@ -42,7 +42,7 @@ pub struct Profiler {
     enabled: bool,
 }
 
-#[allow(dead_code)]
+#[cfg(any(debug_assertions, test))]
 impl Profiler {
     /// Create a new profiler with the given operation name
     pub fn new(name: &str) -> Self {

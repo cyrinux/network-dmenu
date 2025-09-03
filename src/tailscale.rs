@@ -38,7 +38,6 @@ fn extract_country_code_from_hostname(hostname: &str) -> &str {
 }
 
 /// Structs to represent Tailscale JSON response
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleStatus {
     #[serde(rename = "Version", default)]
@@ -55,7 +54,6 @@ pub struct TailscaleStatus {
     pub peer: HashMap<String, TailscalePeer>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleSelf {
     #[serde(rename = "ID", default)]
@@ -87,7 +85,6 @@ pub struct TailscaleState {
     pub node_signing_key: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscalePeer {
     #[serde(rename = "ID", default)]
@@ -147,19 +144,15 @@ pub struct TailscalePeer {
 pub struct TailscaleLocation {
     #[serde(rename = "Country", default)]
     pub country: String,
-    #[allow(dead_code)]
-    #[serde(rename = "CountryCode", default)]
+        #[serde(rename = "CountryCode", default)]
     pub country_code: String,
     #[serde(rename = "City", default)]
     pub city: String,
-    #[allow(dead_code)]
-    #[serde(rename = "CityCode", default)]
+        #[serde(rename = "CityCode", default)]
     pub city_code: String,
-    #[allow(dead_code)]
-    #[serde(rename = "Latitude", default)]
+        #[serde(rename = "Latitude", default)]
     pub latitude: f64,
-    #[allow(dead_code)]
-    #[serde(rename = "Longitude", default)]
+        #[serde(rename = "Longitude", default)]
     pub longitude: f64,
     #[serde(rename = "Priority", default)]
     pub priority: Option<i32>,
@@ -607,7 +600,7 @@ fn parse_exit_node_suggest(output: &str) -> Option<String> {
 }
 
 /// Helper function to extract node name from the action line.
-#[allow(dead_code)]
+#[cfg(test)]
 fn extract_node_name(line: &str) -> String {
     let parts: Vec<&str> = line.split_whitespace().collect();
     parts.get(1).unwrap_or(&"").to_string()
@@ -651,118 +644,12 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Parses a Mullvad line from the Tailscale exit-node list output.
-#[allow(dead_code)]
-fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
-    let parts: Vec<&str> = regex.split(line).collect();
-    let _node_ip = parts.first().unwrap_or(&"").trim();
-    let node_name = parts.get(1).unwrap_or(&"").trim();
-    let country = parts.get(2).unwrap_or(&"").trim();
-    let city = parts.get(3).unwrap_or(&"").trim();
-    let is_active = active_exit_node == node_name;
-
-    // Get country flag emoji
-    let flag = get_flag(country);
-    // Use check mark instead of flag when node is active
-    let display_icon = if is_active { ICON_CHECK } else { &flag };
-
-    format_entry(
-        "mullvad",
-        display_icon,
-        &format!("{} ({}) - {}", country, city, node_name),
-    )
-}
 
 /// Extracts the short name from a node name.
 fn extract_short_name(node_name: &str) -> &str {
     node_name.split('.').next().unwrap_or(node_name)
 }
 
-/// Helper function to process a node and add it to the map
-#[allow(dead_code)]
-fn process_and_add_node(
-    peer: &TailscalePeer,
-    active_exit_node: &str,
-    regex: &Regex,
-    nodes_map: &mut HashMap<String, String>,
-) {
-    let node_name = peer.dns_name.trim_end_matches('.').to_string();
-    let country = peer.location.as_ref().map_or("Unknown", |loc| {
-        if loc.country.is_empty() {
-            "Unknown"
-        } else {
-            &loc.country
-        }
-    });
-    let city = peer.location.as_ref().map_or("", |loc| &loc.city);
-    let _is_active = active_exit_node == node_name;
-
-    // Get the first IP address
-    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
-
-    let formatted_line = format!(
-        "{}  {}  {}  {}",
-        node_ip,
-        node_name,
-        country,
-        if city.is_empty() { "" } else { city }
-    );
-
-    #[cfg(debug_assertions)]
-    println!("Processing mullvad node: {}", node_name);
-
-    let parsed_line = parse_mullvad_line(&formatted_line, regex, active_exit_node);
-    nodes_map.insert(node_name, parsed_line);
-}
-/// For example, from "fr-par-wg-302.mullvad.ts.net" it extracts "fr-par"
-// Extract the region code from a hostname
-#[allow(dead_code)]
-fn extract_region_code(hostname: &str) -> Option<String> {
-    // Extract the part before the first period
-    let short_name = hostname.split('.').next()?;
-
-    // For Mullvad nodes, the format is usually: <country>-<city>-<type>-<number>
-    // Extract the country-city part
-    let parts: Vec<&str> = short_name.split('-').collect();
-    if parts.len() >= 2 {
-        // Combine country and city codes
-        Some(format!("{}-{}", parts[0], parts[1]))
-    } else {
-        None
-    }
-}
-
-/// For example, from "fr-par-wg-302.mullvad.ts.net" it extracts "fr-par"
-// Helper function to process exit nodes
-#[allow(dead_code)]
-fn process_exit_node(hostname: &str, active_exit_node: &str, _node_ip: &str) -> String {
-    let node_short_name = extract_short_name(hostname);
-    let is_active = active_exit_node == hostname;
-    let active_mark = if is_active { ICON_CHECK } else { "" };
-
-    format!(
-        "{} {} - {}",
-        active_mark, node_short_name, hostname
-    )
-}
-
-/// Parses an exit node line from the Tailscale exit-node list output.
-#[allow(dead_code)]
-fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
-    let parts: Vec<&str> = regex.split(line).collect();
-    let _node_ip = parts.first().unwrap_or(&"").trim();
-    let node_name = parts.get(1).unwrap_or(&"").trim();
-    let node_short_name = extract_short_name(node_name);
-    let is_active = active_exit_node == node_name;
-    // Use check mark instead of leaf icon when node is active
-    let display_icon = if is_active { ICON_CHECK } else { ICON_LEAF };
-
-    format_entry(
-        "exit-node",
-        display_icon,
-        &format!("{} - {}", node_short_name, node_name),
-    )
-}
 
 /// Get the suggested exit-node
 pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
@@ -1709,51 +1596,6 @@ mod tests {
         assert_eq!(get_flag(""), "❓");
     }
 
-    #[test]
-    fn test_parse_mullvad_line() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "192.168.1.1  node.mullvad.ts.net  Germany  offline";
-        let active_exit_node = "";
-
-        let result = parse_mullvad_line(line, &regex, active_exit_node);
-        assert!(result.contains("mullvad"));
-        assert!(result.contains("Germany"));
-        assert!(result.contains("192.168.1.1"));
-        assert!(result.contains("node.mullvad.ts.net"));
-    }
-
-    #[test]
-    fn test_parse_mullvad_line_active() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "192.168.1.1  node.mullvad.ts.net  Germany  active";
-        let active_exit_node = "node.mullvad.ts.net";
-
-        let result = parse_mullvad_line(line, &regex, active_exit_node);
-        assert!(result.contains("✅"));
-    }
-
-    #[test]
-    fn test_parse_exit_node_line() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "10.0.0.1  test-node.ts.net  offline";
-        let active_exit_node = "";
-
-        let result = parse_exit_node_line(line, &regex, active_exit_node);
-        assert!(result.contains("exit-node"));
-        assert!(result.contains("test-node"));
-        assert!(result.contains("10.0.0.1"));
-        assert!(result.contains("🌿"));
-    }
-
-    #[test]
-    fn test_parse_exit_node_line_active() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "10.0.0.1  test-node.ts.net  active";
-        let active_exit_node = "test-node.ts.net";
-
-        let result = parse_exit_node_line(line, &regex, active_exit_node);
-        assert!(result.contains("✅"));
-    }
 
     #[test]
     fn test_get_mullvad_actions_success() {

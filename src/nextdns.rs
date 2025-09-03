@@ -584,7 +584,7 @@ mod tests {
     use super::*;
     use std::process::Output;
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     struct MockCommandRunner {
         expected_command: String,
         expected_args: Vec<String>,
@@ -592,7 +592,7 @@ mod tests {
     }
 
     impl MockCommandRunner {
-        #[allow(dead_code)]
+        #[cfg(test)]
         fn new(command: &str, args: &[&str], output: Output) -> Self {
             Self {
                 expected_command: command.to_string(),

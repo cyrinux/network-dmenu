@@ -93,6 +93,8 @@ struct Args {
         help = "Output actions to stdout instead of using dmenu (for debugging)"
     )]
     stdout: bool,
+    #[arg(long, help = "Path to the config file")]
+    config: Option<PathBuf>,
 }
 
 /// Configuration structure for the application.
@@ -330,7 +332,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let api_key = if !args.nextdns_api_key.is_empty() {
             args.nextdns_api_key.clone()
         } else {
-            get_config()
+            get_config(args.config.as_ref())
                 .ok()
                 .and_then(|c| c.nextdns_api_key.clone())
                 .map(|k| k.trim().to_string())
@@ -363,9 +365,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    create_default_config_if_missing()?;
+    create_default_config_if_missing(args.config.as_ref())?;
 
-    let config = get_config()?; // Load the configuration once
+    let config = get_config(args.config.as_ref())?; // Load the configuration once
 
     check_required_commands(&config)?;
 
@@ -413,6 +415,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &connected_devices,
             &command_runner,
             args.profile,
+            args.config.as_ref(),
         )
         .await?;
     }
@@ -766,14 +769,18 @@ fn find_selected_action<'a>(
 }
 
 /// Gets the configuration file path.
-fn get_config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
-    Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
+fn get_config_path(custom_path: Option<&PathBuf>) -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = custom_path {
+        Ok(path.clone())
+    } else {
+        let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
+        Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
+    }
 }
 
 /// Creates a default configuration file if it doesn't exist.
-fn create_default_config_if_missing() -> Result<(), Box<dyn Error>> {
-    let config_path = get_config_path()?;
+fn create_default_config_if_missing(custom_path: Option<&PathBuf>) -> Result<(), Box<dyn Error>> {
+    let config_path = get_config_path(custom_path)?;
 
     if !config_path.exists() {
         if let Some(parent) = config_path.parent() {
@@ -786,8 +793,8 @@ fn create_default_config_if_missing() -> Result<(), Box<dyn Error>> {
 }
 
 /// Reads and returns the configuration.
-fn get_config() -> Result<Config, Box<dyn Error>> {
-    let config_path = get_config_path()?;
+fn get_config(custom_path: Option<&PathBuf>) -> Result<Config, Box<dyn Error>> {
+    let config_path = get_config_path(custom_path)?;
     let config_content = fs::read_to_string(config_path)?;
     let config = toml::from_str(&config_content)?;
     Ok(config)
@@ -1094,6 +1101,7 @@ async fn set_action(
     connected_devices: &[String],
     command_runner: &dyn CommandRunner,
     profile: bool,
+    config_path: Option<&PathBuf>,
 ) -> Result<bool, Box<dyn Error>> {
     match action {
         ActionType::Custom(custom_action) => handle_custom_action(custom_action),
@@ -1114,7 +1122,7 @@ async fn set_action(
             } else {
                 // Fall back to config file API key
                 debug!("Command line API key is empty in set_action, checking config file");
-                let key_opt = get_config().ok().and_then(|c| c.nextdns_api_key.clone());
+                let key_opt = get_config(config_path).ok().and_then(|c| c.nextdns_api_key.clone());
                 if let Some(key) = key_opt {
                     let trimmed_key = key.trim().to_string();
                     if !trimmed_key.is_empty() {
@@ -1490,7 +1498,7 @@ mod tests {
 
     #[test]
     fn test_get_config_path() {
-        let path = get_config_path();
+        let path = get_config_path(None);
         assert!(path.is_ok());
         let path_buf = path.unwrap();
         assert!(path_buf.to_string_lossy().contains("network-dmenu"));
@@ -1671,6 +1679,7 @@ mod tests {
             country: None,
             stdin: false,
             stdout: false,
+            config: None,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
