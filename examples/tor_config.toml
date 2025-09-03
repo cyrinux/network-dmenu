@@ -1,0 +1,55 @@
+# Example configuration file showing Tor proxy management
+# Place this in ~/.config/network-dmenu/config.toml
+
+dmenu_cmd = "dmenu"
+dmenu_args = "-i -l 20"
+
+# Tor/Torsocks application configurations
+[torsocks_apps]
+
+[torsocks_apps.firefox]
+name = "firefox"
+command = "firefox"
+args = ["--private-window", "--new-instance", "-P", "tor"]
+description = "Firefox via Tor"
+
+[torsocks_apps.curl-test]
+name = "curl-test"
+command = "curl"
+args = ["-s", "httpbin.org/ip"]
+description = "Test Tor Connection"
+
+[torsocks_apps.thunderbird]
+name = "thunderbird"
+command = "thunderbird"
+args = ["--offline"]
+description = "Thunderbird Email (Tor)"
+
+[torsocks_apps.telegram]
+name = "telegram"
+command = "telegram-desktop"
+args = []
+description = "Telegram Desktop"
+
+# Example custom actions for Tor management
+[[actions]]
+display = "🧅 Check Tor Status"
+cmd = "curl --socks5 127.0.0.1:9050 -s https://check.torproject.org/api/ip | jq"
+
+[[actions]]
+display = "🔍 Test Tor Connection"
+cmd = "torsocks curl -s https://httpbin.org/ip"
+
+[[actions]]
+display = "🌐 Browse Tor .onion sites"
+cmd = "torsocks firefox https://3g2upl4pq6kufc4m.onion"
+
+# SSH SOCKS proxy configurations (for comparison)
+[ssh_proxies]
+
+[ssh_proxies.server1]
+name = "server1"
+server = "example.com"
+port = 1081
+socket_path = "/tmp/server1.sock"
+ssh_options = ["-f", "-q", "-N"]

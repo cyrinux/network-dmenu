@@ -1,0 +1,14 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(grep:*)",
+      "Bash(cargo check:*)",
+      "Bash(./target/debug/network-dmenu:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

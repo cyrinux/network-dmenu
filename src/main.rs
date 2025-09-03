@@ -3,7 +3,7 @@ mod streaming;
 // Import modules from the library crate
 use network_dmenu::{
     bluetooth, command, constants, diagnostics, iwd, logger,
-    networkmanager, nextdns, rfkill, ssh, utils, SshProxyConfig
+    networkmanager, nextdns, rfkill, ssh, tor, utils, SshProxyConfig, TorsocksConfig
 };
 
 #[macro_use]
@@ -33,6 +33,7 @@ use network_dmenu::tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
+use network_dmenu::tor::{get_tor_actions, handle_tor_action, tor_action_to_string, TorAction};
 use utils::check_captive_portal;
 
 /// Command-line arguments structure for the application.
@@ -51,6 +52,8 @@ struct Args {
     no_tailscale: bool,
     #[arg(long)]
     no_nextdns: bool,
+    #[arg(long)]
+    no_tor: bool,
     #[arg(
         long,
         default_value = "",
@@ -118,6 +121,8 @@ struct Config {
     nextdns_toggle_profiles: Option<(String, String)>,
     #[serde(default)]
     ssh_proxies: std::collections::HashMap<String, SshProxyConfig>,
+    #[serde(default)]
+    torsocks_apps: std::collections::HashMap<String, TorsocksConfig>,
     dmenu_cmd: String,
     dmenu_args: String,
 }
@@ -139,6 +144,7 @@ enum ActionType {
     Ssh(network_dmenu::SshAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
+    Tor(TorAction),
     Vpn(VpnAction),
     Wifi(WifiAction),
 }
@@ -216,6 +222,22 @@ use_dns_cache = true
 
 # Filter by country name (e.g., "USA", "Japan")
 # country_filter = "USA"
+
+# Tor proxy configurations (requires tor and torsocks packages)
+# Disable with --no-tor flag
+[torsocks_apps]
+
+# [torsocks_apps.firefox]
+# name = "firefox"
+# command = "firefox"
+# args = ["--private-window", "--new-instance", "-P", "tor"]
+# description = "Firefox via Tor"
+
+# [torsocks_apps.curl-test]
+# name = "curl-test"  
+# command = "curl"
+# args = ["-s", "https://httpbin.org/ip"]
+# description = "Test Tor Connection"
 
 [[actions]]
 display = "🛡️ Example"
@@ -584,6 +606,7 @@ fn action_to_string(action: &ActionType) -> String {
             format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
         }
         ActionType::Ssh(ssh_action) => ssh::ssh_action_to_string(ssh_action),
+        ActionType::Tor(tor_action) => tor_action_to_string(tor_action),
     }
 }
 
@@ -763,6 +786,9 @@ fn find_selected_action<'a>(
             }
             ActionType::Ssh(ssh_action) => {
                 action == ssh::ssh_action_to_string(ssh_action)
+            }
+            ActionType::Tor(tor_action) => {
+                action == tor_action_to_string(tor_action)
             }
         })
         .ok_or(format!("Action not found: {action}").into())
@@ -1219,6 +1245,36 @@ async fn set_action(
                     let error_msg = format!("SSH proxy operation failed: {}", e);
                     let _ = Notification::new()
                         .summary("SSH Proxy Error")
+                        .body(&error_msg)
+                        .show();
+                    Ok(false)
+                }
+            }
+        }
+        ActionType::Tor(tor_action) => {
+            match handle_tor_action(tor_action, command_runner) {
+                Ok(_) => {
+                    let message = match tor_action {
+                        TorAction::StartTor => "Tor daemon started successfully".to_string(),
+                        TorAction::StopTor => "Tor daemon stopped".to_string(),
+                        TorAction::RestartTor => "Tor daemon restarted".to_string(),
+                        TorAction::StartTorsocks(config) => {
+                            format!("Started {} via Tor", config.description)
+                        }
+                        TorAction::StopTorsocks(config) => {
+                            format!("Stopped {} via Tor", config.description)
+                        }
+                    };
+                    let _ = Notification::new()
+                        .summary("Tor Proxy")
+                        .body(&message)
+                        .show();
+                    Ok(true)
+                }
+                Err(e) => {
+                    let error_msg = format!("Tor operation failed: {}", e);
+                    let _ = Notification::new()
+                        .summary("Tor Error")
                         .body(&error_msg)
                         .show();
                     Ok(false)

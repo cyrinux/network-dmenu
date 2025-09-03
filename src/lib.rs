@@ -19,6 +19,7 @@ pub mod privilege;
 pub mod rfkill;
 pub mod ssh;
 pub mod tailscale;
+pub mod tor;
 pub mod tailscale_prefs;
 pub mod utils;
 
@@ -48,6 +49,7 @@ pub use privilege::{
     wrap_privileged_commands,
 };
 pub use ssh::{get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig};
+pub use tor::{get_tor_actions, handle_tor_action, tor_action_to_string, TorAction, TorsocksConfig, get_default_torsocks_configs};
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
@@ -80,8 +82,10 @@ pub enum ActionType {
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
     NextDns(NextDnsAction),
+    Ssh(SshAction),
     System(SystemAction),
     Tailscale(TailscaleAction),
+    Tor(TorAction),
     Vpn(VpnAction),
     Wifi(WifiAction),
 }

@@ -12,7 +12,9 @@ use network_dmenu::{
     networkmanager::{get_nm_vpn_networks, get_nm_wifi_networks},
     nextdns,
     rfkill,
+    ssh,
     tailscale::{get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled, get_locked_nodes, TailscaleState},
+    tor,
     tailscale_prefs::parse_tailscale_prefs,
 };
 use std::error::Error;
@@ -264,6 +266,15 @@ async fn stream_actions_simple(
     handles.push(tokio::spawn(async move {
         send_ssh_actions(&tx_clone, &ssh_proxies).await;
     }));
+
+    // Tor proxies
+    if !args.no_tor {
+        let tx_clone = tx.clone();
+        let torsocks_apps = config.torsocks_apps.clone();
+        handles.push(tokio::spawn(async move {
+            send_tor_actions(&tx_clone, &torsocks_apps).await;
+        }));
+    }
 
     // Wait for all tasks
     for handle in handles {
@@ -686,6 +697,19 @@ async fn send_rfkill_actions(
                     )));
                 }
             }
+        }
+    }
+}
+
+/// Send Tor proxy actions  
+async fn send_tor_actions(
+    tx: &mpsc::UnboundedSender<ActionType>,
+    torsocks_apps: &std::collections::HashMap<String, network_dmenu::TorsocksConfig>,
+) {
+    if is_command_installed("tor") {
+        let actions = tor::get_tor_actions(torsocks_apps);
+        for action in actions {
+            let _ = tx.send(ActionType::Tor(action));
         }
     }
 }
