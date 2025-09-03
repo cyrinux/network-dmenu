@@ -234,7 +234,7 @@ use_dns_cache = true
 # description = "Firefox via Tor"
 
 # [torsocks_apps.curl-test]
-# name = "curl-test"  
+# name = "curl-test"
 # command = "curl"
 # args = ["-s", "https://httpbin.org/ip"]
 # description = "Test Tor Connection"
@@ -1251,23 +1251,31 @@ async fn set_action(
             }
         },
         ActionType::Tor(tor_action) => match handle_tor_action(tor_action, command_runner) {
-            Ok(_) => {
+            Ok(result) => {
                 let message = match tor_action {
                     TorAction::StartTor => "Tor daemon started successfully".to_string(),
                     TorAction::StopTor => "Tor daemon stopped".to_string(),
                     TorAction::RestartTor => "Tor daemon restarted".to_string(),
                     TorAction::RefreshCircuit => "Tor circuit refreshed".to_string(),
-                    TorAction::TestConnection => "Tor connection test completed".to_string(),
+                    TorAction::TestConnection => {
+                        if !result.is_empty() {
+                            result
+                        } else {
+                            "Tor connection test completed".to_string()
+                        }
+                    }
                     TorAction::StartTorsocks(config) => {
                         format!("Started {} via Tor", config.description)
                     }
                     TorAction::StopTorsocks(config) => {
                         format!("Stopped {} via Tor", config.description)
                     }
-                    TorAction::DebugControlPort => todo!(),
+                    TorAction::DebugControlPort => {
+                        "Tor control port diagnostics completed".to_string()
+                    }
                 };
                 let _ = Notification::new()
-                    .summary("Tor Proxy")
+                    .summary("🧅 Tor Proxy")
                     .body(&message)
                     .show();
                 Ok(true)
@@ -1275,7 +1283,7 @@ async fn set_action(
             Err(e) => {
                 let error_msg = format!("Tor operation failed: {}", e);
                 let _ = Notification::new()
-                    .summary("Tor Error")
+                    .summary("🧅 Tor Error")
                     .body(&error_msg)
                     .show();
                 Ok(false)

@@ -7,15 +7,15 @@
 //! - Adapt to usage patterns over time
 
 use super::{
-    MlError, NetworkContext, NetworkType, PredictionResult, TrainingData, ModelPersistence,
-    cosine_similarity, normalize_features,
+    cosine_similarity, normalize_features, MlError, ModelPersistence, NetworkContext, NetworkType,
+    PredictionResult, TrainingData,
 };
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::fs;
-use serde::{Deserialize, Serialize};
+use chrono::{Datelike, Timelike};
 use log::debug;
-use chrono::{Timelike, Datelike};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::path::Path;
 
 /// User action types that can be tracked
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,12 +37,12 @@ pub enum UserAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WiFiNetworkPattern {
     pub network_name: String,
-    pub hourly_usage: [u32; 24],        // Usage count by hour of day
-    pub daily_usage: [u32; 7],          // Usage count by day of week  
+    pub hourly_usage: [u32; 24], // Usage count by hour of day
+    pub daily_usage: [u32; 7],   // Usage count by day of week
     pub total_connections: u32,
     pub success_rate: f32,
-    pub last_connected: Option<i64>,    // Unix timestamp
-    pub average_connection_time: f32,   // Hours between connections
+    pub last_connected: Option<i64>,             // Unix timestamp
+    pub average_connection_time: f32,            // Hours between connections
     pub preferred_contexts: Vec<NetworkContext>, // Contexts where this network is preferred
 }
 
@@ -51,18 +51,18 @@ pub struct WiFiNetworkPattern {
 pub struct ActionSequence {
     pub actions: Vec<UserAction>,
     pub context: NetworkContext,
-    pub timestamp: i64,  // Unix timestamp
+    pub timestamp: i64, // Unix timestamp
 }
 
 /// Usage statistics for an action
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionStats {
     pub total_count: u32,
-    pub recent_count: u32,  // Last 7 days
+    pub recent_count: u32, // Last 7 days
     pub hourly_distribution: [u32; 24],
     pub daily_distribution: [u32; 7],
-    pub last_used: Option<i64>,  // Unix timestamp
-    pub average_time_between_uses: f32,  // In hours
+    pub last_used: Option<i64>,         // Unix timestamp
+    pub average_time_between_uses: f32, // In hours
     pub contexts: Vec<NetworkContext>,
 }
 
@@ -83,13 +83,19 @@ impl Default for ActionStats {
 /// Usage pattern learner for menu personalization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsagePatternLearner {
-    #[serde(serialize_with = "serialize_action_stats", deserialize_with = "deserialize_action_stats")]
+    #[serde(
+        serialize_with = "serialize_action_stats",
+        deserialize_with = "deserialize_action_stats"
+    )]
     action_stats: HashMap<UserAction, ActionStats>,
     action_sequences: VecDeque<ActionSequence>,
     frequent_workflows: Vec<Vec<UserAction>>,
-    #[serde(serialize_with = "serialize_context_associations", deserialize_with = "deserialize_context_associations")]
-    context_associations: HashMap<u64, Vec<UserAction>>,  // location_hash -> common actions
-    wifi_patterns: HashMap<String, WiFiNetworkPattern>,   // network_name -> usage patterns
+    #[serde(
+        serialize_with = "serialize_context_associations",
+        deserialize_with = "deserialize_context_associations"
+    )]
+    context_associations: HashMap<u64, Vec<UserAction>>, // location_hash -> common actions
+    wifi_patterns: HashMap<String, WiFiNetworkPattern>, // network_name -> usage patterns
     training_data: TrainingData<UserAction>,
     config: UsageConfig,
 }
@@ -98,7 +104,7 @@ pub struct UsagePatternLearner {
 pub struct UsageConfig {
     pub max_sequence_length: usize,
     pub max_history_size: usize,
-    pub workflow_threshold: u32,  // Min occurrences to consider a workflow
+    pub workflow_threshold: u32, // Min occurrences to consider a workflow
     pub recency_weight: f32,
     pub frequency_weight: f32,
     pub context_weight: f32,
@@ -154,18 +160,18 @@ impl UsagePatternLearner {
 
         // Update recent count (last 7 days)
         if let Some(last_used_ts) = stats.last_used {
-            let days_since = (now_timestamp - last_used_ts) / 86400;  // seconds in a day
+            let days_since = (now_timestamp - last_used_ts) / 86400; // seconds in a day
             if days_since <= 7 {
                 stats.recent_count += 1;
             } else {
-                stats.recent_count = 1;  // Reset if it's been more than 7 days
+                stats.recent_count = 1; // Reset if it's been more than 7 days
             }
 
             // Update average time between uses
-            let hours_since = ((now_timestamp - last_used_ts) as f32) / 3600.0;  // seconds in an hour
+            let hours_since = ((now_timestamp - last_used_ts) as f32) / 3600.0; // seconds in an hour
             stats.average_time_between_uses =
                 (stats.average_time_between_uses * (stats.total_count - 1) as f32 + hours_since)
-                / stats.total_count as f32;
+                    / stats.total_count as f32;
         }
 
         stats.last_used = Some(now_timestamp);
@@ -187,7 +193,9 @@ impl UsagePatternLearner {
         // Add to sequences
         if let Some(last_seq) = self.action_sequences.back_mut() {
             if last_seq.actions.len() < self.config.max_sequence_length
-                && (now_timestamp - last_seq.timestamp) < 300 {  // 5 minutes in seconds
+                && (now_timestamp - last_seq.timestamp) < 300
+            {
+                // 5 minutes in seconds
                 // Add to current sequence if recent enough
                 last_seq.actions.push(action.clone());
             } else {
@@ -217,58 +225,67 @@ impl UsagePatternLearner {
 
         // Add training sample
         let features = self.extract_action_features(&action, &context);
-        self.training_data.add_sample(features, action.clone(), context.clone());
-        
+        self.training_data
+            .add_sample(features, action.clone(), context.clone());
+
         // Special handling for WiFi connections
         if let UserAction::ConnectWifi(ref network_name) = action {
             self.record_wifi_connection(network_name.clone(), context);
         }
     }
-    
+
     /// Record a WiFi connection for learning network preferences
     pub fn record_wifi_connection(&mut self, network_name: String, context: NetworkContext) {
         let now = chrono::Utc::now();
         let now_timestamp = now.timestamp();
-        
-        let pattern = self.wifi_patterns.entry(network_name.clone()).or_insert_with(|| {
-            WiFiNetworkPattern {
-                network_name: network_name.clone(),
-                hourly_usage: [0; 24],
-                daily_usage: [0; 7],
-                total_connections: 0,
-                success_rate: 0.9, // Start with optimistic assumption
-                last_connected: None,
-                average_connection_time: 0.0,
-                preferred_contexts: Vec::new(),
-            }
-        });
-        
+
+        let pattern = self
+            .wifi_patterns
+            .entry(network_name.clone())
+            .or_insert_with(|| {
+                WiFiNetworkPattern {
+                    network_name: network_name.clone(),
+                    hourly_usage: [0; 24],
+                    daily_usage: [0; 7],
+                    total_connections: 0,
+                    success_rate: 0.9, // Start with optimistic assumption
+                    last_connected: None,
+                    average_connection_time: 0.0,
+                    preferred_contexts: Vec::new(),
+                }
+            });
+
         // Update connection statistics
         pattern.total_connections += 1;
         pattern.hourly_usage[now.hour() as usize] += 1;
         pattern.daily_usage[now.weekday().num_days_from_monday() as usize] += 1;
-        
+
         // Update timing information
         if let Some(last_connected_ts) = pattern.last_connected {
             let hours_since = ((now_timestamp - last_connected_ts) as f32) / 3600.0;
-            pattern.average_connection_time = 
-                (pattern.average_connection_time * (pattern.total_connections - 1) as f32 + hours_since)
+            pattern.average_connection_time = (pattern.average_connection_time
+                * (pattern.total_connections - 1) as f32
+                + hours_since)
                 / pattern.total_connections as f32;
         }
         pattern.last_connected = Some(now_timestamp);
-        
+
         // Store context for this connection
         pattern.preferred_contexts.push(context);
-        
+
         // Limit context history to prevent unbounded growth
         if pattern.preferred_contexts.len() > 50 {
             pattern.preferred_contexts.remove(0);
         }
-        
-        debug!("Recorded WiFi connection to '{}' at {}h on day {}", 
-               network_name, now.hour(), now.weekday().num_days_from_monday());
+
+        debug!(
+            "Recorded WiFi connection to '{}' at {}h on day {}",
+            network_name,
+            now.hour(),
+            now.weekday().num_days_from_monday()
+        );
     }
-    
+
     /// Get WiFi network preference score for current context
     pub fn get_wifi_network_score(&self, network_name: &str, context: &NetworkContext) -> f32 {
         if let Some(pattern) = self.wifi_patterns.get(network_name) {
@@ -277,59 +294,72 @@ impl UsagePatternLearner {
             0.1 // Base score for unknown networks
         }
     }
-    
+
     /// Calculate preference score for a WiFi network in given context
-    fn calculate_wifi_preference_score(&self, pattern: &WiFiNetworkPattern, context: &NetworkContext) -> f32 {
+    fn calculate_wifi_preference_score(
+        &self,
+        pattern: &WiFiNetworkPattern,
+        context: &NetworkContext,
+    ) -> f32 {
         let mut score = 0.0;
-        
+
         // Time-based preference (40% weight)
-        let hour_weight = pattern.hourly_usage[context.time_of_day as usize] as f32 
+        let hour_weight = pattern.hourly_usage[context.time_of_day as usize] as f32
             / pattern.total_connections.max(1) as f32;
-        let day_weight = pattern.daily_usage[context.day_of_week as usize] as f32 
+        let day_weight = pattern.daily_usage[context.day_of_week as usize] as f32
             / pattern.total_connections.max(1) as f32;
         let time_score = (hour_weight + day_weight) / 2.0;
         score += time_score * 0.4;
-        
-        // Frequency-based preference (30% weight)  
+
+        // Frequency-based preference (30% weight)
         let frequency_score = (pattern.total_connections as f32 / 100.0).min(1.0);
         score += frequency_score * 0.3;
-        
+
         // Recency bonus (20% weight)
         let recency_score = if let Some(last_connected_ts) = pattern.last_connected {
-            let hours_since = ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / 3600.0;
+            let hours_since =
+                ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / 3600.0;
             (-hours_since / 168.0).exp() // Exponential decay over weeks
         } else {
             0.0
         };
         score += recency_score * 0.2;
-        
+
         // Success rate (10% weight)
         score += pattern.success_rate * 0.1;
-        
+
         // Contextual similarity bonus
         let context_bonus = self.calculate_wifi_context_similarity(pattern, context);
         score += context_bonus * 0.1;
-        
-        debug!("WiFi score for '{}': {:.3} (time: {:.2}, freq: {:.2}, recency: {:.2}, context: {:.2})",
-               pattern.network_name, score, time_score, frequency_score, recency_score, context_bonus);
-        
+
+        debug!(
+            "WiFi score for '{}': {:.3} (time: {:.2}, freq: {:.2}, recency: {:.2}, context: {:.2})",
+            pattern.network_name, score, time_score, frequency_score, recency_score, context_bonus
+        );
+
         score.min(1.0)
     }
-    
+
     /// Calculate how similar current context is to historical WiFi usage contexts
-    fn calculate_wifi_context_similarity(&self, pattern: &WiFiNetworkPattern, context: &NetworkContext) -> f32 {
+    fn calculate_wifi_context_similarity(
+        &self,
+        pattern: &WiFiNetworkPattern,
+        context: &NetworkContext,
+    ) -> f32 {
         if pattern.preferred_contexts.is_empty() {
             return 0.5;
         }
-        
+
         // Find most similar context from history
         let current_context_vec = vec![
             context.time_of_day as f32 / 24.0,
             context.day_of_week as f32 / 7.0,
             context.location_hash as f32 / u64::MAX as f32,
         ];
-        
-        let max_similarity = pattern.preferred_contexts.iter()
+
+        let max_similarity = pattern
+            .preferred_contexts
+            .iter()
             .map(|hist_context| {
                 let hist_vec = vec![
                     hist_context.time_of_day as f32 / 24.0,
@@ -340,12 +370,16 @@ impl UsagePatternLearner {
             })
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(0.0);
-        
+
         max_similarity
     }
-    
+
     /// Get personalized WiFi network ordering based on current context
-    pub fn get_personalized_wifi_order(&self, available_networks: Vec<String>, context: &NetworkContext) -> Vec<String> {
+    pub fn get_personalized_wifi_order(
+        &self,
+        available_networks: Vec<String>,
+        context: &NetworkContext,
+    ) -> Vec<String> {
         let mut scored_networks: Vec<(String, f32)> = available_networks
             .into_iter()
             .map(|network| {
@@ -353,16 +387,22 @@ impl UsagePatternLearner {
                 (network, score)
             })
             .collect();
-        
+
         // Sort by score (descending)
         scored_networks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        
-        debug!("WiFi network ordering for context ({}h, day {}):", context.time_of_day, context.day_of_week);
+
+        debug!(
+            "WiFi network ordering for context ({}h, day {}):",
+            context.time_of_day, context.day_of_week
+        );
         for (i, (network, score)) in scored_networks.iter().take(5).enumerate() {
             debug!("  {}. {} (score: {:.3})", i + 1, network, score);
         }
-        
-        scored_networks.into_iter().map(|(network, _)| network).collect()
+
+        scored_networks
+            .into_iter()
+            .map(|(network, _)| network)
+            .collect()
     }
 
     /// Update frequently used workflows
@@ -398,14 +438,18 @@ impl UsagePatternLearner {
         features.push(context.day_of_week as f32 / 7.0);
 
         // Context features
-        features.push(if context.network_type == NetworkType::WiFi { 1.0 } else { 0.0 });
+        features.push(if context.network_type == NetworkType::WiFi {
+            1.0
+        } else {
+            0.0
+        });
         features.push(context.signal_strength.unwrap_or(0.0));
 
         // Action statistics features
         if let Some(stats) = self.action_stats.get(action) {
-            features.push(stats.total_count as f32 / 100.0);  // Normalized
-            features.push(stats.recent_count as f32 / 10.0);   // Normalized
-            features.push(stats.average_time_between_uses / 168.0);  // Normalized to weeks
+            features.push(stats.total_count as f32 / 100.0); // Normalized
+            features.push(stats.recent_count as f32 / 10.0); // Normalized
+            features.push(stats.average_time_between_uses / 168.0); // Normalized to weeks
 
             // Hour distribution entropy (measure of time-specific usage)
             let hour_entropy = Self::calculate_entropy(&stats.hourly_distribution);
@@ -451,7 +495,8 @@ impl UsagePatternLearner {
         // Sort by score (descending)
         scored_actions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        scored_actions.into_iter()
+        scored_actions
+            .into_iter()
             .map(|(action, _)| action)
             .collect()
     }
@@ -460,14 +505,15 @@ impl UsagePatternLearner {
     fn calculate_action_score(&self, action_str: &str, context: &NetworkContext) -> f32 {
         // Try to match action string to UserAction
         let action = self.parse_action_string(action_str);
-        
+
         // Base score calculation
         let mut base_score = if let Some(action) = action {
             if let Some(stats) = self.action_stats.get(&action) {
                 // Recency score with exponential decay
                 let recency_score = if let Some(last_used_ts) = stats.last_used {
-                    let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
-                    (-hours_since / 168.0).exp()  // Exponential decay over weeks
+                    let hours_since =
+                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
+                    (-hours_since / 168.0).exp() // Exponential decay over weeks
                 } else {
                     0.0
                 };
@@ -480,23 +526,30 @@ impl UsagePatternLearner {
 
                 // Time-based score with better temporal modeling
                 let time_score = {
-                    let hour_weight = stats.hourly_distribution[context.time_of_day as usize] as f32
+                    let hour_weight = stats.hourly_distribution[context.time_of_day as usize]
+                        as f32
                         / stats.total_count.max(1) as f32;
                     let day_weight = stats.daily_distribution[context.day_of_week as usize] as f32
                         / stats.total_count.max(1) as f32;
-                    
+
                     // Add periodicity bonus for consistent usage patterns
-                    let hour_consistency = self.calculate_temporal_consistency(&stats.hourly_distribution);
-                    let day_consistency = self.calculate_temporal_consistency(&stats.daily_distribution);
-                    
-                    (hour_weight + day_weight) / 2.0 + 
-                    (hour_consistency + day_consistency) * 0.1
+                    let hour_consistency =
+                        self.calculate_temporal_consistency(&stats.hourly_distribution);
+                    let day_consistency =
+                        self.calculate_temporal_consistency(&stats.daily_distribution);
+
+                    (hour_weight + day_weight) / 2.0 + (hour_consistency + day_consistency) * 0.1
                 };
 
                 // Recent usage boost (actions used in last 24 hours get priority)
                 let recent_boost = if let Some(last_used_ts) = stats.last_used {
-                    let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
-                    if hours_since <= 24.0 { 0.2 } else { 0.0 }
+                    let hours_since =
+                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
+                    if hours_since <= 24.0 {
+                        0.2
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 };
@@ -508,23 +561,23 @@ impl UsagePatternLearner {
                 time_score * 0.15 +  // Increased time bonus
                 recent_boost
             } else {
-                0.1  // Base score for unseen actions
+                0.1 // Base score for unseen actions
             }
         } else {
-            0.05  // Minimal score for unrecognized actions
+            0.05 // Minimal score for unrecognized actions
         };
-        
+
         // Apply smart criteria bonuses
         base_score += self.calculate_smart_criteria_bonus(action_str, context);
-        
-        base_score.min(1.0)  // Cap at 1.0
+
+        base_score.min(1.0) // Cap at 1.0
     }
-    
+
     /// Calculate smart criteria bonuses based on network conditions and action types
     fn calculate_smart_criteria_bonus(&self, action_str: &str, context: &NetworkContext) -> f32 {
         let action = action_str.to_lowercase();
         let mut bonus = 0.0;
-        
+
         // Network-specific bonuses
         match context.network_type {
             NetworkType::WiFi => {
@@ -551,12 +604,15 @@ impl UsagePatternLearner {
             }
             _ => {}
         }
-        
+
         // Signal strength bonuses
         if let Some(signal) = context.signal_strength {
             if signal < 0.3 {
                 // Poor signal - boost diagnostic and network switching actions
-                if action.contains("diagnostic") || action.contains("wifi") || action.contains("disconnect") {
+                if action.contains("diagnostic")
+                    || action.contains("wifi")
+                    || action.contains("disconnect")
+                {
                     bonus += 0.2;
                 }
             } else if signal > 0.8 {
@@ -566,7 +622,7 @@ impl UsagePatternLearner {
                 }
             }
         }
-        
+
         // Time-based bonuses
         match context.time_of_day {
             6..=9 => {
@@ -589,7 +645,7 @@ impl UsagePatternLearner {
             }
             _ => {}
         }
-        
+
         // Day-based bonuses
         match context.day_of_week {
             0..=4 => {
@@ -606,40 +662,42 @@ impl UsagePatternLearner {
             }
             _ => {}
         }
-        
+
         // Priority action types
         if action.contains("diagnostic") && action.contains("connectivity") {
-            bonus += 0.15;  // Always prioritize basic connectivity tests
+            bonus += 0.15; // Always prioritize basic connectivity tests
         }
-        
+
         if action.contains("disconnect") || action.contains("disable") {
-            bonus += 0.05;  // Slightly boost disconnect actions for quick access
+            bonus += 0.05; // Slightly boost disconnect actions for quick access
         }
-        
+
         bonus
     }
-    
+
     /// Calculate temporal consistency of usage patterns
     fn calculate_temporal_consistency(&self, distribution: &[u32]) -> f32 {
         let total: u32 = distribution.iter().sum();
         if total == 0 {
             return 0.0;
         }
-        
+
         // Calculate coefficient of variation (lower = more consistent)
         let mean = total as f32 / distribution.len() as f32;
-        let variance: f32 = distribution.iter()
+        let variance: f32 = distribution
+            .iter()
             .map(|&x| {
                 let diff = x as f32 - mean;
                 diff * diff
             })
-            .sum::<f32>() / distribution.len() as f32;
-        
+            .sum::<f32>()
+            / distribution.len() as f32;
+
         let std_dev = variance.sqrt();
         if mean == 0.0 {
             0.0
         } else {
-            1.0 / (1.0 + std_dev / mean)  // Higher consistency = higher score
+            1.0 / (1.0 + std_dev / mean) // Higher consistency = higher score
         }
     }
 
@@ -654,16 +712,26 @@ impl UsagePatternLearner {
             let context_vec = vec![
                 context.time_of_day as f32 / 24.0,
                 context.day_of_week as f32 / 7.0,
-                if context.network_type == NetworkType::WiFi { 1.0 } else { 0.0 },
+                if context.network_type == NetworkType::WiFi {
+                    1.0
+                } else {
+                    0.0
+                },
                 context.signal_strength.unwrap_or(0.0),
             ];
 
-            let max_similarity = stats.contexts.iter()
+            let max_similarity = stats
+                .contexts
+                .iter()
                 .map(|hist_context| {
                     let hist_vec = vec![
                         hist_context.time_of_day as f32 / 24.0,
                         hist_context.day_of_week as f32 / 7.0,
-                        if hist_context.network_type == NetworkType::WiFi { 1.0 } else { 0.0 },
+                        if hist_context.network_type == NetworkType::WiFi {
+                            1.0
+                        } else {
+                            0.0
+                        },
                         hist_context.signal_strength.unwrap_or(0.0),
                     ];
                     cosine_similarity(&context_vec, &hist_vec)
@@ -680,7 +748,7 @@ impl UsagePatternLearner {
     /// Parse action string to UserAction with sophisticated pattern matching
     fn parse_action_string(&self, action_str: &str) -> Option<UserAction> {
         let action = action_str.to_lowercase();
-        
+
         // WiFi actions (handle format: "wifi      - 📶 NetworkName" or "wifi      - ❌ Disconnect")
         if action.contains("wifi") {
             if action.contains("disconnect") {
@@ -705,13 +773,20 @@ impl UsagePatternLearner {
             }
         }
         // Bluetooth actions (handle format: "bluetooth- 🎧 DeviceName" or similar)
-        else if action.contains("bluetooth") || action_str.contains("🎧") || action_str.contains("📱") {
+        else if action.contains("bluetooth")
+            || action_str.contains("🎧")
+            || action_str.contains("📱")
+        {
             if action.contains("disconnect") {
                 Some(UserAction::DisconnectBluetooth)
             } else {
                 // Extract device name from the action string
                 let device_name = if action_str.contains(" - ") {
-                    action_str.split(" - ").nth(1).unwrap_or("device").trim()
+                    action_str
+                        .split(" - ")
+                        .nth(1)
+                        .unwrap_or("device")
+                        .trim()
                         .trim_start_matches(['🎧', '📱', '⌚', ' '])
                 } else {
                     "device"
@@ -731,7 +806,8 @@ impl UsagePatternLearner {
                 } else {
                     // Extract node name from exit node selection
                     let node_name = if action_str.contains(".mullvad.ts.net") {
-                        action_str.split_whitespace()
+                        action_str
+                            .split_whitespace()
                             .find(|s| s.contains(".mullvad.ts.net"))
                             .unwrap_or("node")
                     } else {
@@ -774,7 +850,10 @@ impl UsagePatternLearner {
             Some(UserAction::CustomAction(format!("nextdns_{}", action_str)))
         }
         // System/RFKill actions
-        else if action.contains("turn on") || action.contains("turn off") || action.contains("rfkill") {
+        else if action.contains("turn on")
+            || action.contains("turn off")
+            || action.contains("rfkill")
+        {
             Some(UserAction::CustomAction(format!("system_{}", action_str)))
         }
         // Custom actions (catch-all for user-defined actions)
@@ -824,13 +903,14 @@ impl UsagePatternLearner {
         sorted_actions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
         if let Some((action, score)) = sorted_actions.first() {
-            let alternatives: Vec<(UserAction, f32)> = sorted_actions.iter()
+            let alternatives: Vec<(UserAction, f32)> = sorted_actions
+                .iter()
                 .skip(1)
                 .take(2)
                 .map(|(a, s)| (a.clone(), *s))
                 .collect();
 
-            PredictionResult::new(action.clone(), score / 2.0)  // Normalize confidence
+            PredictionResult::new(action.clone(), score / 2.0) // Normalize confidence
                 .with_alternatives(alternatives)
         } else {
             // No prediction available
@@ -845,7 +925,8 @@ impl UsagePatternLearner {
 
     /// Get usage statistics for reporting
     pub fn get_usage_statistics(&self) -> HashMap<String, ActionStats> {
-        self.action_stats.iter()
+        self.action_stats
+            .iter()
             .map(|(action, stats)| {
                 let action_str = format!("{:?}", action);
                 (action_str, stats.clone())
@@ -890,23 +971,37 @@ impl ModelPersistence for UsagePatternLearner {
 }
 
 // Custom serialization functions to handle HashMap keys that aren't strings
-use serde::{Serializer, Deserializer};
+use serde::{Deserializer, Serializer};
 use std::fmt;
 
 /// Convert UserAction to a safe string without debug formatting issues
 fn user_action_to_safe_string(action: &UserAction) -> String {
     match action {
-        UserAction::ConnectWifi(name) => format!("ConnectWifi({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::ConnectWifi(name) => {
+            format!("ConnectWifi({})", name.replace('\\', "_").replace('"', "_"))
+        }
         UserAction::DisconnectWifi => "DisconnectWifi".to_string(),
-        UserAction::ConnectBluetooth(name) => format!("ConnectBluetooth({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::ConnectBluetooth(name) => format!(
+            "ConnectBluetooth({})",
+            name.replace('\\', "_").replace('"', "_")
+        ),
         UserAction::DisconnectBluetooth => "DisconnectBluetooth".to_string(),
         UserAction::EnableTailscale => "EnableTailscale".to_string(),
         UserAction::DisableTailscale => "DisableTailscale".to_string(),
-        UserAction::SelectExitNode(name) => format!("SelectExitNode({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::SelectExitNode(name) => format!(
+            "SelectExitNode({})",
+            name.replace('\\', "_").replace('"', "_")
+        ),
         UserAction::DisableExitNode => "DisableExitNode".to_string(),
-        UserAction::RunDiagnostic(name) => format!("RunDiagnostic({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::RunDiagnostic(name) => format!(
+            "RunDiagnostic({})",
+            name.replace('\\', "_").replace('"', "_")
+        ),
         UserAction::ToggleAirplaneMode => "ToggleAirplaneMode".to_string(),
-        UserAction::CustomAction(name) => format!("CustomAction({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::CustomAction(name) => format!(
+            "CustomAction({})",
+            name.replace('\\', "_").replace('"', "_")
+        ),
     }
 }
 
@@ -924,15 +1019,30 @@ fn safe_string_to_user_action(s: &str) -> Option<UserAction> {
         Some(UserAction::DisableExitNode)
     } else if s == "ToggleAirplaneMode" {
         Some(UserAction::ToggleAirplaneMode)
-    } else if let Some(name) = s.strip_prefix("ConnectWifi(").and_then(|n| n.strip_suffix(')')) {
+    } else if let Some(name) = s
+        .strip_prefix("ConnectWifi(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
         Some(UserAction::ConnectWifi(name.to_string()))
-    } else if let Some(name) = s.strip_prefix("ConnectBluetooth(").and_then(|n| n.strip_suffix(')')) {
+    } else if let Some(name) = s
+        .strip_prefix("ConnectBluetooth(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
         Some(UserAction::ConnectBluetooth(name.to_string()))
-    } else if let Some(name) = s.strip_prefix("SelectExitNode(").and_then(|n| n.strip_suffix(')')) {
+    } else if let Some(name) = s
+        .strip_prefix("SelectExitNode(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
         Some(UserAction::SelectExitNode(name.to_string()))
-    } else if let Some(name) = s.strip_prefix("RunDiagnostic(").and_then(|n| n.strip_suffix(')')) {
+    } else if let Some(name) = s
+        .strip_prefix("RunDiagnostic(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
         Some(UserAction::RunDiagnostic(name.to_string()))
-    } else if let Some(name) = s.strip_prefix("CustomAction(").and_then(|n| n.strip_suffix(')')) {
+    } else if let Some(name) = s
+        .strip_prefix("CustomAction(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
         Some(UserAction::CustomAction(name.to_string()))
     } else {
         None
@@ -962,16 +1072,16 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::{MapAccess, Visitor};
-    
+
     struct ActionStatsVisitor;
-    
+
     impl<'de> Visitor<'de> for ActionStatsVisitor {
         type Value = HashMap<UserAction, ActionStats>;
-        
+
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("a map with UserAction keys")
         }
-        
+
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
         where
             A: MapAccess<'de>,
@@ -987,7 +1097,7 @@ where
             Ok(result)
         }
     }
-    
+
     deserializer.deserialize_map(ActionStatsVisitor)
 }
 
@@ -1014,16 +1124,16 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::{MapAccess, Visitor};
-    
+
     struct ContextAssociationsVisitor;
-    
+
     impl<'de> Visitor<'de> for ContextAssociationsVisitor {
         type Value = HashMap<u64, Vec<UserAction>>;
-        
+
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("a map with u64 keys")
         }
-        
+
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
         where
             A: MapAccess<'de>,
@@ -1037,7 +1147,7 @@ where
             Ok(result)
         }
     }
-    
+
     deserializer.deserialize_map(ContextAssociationsVisitor)
 }
 
@@ -1067,7 +1177,9 @@ mod tests {
         learner.record_action(UserAction::SelectExitNode("us-node".to_string()), context);
 
         assert_eq!(learner.action_stats.len(), 2);
-        assert!(learner.action_stats.contains_key(&UserAction::EnableTailscale));
+        assert!(learner
+            .action_stats
+            .contains_key(&UserAction::EnableTailscale));
         assert_eq!(learner.action_sequences.len(), 1);
     }
 
@@ -1079,7 +1191,10 @@ mod tests {
         // Simulate a repeated workflow
         for _ in 0..3 {
             learner.record_action(UserAction::EnableTailscale, context.clone());
-            learner.record_action(UserAction::SelectExitNode("node".to_string()), context.clone());
+            learner.record_action(
+                UserAction::SelectExitNode("node".to_string()),
+                context.clone(),
+            );
         }
 
         assert!(!learner.frequent_workflows.is_empty());
@@ -1095,9 +1210,15 @@ mod tests {
             learner.record_action(UserAction::EnableTailscale, context.clone());
         }
         for _ in 0..2 {
-            learner.record_action(UserAction::ConnectWifi("network".to_string()), context.clone());
+            learner.record_action(
+                UserAction::ConnectWifi("network".to_string()),
+                context.clone(),
+            );
         }
-        learner.record_action(UserAction::RunDiagnostic("ping".to_string()), context.clone());
+        learner.record_action(
+            UserAction::RunDiagnostic("ping".to_string()),
+            context.clone(),
+        );
 
         let menu_items = vec![
             "Run Diagnostic".to_string(),
@@ -1119,7 +1240,10 @@ mod tests {
         // Train with a pattern
         for _ in 0..5 {
             learner.record_action(UserAction::EnableTailscale, context.clone());
-            learner.record_action(UserAction::SelectExitNode("node".to_string()), context.clone());
+            learner.record_action(
+                UserAction::SelectExitNode("node".to_string()),
+                context.clone(),
+            );
         }
 
         let recent = vec![UserAction::EnableTailscale];
@@ -1135,12 +1259,15 @@ mod tests {
 
         learner.record_action(UserAction::EnableTailscale, context.clone());
 
-        let stats = learner.action_stats.get(&UserAction::EnableTailscale).unwrap();
+        let stats = learner
+            .action_stats
+            .get(&UserAction::EnableTailscale)
+            .unwrap();
         assert_eq!(stats.total_count, 1);
         assert_eq!(stats.recent_count, 1);
         assert!(stats.last_used.is_some());
-        assert_eq!(stats.hourly_distribution[14], 1);  // Hour 14
-        assert_eq!(stats.daily_distribution[2], 1);    // Wednesday
+        assert_eq!(stats.hourly_distribution[14], 1); // Hour 14
+        assert_eq!(stats.daily_distribution[2], 1); // Wednesday
     }
 
     #[test]
@@ -1148,16 +1275,14 @@ mod tests {
         let mut learner = UsagePatternLearner::new();
         let context1 = create_test_context();
         let mut context2 = context1.clone();
-        context2.time_of_day = 15;  // Slightly different time
+        context2.time_of_day = 15; // Slightly different time
 
         learner.record_action(UserAction::EnableTailscale, context1.clone());
 
-        let similarity = learner.calculate_context_similarity(
-            &UserAction::EnableTailscale,
-            &context2
-        );
+        let similarity =
+            learner.calculate_context_similarity(&UserAction::EnableTailscale, &context2);
 
-        assert!(similarity > 0.8);  // Should be similar
+        assert!(similarity > 0.8); // Should be similar
     }
 
     #[test]

@@ -7,21 +7,19 @@
 //! - Network conditions
 
 use super::{
-    MlError, NetworkContext, NetworkMetrics, NodeFeatures, PredictionResult,
-    TrainingData, FeatureExtractor, ModelPersistence, normalize_features,
-    exponential_moving_average,
+    exponential_moving_average, normalize_features, FeatureExtractor, MlError, ModelPersistence,
+    NetworkContext, NetworkMetrics, NodeFeatures, PredictionResult, TrainingData,
 };
-use crate::tailscale::{TailscalePeer, TailscaleLocation};
-use std::collections::HashMap;
-use std::path::Path;
-use std::fs;
-use serde::{Deserialize, Serialize};
+use crate::tailscale::{TailscaleLocation, TailscalePeer};
 use log::{debug, info};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 #[cfg(feature = "ml")]
 use smartcore::{
-    ensemble::random_forest_regressor::RandomForestRegressor,
-    linalg::basic::matrix::DenseMatrix,
+    ensemble::random_forest_regressor::RandomForestRegressor, linalg::basic::matrix::DenseMatrix,
     model_selection::train_test_split,
 };
 
@@ -41,7 +39,7 @@ pub struct ExitNodePredictor {
 pub struct ExitNodeConfig {
     pub max_history_size: usize,
     pub feature_window_size: usize,
-    pub alpha: f32,  // EMA smoothing factor
+    pub alpha: f32, // EMA smoothing factor
     pub distance_weight: f32,
     pub latency_weight: f32,
     pub stability_weight: f32,
@@ -89,7 +87,8 @@ impl ExitNodePredictor {
 
     /// Record performance metrics for a node
     pub fn record_performance(&mut self, node_id: &str, metrics: NetworkMetrics) {
-        let history = self.performance_history
+        let history = self
+            .performance_history
             .entry(node_id.to_string())
             .or_default();
 
@@ -125,10 +124,12 @@ impl ExitNodePredictor {
         let load_factor = self.calculate_enhanced_load_factor(peer);
 
         // Priority score from location
-        let priority_score = peer.location
+        let priority_score = peer
+            .location
             .as_ref()
             .and_then(|l| l.priority)
-            .unwrap_or(50) as f32 / 100.0;
+            .unwrap_or(50) as f32
+            / 100.0;
 
         // Time since last use (in hours)
         let time_since_last_use = self.calculate_time_since_last_use(&node_id);
@@ -173,9 +174,11 @@ impl ExitNodePredictor {
 
         // Consider data transfer volume (high volume = higher load)
         let total_bytes = peer.rx_bytes + peer.tx_bytes;
-        if total_bytes > 1_000_000_000 { // More than 1GB
+        if total_bytes > 1_000_000_000 {
+            // More than 1GB
             load_factor += 0.2;
-        } else if total_bytes > 100_000_000 { // More than 100MB
+        } else if total_bytes > 100_000_000 {
+            // More than 100MB
             load_factor += 0.1;
         }
 
@@ -229,7 +232,8 @@ impl ExitNodePredictor {
     fn calculate_geographic_distance(&self, location: &Option<TailscaleLocation>) -> f32 {
         // Simplified distance calculation
         // In a real implementation, this would use actual coordinates
-        location.as_ref()
+        location
+            .as_ref()
             .map(|l| {
                 // Simulate distance based on priority (lower priority = farther)
                 let priority = l.priority.unwrap_or(50) as f32;
@@ -244,36 +248,35 @@ impl ExitNodePredictor {
                 return (50.0, 0.5, 0.5);
             }
 
-            let latencies: Vec<f32> = history.iter()
-                .map(|m| m.latency_ms)
-                .collect();
+            let latencies: Vec<f32> = history.iter().map(|m| m.latency_ms).collect();
 
             let smoothed = exponential_moving_average(&latencies, self.config.alpha);
             let avg_latency = smoothed.last().copied().unwrap_or(50.0);
 
             // Calculate stability (inverse of standard deviation)
-            let variance = latencies.iter()
+            let variance = latencies
+                .iter()
                 .map(|l| (l - avg_latency).powi(2))
-                .sum::<f32>() / latencies.len() as f32;
+                .sum::<f32>()
+                / latencies.len() as f32;
             let stability = 1.0 / (1.0 + variance.sqrt());
 
             // Calculate success rate (based on packet loss)
-            let success_rate = history.iter()
-                .map(|m| 1.0 - m.packet_loss)
-                .sum::<f32>() / history.len() as f32;
+            let success_rate =
+                history.iter().map(|m| 1.0 - m.packet_loss).sum::<f32>() / history.len() as f32;
 
             (avg_latency, stability, success_rate)
         } else {
-            (50.0, 0.5, 0.5)  // Default values
+            (50.0, 0.5, 0.5) // Default values
         }
     }
 
     fn calculate_time_since_last_use(&self, node_id: &str) -> f32 {
         // Legacy method kept for compatibility
         if self.performance_history.contains_key(node_id) {
-            1.0  // Recently used
+            1.0 // Recently used
         } else {
-            24.0  // Not recently used
+            24.0 // Not recently used
         }
     }
 
@@ -317,11 +320,10 @@ impl ExitNodePredictor {
         let stability_score = features.historical_stability;
         let priority_score = features.priority_score;
 
-        let score =
-            distance_score * self.config.distance_weight +
-            latency_score * self.config.latency_weight +
-            stability_score * self.config.stability_weight +
-            priority_score * self.config.priority_weight;
+        let score = distance_score * self.config.distance_weight
+            + latency_score * self.config.latency_weight
+            + stability_score * self.config.stability_weight
+            + priority_score * self.config.priority_weight;
 
         // Normalize to 0-100
         score * 100.0
@@ -369,12 +371,14 @@ impl ExitNodePredictor {
         // Sort by score (descending)
         scored_nodes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        let top_nodes: Vec<(String, f32)> = scored_nodes.iter()
+        let top_nodes: Vec<(String, f32)> = scored_nodes
+            .iter()
             .take(top_n)
             .map(|(id, score, _)| (id.clone(), *score))
             .collect();
 
-        let alternatives: Vec<(Vec<(String, f32)>, f32)> = scored_nodes.iter()
+        let alternatives: Vec<(Vec<(String, f32)>, f32)> = scored_nodes
+            .iter()
             .skip(top_n)
             .take(3)
             .map(|(id, score, _)| (vec![(id.clone(), *score)], *score / 100.0))
@@ -389,8 +393,7 @@ impl ExitNodePredictor {
             0.5
         };
 
-        PredictionResult::new(top_nodes, confidence)
-            .with_alternatives(alternatives)
+        PredictionResult::new(top_nodes, confidence).with_alternatives(alternatives)
     }
 
     /// Train the model with collected data
@@ -400,10 +403,14 @@ impl ExitNodePredictor {
             return Err(MlError::InsufficientData);
         }
 
-        info!("Training exit node predictor with {} samples", self.training_data.len());
+        info!(
+            "Training exit node predictor with {} samples",
+            self.training_data.len()
+        );
 
-        let features = DenseMatrix::from_2d_vec(&self.training_data.features)
-            .map_err(|e| MlError::PredictionFailed(format!("Failed to create feature matrix: {}", e)))?;
+        let features = DenseMatrix::from_2d_vec(&self.training_data.features).map_err(|e| {
+            MlError::PredictionFailed(format!("Failed to create feature matrix: {}", e))
+        })?;
         let labels = self.training_data.labels.clone();
 
         // Split data for training and testing
@@ -411,24 +418,27 @@ impl ExitNodePredictor {
             train_test_split(&features, &labels, 0.2, true, Some(42));
 
         // Train Random Forest model
-        let model = RandomForestRegressor::fit(
-            &x_train,
-            &y_train,
-            Default::default(),
-        ).map_err(|e| MlError::PredictionFailed(e.to_string()))?;
+        let model = RandomForestRegressor::fit(&x_train, &y_train, Default::default())
+            .map_err(|e| MlError::PredictionFailed(e.to_string()))?;
 
         // Evaluate model
-        let predictions = model.predict(&x_test)
+        let predictions = model
+            .predict(&x_test)
             .map_err(|e| MlError::PredictionFailed(e.to_string()))?;
 
         // Calculate simple metrics manually
-        let mse = y_test.iter().zip(predictions.iter())
+        let mse = y_test
+            .iter()
+            .zip(predictions.iter())
             .map(|(y, pred)| (y - pred).powi(2))
-            .sum::<f32>() / y_test.len() as f32;
+            .sum::<f32>()
+            / y_test.len() as f32;
 
         let mean_y = y_test.iter().sum::<f32>() / y_test.len() as f32;
         let ss_tot = y_test.iter().map(|y| (y - mean_y).powi(2)).sum::<f32>();
-        let ss_res = y_test.iter().zip(predictions.iter())
+        let ss_res = y_test
+            .iter()
+            .zip(predictions.iter())
             .map(|(y, pred)| (y - pred).powi(2))
             .sum::<f32>();
         let r2 = 1.0 - (ss_res / ss_tot);
@@ -449,7 +459,8 @@ impl ExitNodePredictor {
         context: NetworkContext,
     ) {
         let feature_vec = self.features_to_vec(&features);
-        self.training_data.add_sample(feature_vec, actual_performance, context);
+        self.training_data
+            .add_sample(feature_vec, actual_performance, context);
     }
 }
 
@@ -538,7 +549,7 @@ mod tests {
 
         assert!(features.geographic_distance >= 0.0 && features.geographic_distance <= 1.0);
         assert_eq!(features.priority_score, 0.8);
-        assert_eq!(features.load_factor, 0.2);  // Online node
+        assert_eq!(features.load_factor, 0.2); // Online node
     }
 
     #[test]
@@ -632,6 +643,9 @@ mod tests {
 
         // Load model
         let loaded = ExitNodePredictor::load(model_path.to_str().unwrap()).unwrap();
-        assert_eq!(loaded.config.max_history_size, predictor.config.max_history_size);
+        assert_eq!(
+            loaded.config.max_history_size,
+            predictor.config.max_history_size
+        );
     }
 }

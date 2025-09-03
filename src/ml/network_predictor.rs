@@ -7,14 +7,14 @@
 //! - Network availability forecasting
 
 use super::{
-    MlError, NetworkContext, NetworkMetrics, PredictionResult,
-    TrainingData, ModelPersistence, normalize_features,
+    normalize_features, MlError, ModelPersistence, NetworkContext, NetworkMetrics,
+    PredictionResult, TrainingData,
 };
-use std::collections::HashMap;
-use std::path::Path;
-use std::fs;
-use serde::{Deserialize, Serialize};
 use log::debug;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// WiFi network information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ impl Default for NetworkPredictorConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkPredictor {
     network_history: HashMap<String, Vec<NetworkMetrics>>,
-    connection_success: HashMap<String, (u32, u32)>,  // (success, total)
+    connection_success: HashMap<String, (u32, u32)>, // (success, total)
     network_features: HashMap<String, Vec<f32>>,
     training_data: TrainingData<f32>,
     config: NetworkPredictorConfig,
@@ -127,8 +127,7 @@ impl NetworkPredictor {
                 0.7
             };
 
-            PredictionResult::new(best_ssid.clone(), confidence)
-                .with_alternatives(alternatives)
+            PredictionResult::new(best_ssid.clone(), confidence).with_alternatives(alternatives)
         } else {
             PredictionResult::new(String::new(), 0.0)
         }
@@ -149,7 +148,8 @@ impl NetworkPredictor {
         // Historical performance
         if let Some(history) = self.network_history.get(&network.ssid) {
             if !history.is_empty() {
-                let avg_latency = history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
+                let avg_latency =
+                    history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
                 let latency_score = 1.0 / (1.0 + avg_latency / 50.0);
                 score += latency_score * self.config.history_weight;
             }
@@ -178,12 +178,12 @@ impl NetworkPredictor {
             score += 0.1;
         }
 
-        score * 100.0  // Scale to 0-100
+        score * 100.0 // Scale to 0-100
     }
 
     /// Predict connection quality for a network
     pub fn predict_quality(&self, network: &WifiNetwork) -> QualityPrediction {
-        let mut connection_success_probability = 0.8;  // Default
+        let mut connection_success_probability = 0.8; // Default
 
         // Adjust based on signal strength
         let signal_factor = ((network.signal_strength + 100) as f32 / 70.0).clamp(0.0, 1.0);
@@ -194,11 +194,14 @@ impl NetworkPredictor {
         // Adjust based on history
         if let Some(history) = self.network_history.get(&network.ssid) {
             if !history.is_empty() {
-                expected_latency = history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
-                expected_bandwidth = history.iter().map(|m| m.bandwidth_mbps).sum::<f32>() / history.len() as f32;
+                expected_latency =
+                    history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
+                expected_bandwidth =
+                    history.iter().map(|m| m.bandwidth_mbps).sum::<f32>() / history.len() as f32;
 
                 // Calculate stability from packet loss
-                let avg_loss = history.iter().map(|m| m.packet_loss).sum::<f32>() / history.len() as f32;
+                let avg_loss =
+                    history.iter().map(|m| m.packet_loss).sum::<f32>() / history.len() as f32;
                 expected_stability = 1.0 - avg_loss;
             }
         }
@@ -220,9 +223,7 @@ impl NetworkPredictor {
 
     /// Record network performance
     pub fn record_performance(&mut self, ssid: &str, metrics: NetworkMetrics) {
-        let history = self.network_history
-            .entry(ssid.to_string())
-            .or_default();
+        let history = self.network_history.entry(ssid.to_string()).or_default();
 
         history.push(metrics);
 
@@ -234,25 +235,29 @@ impl NetworkPredictor {
 
     /// Record connection attempt result
     pub fn record_connection_attempt(&mut self, ssid: &str, success: bool) {
-        let entry = self.connection_success
+        let entry = self
+            .connection_success
             .entry(ssid.to_string())
             .or_insert((0, 0));
 
-        entry.1 += 1;  // Total attempts
+        entry.1 += 1; // Total attempts
         if success {
-            entry.0 += 1;  // Successful attempts
+            entry.0 += 1; // Successful attempts
         }
     }
 
     /// Extract features for a network
-    pub fn extract_network_features(&self, network: &WifiNetwork, context: &NetworkContext) -> Vec<f32> {
+    pub fn extract_network_features(
+        &self,
+        network: &WifiNetwork,
+        context: &NetworkContext,
+    ) -> Vec<f32> {
         let mut features = vec![
             // Network features
             ((network.signal_strength + 100) as f32 / 70.0).clamp(0.0, 1.0),
             if network.frequency >= 5000 { 1.0 } else { 0.0 },
             network.channel as f32 / 14.0,
             if network.is_saved { 1.0 } else { 0.0 },
-
             // Context features
             context.time_of_day as f32 / 24.0,
             context.day_of_week as f32 / 7.0,
@@ -261,15 +266,17 @@ impl NetworkPredictor {
         // Add historical features
         if let Some(history) = self.network_history.get(&network.ssid) {
             if !history.is_empty() {
-                let avg_latency = history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
-                let avg_bandwidth = history.iter().map(|m| m.bandwidth_mbps).sum::<f32>() / history.len() as f32;
-                features.push(avg_latency / 1000.0);  // Normalized
-                features.push(avg_bandwidth / 1000.0);  // Normalized
+                let avg_latency =
+                    history.iter().map(|m| m.latency_ms).sum::<f32>() / history.len() as f32;
+                let avg_bandwidth =
+                    history.iter().map(|m| m.bandwidth_mbps).sum::<f32>() / history.len() as f32;
+                features.push(avg_latency / 1000.0); // Normalized
+                features.push(avg_bandwidth / 1000.0); // Normalized
             } else {
-                features.extend(vec![0.5, 0.5]);  // Default values
+                features.extend(vec![0.5, 0.5]); // Default values
             }
         } else {
-            features.extend(vec![0.5, 0.5]);  // Default values
+            features.extend(vec![0.5, 0.5]); // Default values
         }
 
         // Add success rate feature
@@ -389,7 +396,7 @@ mod tests {
 
         let result = predictor.predict_best_network(networks, &context);
 
-        assert_eq!(result.value, "Network1");  // Best signal
+        assert_eq!(result.value, "Network1"); // Best signal
         assert!(result.confidence > 0.0);
     }
 
@@ -399,13 +406,16 @@ mod tests {
         let network = create_test_network("TestNet", -50);
 
         // Add some history
-        predictor.record_performance("TestNet", NetworkMetrics {
-            latency_ms: 25.0,
-            packet_loss: 0.01,
-            jitter_ms: 2.0,
-            bandwidth_mbps: 100.0,
-            timestamp: chrono::Utc::now().timestamp(),
-        });
+        predictor.record_performance(
+            "TestNet",
+            NetworkMetrics {
+                latency_ms: 25.0,
+                packet_loss: 0.01,
+                jitter_ms: 2.0,
+                bandwidth_mbps: 100.0,
+                timestamp: chrono::Utc::now().timestamp(),
+            },
+        );
 
         let quality = predictor.predict_quality(&network);
 

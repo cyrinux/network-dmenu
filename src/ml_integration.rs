@@ -6,13 +6,13 @@
 
 #[cfg(feature = "ml")]
 use crate::ml::{
-    diagnostic_analyzer::{DiagnosticAnalyzer, NetworkSymptom, DiagnosticTest},
+    action_prioritizer::ActionPrioritizer,
+    diagnostic_analyzer::{DiagnosticAnalyzer, DiagnosticTest, NetworkSymptom},
     exit_node_predictor::ExitNodePredictor,
     network_predictor::{NetworkPredictor, WifiNetwork},
     performance_tracker::PerformanceTracker,
     usage_patterns::{UsagePatternLearner, UserAction},
-    action_prioritizer::ActionPrioritizer,
-    MlConfig, NetworkContext, NetworkMetrics, NetworkType, ModelPersistence,
+    MlConfig, ModelPersistence, NetworkContext, NetworkMetrics, NetworkType,
 };
 
 use crate::tailscale::TailscalePeer;
@@ -20,14 +20,13 @@ use crate::tailscale::TailscalePeer;
 #[cfg(feature = "ml")]
 use log::{debug, error, info};
 #[cfg(feature = "ml")]
-use std::sync::{Arc, Mutex};
-#[cfg(feature = "ml")]
 use once_cell::sync::Lazy;
+#[cfg(feature = "ml")]
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "ml")]
-static ML_MANAGER: Lazy<Arc<Mutex<MlManager>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(MlManager::new()))
-});
+static ML_MANAGER: Lazy<Arc<Mutex<MlManager>>> =
+    Lazy::new(|| Arc::new(Mutex::new(MlManager::new())));
 
 /// Central ML manager for coordinating all ML components
 #[cfg(feature = "ml")]
@@ -128,11 +127,16 @@ impl MlManager {
     pub fn save_models(&self) -> Result<(), Box<dyn std::error::Error>> {
         let model_base = &self.config.model_path;
 
-        self.exit_node_predictor.save(&format!("{}/exit_node.json", model_base))?;
-        self.diagnostic_analyzer.save(&format!("{}/diagnostic.json", model_base))?;
-        self.network_predictor.save(&format!("{}/network.json", model_base))?;
-        self.performance_tracker.save(&format!("{}/performance.json", model_base))?;
-        self.usage_learner.save(&format!("{}/usage.json", model_base))?;
+        self.exit_node_predictor
+            .save(&format!("{}/exit_node.json", model_base))?;
+        self.diagnostic_analyzer
+            .save(&format!("{}/diagnostic.json", model_base))?;
+        self.network_predictor
+            .save(&format!("{}/network.json", model_base))?;
+        self.performance_tracker
+            .save(&format!("{}/performance.json", model_base))?;
+        self.usage_learner
+            .save(&format!("{}/usage.json", model_base))?;
 
         info!("All ML models saved successfully");
         Ok(())
@@ -142,7 +146,7 @@ impl MlManager {
 /// Get current network context for ML predictions
 #[cfg(feature = "ml")]
 pub fn get_current_context() -> NetworkContext {
-    use chrono::{Local, Timelike, Datelike};
+    use chrono::{Datelike, Local, Timelike};
 
     let now = Local::now();
 
@@ -192,9 +196,7 @@ fn detect_network_type() -> NetworkType {
 #[cfg(feature = "ml")]
 fn get_signal_strength() -> Option<f32> {
     // Get WiFi signal strength if available
-    if let Ok(output) = std::process::Command::new("iwconfig")
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("iwconfig").output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         if let Some(line) = output_str.lines().find(|l| l.contains("Signal level")) {
             if let Some(signal) = line.split("Signal level=").nth(1) {
@@ -212,15 +214,14 @@ fn get_signal_strength() -> Option<f32> {
 
 /// Predict best exit nodes using ML
 #[cfg(feature = "ml")]
-pub fn predict_best_exit_nodes(
-    peers: &[TailscalePeer],
-    top_n: usize,
-) -> Vec<(String, f32)> {
+pub fn predict_best_exit_nodes(peers: &[TailscalePeer], top_n: usize) -> Vec<(String, f32)> {
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
 
     let context = get_current_context();
-    let result = manager.exit_node_predictor.predict_best_nodes(peers, &context, top_n);
+    let result = manager
+        .exit_node_predictor
+        .predict_best_nodes(peers, &context, top_n);
 
     if result.confidence > manager.config.confidence_threshold {
         result.value
@@ -238,12 +239,14 @@ pub fn record_exit_node_performance(node_id: &str, latency: f32, packet_loss: f3
     let metrics = NetworkMetrics {
         latency_ms: latency,
         packet_loss,
-        jitter_ms: 0.0,  // Would need to calculate this properly
-        bandwidth_mbps: 0.0,  // Would need to measure this
+        jitter_ms: 0.0,      // Would need to calculate this properly
+        bandwidth_mbps: 0.0, // Would need to measure this
         timestamp: chrono::Utc::now().timestamp(),
     };
 
-    manager.exit_node_predictor.record_performance(node_id, metrics.clone());
+    manager
+        .exit_node_predictor
+        .record_performance(node_id, metrics.clone());
     manager.performance_tracker.record_metrics(node_id, metrics);
 
     // Periodically save models (every 10 actions for better persistence)
@@ -266,7 +269,8 @@ pub fn analyze_network_issues(symptoms: Vec<&str>) -> (String, Vec<String>) {
     manager.initialize();
 
     // Convert string symptoms to enum
-    let symptom_enums: Vec<NetworkSymptom> = symptoms.iter()
+    let symptom_enums: Vec<NetworkSymptom> = symptoms
+        .iter()
         .filter_map(|s| match *s {
             "high_latency" => Some(NetworkSymptom::HighLatency),
             "packet_loss" => Some(NetworkSymptom::PacketLoss),
@@ -281,7 +285,8 @@ pub fn analyze_network_issues(symptoms: Vec<&str>) -> (String, Vec<String>) {
     let tests = manager.diagnostic_analyzer.recommend_tests(&symptom_enums);
 
     let cause_str = format!("{:?}", cause_result.value);
-    let test_strs: Vec<String> = tests.iter()
+    let test_strs: Vec<String> = tests
+        .iter()
         .map(|t| match t {
             DiagnosticTest::PingGateway => "Ping Gateway".to_string(),
             DiagnosticTest::PingDns => "Ping DNS".to_string(),
@@ -305,10 +310,12 @@ pub fn get_personalized_menu_order(menu_items: Vec<String>) -> Vec<String> {
     manager.initialize();
 
     let context = get_current_context();
-    
+
     // Get usage-based ordering first
-    let usage_ordered = manager.usage_learner.get_personalized_menu_order(menu_items.clone(), &context);
-    
+    let usage_ordered = manager
+        .usage_learner
+        .get_personalized_menu_order(menu_items.clone(), &context);
+
     // Apply smart prioritization to create final sophisticated ordering
     let mut scored_items: Vec<(String, f32)> = usage_ordered
         .iter()
@@ -316,28 +323,31 @@ pub fn get_personalized_menu_order(menu_items: Vec<String>) -> Vec<String> {
         .map(|(index, action_str)| {
             // Calculate usage score based on position (higher for items that appear earlier)
             let usage_score = 1.0 - (index as f32 / menu_items.len() as f32);
-            
+
             // Get smart priority score
             let priority_score = manager.action_prioritizer.calculate_priority_score(
-                action_str, 
-                &context, 
-                usage_score
+                action_str,
+                &context,
+                usage_score,
             );
-            
+
             (action_str.clone(), priority_score)
         })
         .collect();
-    
+
     // Sort by combined score (descending)
     scored_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    
-    debug!("ML-enhanced menu ordering applied to {} items", scored_items.len());
+
+    debug!(
+        "ML-enhanced menu ordering applied to {} items",
+        scored_items.len()
+    );
     if log::log_enabled!(log::Level::Debug) {
         for (i, (action, score)) in scored_items.iter().take(5).enumerate() {
             debug!("  {}. {} (score: {:.3})", i + 1, action, score);
         }
     }
-    
+
     scored_items.into_iter().map(|(action, _)| action).collect()
 }
 
@@ -358,7 +368,10 @@ pub fn record_user_action(action: &str) {
     *counter += 1;
 
     if *counter % 5 == 0 {
-        debug!("Auto-saving ML models after user action (count: {})", *counter);
+        debug!(
+            "Auto-saving ML models after user action (count: {})",
+            *counter
+        );
         if let Err(e) = manager.save_models() {
             error!("Failed to save ML models: {}", e);
         }
@@ -372,7 +385,9 @@ pub fn get_personalized_wifi_order(available_networks: Vec<String>) -> Vec<Strin
     manager.initialize();
 
     let context = get_current_context();
-    manager.usage_learner.get_personalized_wifi_order(available_networks, &context)
+    manager
+        .usage_learner
+        .get_personalized_wifi_order(available_networks, &context)
 }
 
 /// Record action execution result for prioritization learning
@@ -383,26 +398,42 @@ pub fn record_action_result(action: &str, success: bool, execution_time_ms: u64)
 
     let context = get_current_context();
     let execution_time = execution_time_ms as f32 / 1000.0; // Convert to seconds
-    
-    manager.action_prioritizer.record_action_result(action, success, execution_time, &context);
-    
-    debug!("Recorded action result: '{}' = {} ({}ms)", action, success, execution_time_ms);
+
+    manager
+        .action_prioritizer
+        .record_action_result(action, success, execution_time, &context);
+
+    debug!(
+        "Recorded action result: '{}' = {} ({}ms)",
+        action, success, execution_time_ms
+    );
 }
 
 /// Update network state for better ML predictions
 #[cfg(feature = "ml")]
-pub fn update_network_state(is_online: bool, connection_quality: f32, available_interfaces: Vec<String>) {
+pub fn update_network_state(
+    is_online: bool,
+    connection_quality: f32,
+    available_interfaces: Vec<String>,
+) {
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
-    
-    manager.action_prioritizer.update_network_state(is_online, connection_quality, available_interfaces);
-    debug!("Updated network state: online={}, quality={:.2}", is_online, connection_quality);
+
+    manager.action_prioritizer.update_network_state(
+        is_online,
+        connection_quality,
+        available_interfaces,
+    );
+    debug!(
+        "Updated network state: online={}, quality={:.2}",
+        is_online, connection_quality
+    );
 }
 
 #[cfg(feature = "ml")]
 fn parse_user_action(action: &str) -> UserAction {
     let action_lower = action.to_lowercase();
-    
+
     // Enhanced WiFi parsing to extract network names
     if action_lower.contains("wifi") {
         if action_lower.contains("disconnect") {
@@ -449,7 +480,7 @@ fn extract_wifi_network_name(action: &str) -> String {
             return network_part.to_string();
         }
     }
-    
+
     // Fallback: try to find network name after common keywords
     let keywords = ["connect to", "network", "wifi"];
     for keyword in keywords {
@@ -457,17 +488,20 @@ fn extract_wifi_network_name(action: &str) -> String {
             let after_keyword = &action[pos + keyword.len()..].trim();
             if !after_keyword.is_empty() {
                 // Take first word/phrase after the keyword
-                let network = after_keyword.split_whitespace().next().unwrap_or(after_keyword);
+                let network = after_keyword
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(after_keyword);
                 if network.len() > 1 {
                     return network.to_string();
                 }
             }
         }
     }
-    
+
     // Ultimate fallback: use "unknown" but preserve some context
     if action.len() > 20 {
-        format!("unknown_{}", &action[action.len()-8..]) // Last 8 chars as identifier
+        format!("unknown_{}", &action[action.len() - 8..]) // Last 8 chars as identifier
     } else {
         "unknown".to_string()
     }
@@ -489,15 +523,18 @@ fn extract_bluetooth_device_name(action: &str) -> String {
 #[cfg(feature = "ml")]
 fn extract_exit_node_name(action: &str) -> String {
     // Look for patterns like "us-nyc-wg-301.mullvad.ts.net"
-    if let Some(node) = action.split_whitespace().find(|s| s.contains(".mullvad.ts.net") || s.contains(".ts.net")) {
+    if let Some(node) = action
+        .split_whitespace()
+        .find(|s| s.contains(".mullvad.ts.net") || s.contains(".ts.net"))
+    {
         return node.to_string();
     }
-    
+
     // Look for country codes or city names
     if let Some(captures) = action.split(" - ").nth(1) {
         return captures.trim().to_string();
     }
-    
+
     "unknown_node".to_string()
 }
 
@@ -505,7 +542,7 @@ fn extract_exit_node_name(action: &str) -> String {
 #[cfg(feature = "ml")]
 fn extract_diagnostic_type(action: &str) -> String {
     let action_lower = action.to_lowercase();
-    
+
     if action_lower.contains("connectivity") {
         "connectivity".to_string()
     } else if action_lower.contains("ping") {
@@ -529,20 +566,23 @@ pub fn predict_best_wifi_network(networks: Vec<(String, i32, String)>) -> Option
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
 
-    let wifi_networks: Vec<WifiNetwork> = networks.into_iter()
+    let wifi_networks: Vec<WifiNetwork> = networks
+        .into_iter()
         .map(|(ssid, signal, security)| WifiNetwork {
             ssid: ssid.clone(),
             bssid: String::new(),
             signal_strength: signal,
-            frequency: 2400,  // Default, would need to detect
-            channel: 1,  // Default
+            frequency: 2400, // Default, would need to detect
+            channel: 1,      // Default
             security,
-            is_saved: false,  // Would need to check
+            is_saved: false, // Would need to check
         })
         .collect();
 
     let context = get_current_context();
-    let result = manager.network_predictor.predict_best_network(wifi_networks, &context);
+    let result = manager
+        .network_predictor
+        .predict_best_network(wifi_networks, &context);
 
     if result.confidence > manager.config.confidence_threshold {
         Some(result.value)
@@ -564,7 +604,9 @@ pub fn record_wifi_performance(ssid: &str, latency: f32, bandwidth: f32) {
         timestamp: chrono::Utc::now().timestamp(),
     };
 
-    manager.network_predictor.record_performance(ssid, metrics.clone());
+    manager
+        .network_predictor
+        .record_performance(ssid, metrics.clone());
     manager.performance_tracker.record_metrics(ssid, metrics);
 }
 
@@ -595,20 +637,25 @@ pub fn force_save_ml_models() -> Result<(), Box<dyn std::error::Error>> {
 pub fn get_performance_summary(connection_id: &str) -> Option<String> {
     let manager = ML_MANAGER.lock().unwrap();
 
-    manager.performance_tracker.get_summary(connection_id).map(|summary| format!(
-            "📊 Performance Summary for {}\n\
+    manager
+        .performance_tracker
+        .get_summary(connection_id)
+        .map(|summary| {
+            format!(
+                "📊 Performance Summary for {}\n\
              Average Latency: {:.1}ms\n\
              P95 Latency: {:.1}ms\n\
              Packet Loss: {:.2}%\n\
              Uptime: {:.1}%\n\
              Samples: {}",
-            connection_id,
-            summary.average_latency,
-            summary.p95_latency,
-            summary.average_packet_loss * 100.0,
-            summary.uptime_percentage,
-            summary.total_samples
-        ))
+                connection_id,
+                summary.average_latency,
+                summary.p95_latency,
+                summary.average_packet_loss * 100.0,
+                summary.uptime_percentage,
+                summary.total_samples
+            )
+        })
 }
 
 // Non-ML fallback functions for when ML feature is disabled
@@ -659,7 +706,12 @@ pub fn force_save_ml_models() -> Result<(), Box<dyn std::error::Error>> {
 pub fn record_action_result(_action: &str, _success: bool, _execution_time_ms: u64) {}
 
 #[cfg(not(feature = "ml"))]
-pub fn update_network_state(_is_online: bool, _connection_quality: f32, _available_interfaces: Vec<String>) {}
+pub fn update_network_state(
+    _is_online: bool,
+    _connection_quality: f32,
+    _available_interfaces: Vec<String>,
+) {
+}
 
 #[cfg(not(feature = "ml"))]
 pub fn get_personalized_wifi_order(available_networks: Vec<String>) -> Vec<String> {

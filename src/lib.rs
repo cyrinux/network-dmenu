@@ -5,22 +5,22 @@
 
 pub mod bluetooth;
 pub mod command;
-#[cfg(feature = "ml")]
-pub mod ml;
-pub mod ml_integration;
 pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
 pub mod iwd;
 pub mod logger;
+#[cfg(feature = "ml")]
+pub mod ml;
+pub mod ml_integration;
 pub mod networkmanager;
 pub mod nextdns;
 pub mod privilege;
 pub mod rfkill;
 pub mod ssh;
 pub mod tailscale;
-pub mod tor;
 pub mod tailscale_prefs;
+pub mod tor;
 pub mod utils;
 
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
@@ -39,6 +39,12 @@ pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
 };
+pub use ml_integration::{
+    analyze_network_issues, force_save_ml_models, get_performance_summary,
+    get_personalized_menu_order, initialize_ml_system, predict_best_exit_nodes,
+    predict_best_wifi_network, record_exit_node_performance, record_user_action,
+    record_wifi_performance,
+};
 pub use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
     get_nm_vpn_networks, get_nm_wifi_networks, is_known_network as is_known_nm_network,
@@ -48,18 +54,17 @@ pub use privilege::{
     get_privilege_command, has_privilege_escalation, wrap_privileged_command,
     wrap_privileged_commands,
 };
-pub use ssh::{get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig};
-pub use tor::{get_tor_actions, handle_tor_action, tor_action_to_string, TorAction, TorsocksConfig, get_default_torsocks_configs};
+pub use ssh::{
+    get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig,
+};
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
     TailscaleState,
 };
-pub use ml_integration::{
-    predict_best_exit_nodes, record_exit_node_performance, analyze_network_issues,
-    get_personalized_menu_order, record_user_action, predict_best_wifi_network,
-    record_wifi_performance, get_performance_summary, initialize_ml_system,
-    force_save_ml_models,
+pub use tor::{
+    get_default_torsocks_configs, get_tor_actions, handle_tor_action, tor_action_to_string,
+    TorAction, TorsocksConfig,
 };
 
 // Re-export async functions

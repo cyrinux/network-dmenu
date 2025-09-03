@@ -8,13 +8,12 @@
 
 use network_dmenu::{
     command::RealCommandRunner,
-    tailscale::{TailscaleState, get_mullvad_actions},
     ml_integration::{
-        predict_best_exit_nodes, record_exit_node_performance,
-        analyze_network_issues, get_personalized_menu_order,
-        record_user_action, predict_best_wifi_network,
-        record_wifi_performance, get_performance_summary,
+        analyze_network_issues, get_performance_summary, get_personalized_menu_order,
+        predict_best_exit_nodes, predict_best_wifi_network, record_exit_node_performance,
+        record_user_action, record_wifi_performance,
     },
+    tailscale::{get_mullvad_actions, TailscaleState},
 };
 use std::error::Error;
 
@@ -36,7 +35,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tailscale_state = TailscaleState::new(&command_runner);
 
     // Get all available peers
-    let peers: Vec<_> = tailscale_state.status.peer.values()
+    let peers: Vec<_> = tailscale_state
+        .status
+        .peer
+        .values()
         .filter(|p| p.exit_node_option)
         .cloned()
         .collect();
@@ -54,7 +56,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  {}. {} (Score: {:.2})", i + 1, node, score);
             }
         } else {
-            println!("ℹ️  ML predictions not available (low confidence), using traditional selection");
+            println!(
+                "ℹ️  ML predictions not available (low confidence), using traditional selection"
+            );
         }
     }
 
@@ -149,7 +153,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Available networks:");
     for (ssid, signal, security) in &available_networks {
-        println!("  📶 {} (Signal: {}dBm, Security: {})", ssid, signal, security);
+        println!(
+            "  📶 {} (Signal: {}dBm, Security: {})",
+            ssid, signal, security
+        );
     }
 
     #[cfg(feature = "ml")]

@@ -6,15 +6,12 @@
 //! - Provide historical analysis
 //! - Generate performance reports
 
-use super::{
-    MlError, NetworkMetrics, ModelPersistence,
-    exponential_moving_average,
-};
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::fs;
-use serde::{Deserialize, Serialize};
+use super::{exponential_moving_average, MlError, ModelPersistence, NetworkMetrics};
 use log::debug;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::path::Path;
 
 /// Performance tracking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +56,7 @@ pub struct PerformanceSummary {
     pub average_bandwidth: f32,
     pub uptime_percentage: f32,
     pub total_samples: usize,
-    pub time_range: (i64, i64),  // Unix timestamps
+    pub time_range: (i64, i64), // Unix timestamps
 }
 
 /// Performance tracker for network metrics
@@ -67,7 +64,7 @@ pub struct PerformanceSummary {
 pub struct PerformanceTracker {
     metrics_history: HashMap<String, VecDeque<NetworkMetrics>>,
     smoothed_metrics: HashMap<String, NetworkMetrics>,
-    alerts: VecDeque<(i64, PerformanceAlert)>,  // Unix timestamp
+    alerts: VecDeque<(i64, PerformanceAlert)>, // Unix timestamp
     config: PerformanceConfig,
 }
 
@@ -96,7 +93,8 @@ impl PerformanceTracker {
 
     /// Record network metrics
     pub fn record_metrics(&mut self, connection_id: &str, metrics: NetworkMetrics) {
-        let history = self.metrics_history
+        let history = self
+            .metrics_history
             .entry(connection_id.to_string())
             .or_default();
 
@@ -127,7 +125,8 @@ impl PerformanceTracker {
                 + (1.0 - self.config.smoothing_factor) * smoothed.bandwidth_mbps;
             smoothed.timestamp = metrics.timestamp;
         } else {
-            self.smoothed_metrics.insert(connection_id.to_string(), metrics.clone());
+            self.smoothed_metrics
+                .insert(connection_id.to_string(), metrics.clone());
         }
     }
 
@@ -136,19 +135,23 @@ impl PerformanceTracker {
         let now = chrono::Utc::now().timestamp();
 
         if metrics.latency_ms > self.config.alert_threshold_latency_ms {
-            self.alerts.push_back((now, PerformanceAlert::HighLatency(metrics.latency_ms)));
+            self.alerts
+                .push_back((now, PerformanceAlert::HighLatency(metrics.latency_ms)));
         }
 
         if metrics.packet_loss > self.config.alert_threshold_packet_loss {
-            self.alerts.push_back((now, PerformanceAlert::PacketLoss(metrics.packet_loss)));
+            self.alerts
+                .push_back((now, PerformanceAlert::PacketLoss(metrics.packet_loss)));
         }
 
         if metrics.jitter_ms > 50.0 {
-            self.alerts.push_back((now, PerformanceAlert::JitterSpike(metrics.jitter_ms)));
+            self.alerts
+                .push_back((now, PerformanceAlert::JitterSpike(metrics.jitter_ms)));
         }
 
         if metrics.bandwidth_mbps < 1.0 {
-            self.alerts.push_back((now, PerformanceAlert::BandwidthDrop(metrics.bandwidth_mbps)));
+            self.alerts
+                .push_back((now, PerformanceAlert::BandwidthDrop(metrics.bandwidth_mbps)));
         }
 
         // Limit alerts history
@@ -172,21 +175,16 @@ impl PerformanceTracker {
         let p95_index = (latencies.len() as f32 * 0.95) as usize;
         let p99_index = (latencies.len() as f32 * 0.99) as usize;
 
-        let avg_packet_loss = history.iter()
-            .map(|m| m.packet_loss)
-            .sum::<f32>() / history.len() as f32;
+        let avg_packet_loss =
+            history.iter().map(|m| m.packet_loss).sum::<f32>() / history.len() as f32;
 
-        let avg_jitter = history.iter()
-            .map(|m| m.jitter_ms)
-            .sum::<f32>() / history.len() as f32;
+        let avg_jitter = history.iter().map(|m| m.jitter_ms).sum::<f32>() / history.len() as f32;
 
-        let avg_bandwidth = history.iter()
-            .map(|m| m.bandwidth_mbps)
-            .sum::<f32>() / history.len() as f32;
+        let avg_bandwidth =
+            history.iter().map(|m| m.bandwidth_mbps).sum::<f32>() / history.len() as f32;
 
-        let uptime = history.iter()
-            .filter(|m| m.packet_loss < 1.0)
-            .count() as f32 / history.len() as f32;
+        let uptime =
+            history.iter().filter(|m| m.packet_loss < 1.0).count() as f32 / history.len() as f32;
 
         let first_timestamp = history.front()?.timestamp;
         let last_timestamp = history.back()?.timestamp;
@@ -206,11 +204,7 @@ impl PerformanceTracker {
 
     /// Get recent alerts
     pub fn get_recent_alerts(&self, limit: usize) -> Vec<(i64, PerformanceAlert)> {
-        self.alerts.iter()
-            .rev()
-            .take(limit)
-            .cloned()
-            .collect()
+        self.alerts.iter().rev().take(limit).cloned().collect()
     }
 
     /// Get smoothed metrics for a connection
@@ -226,7 +220,8 @@ impl PerformanceTracker {
             return None;
         }
 
-        let recent: Vec<f32> = history.iter()
+        let recent: Vec<f32> = history
+            .iter()
             .rev()
             .take(window_size)
             .map(|m| m.latency_ms)
@@ -239,9 +234,15 @@ impl PerformanceTracker {
         let change_percent = ((last - first) / first) * 100.0;
 
         if change_percent > 20.0 {
-            Some(format!("Performance degrading: {:.1}% increase in latency", change_percent))
+            Some(format!(
+                "Performance degrading: {:.1}% increase in latency",
+                change_percent
+            ))
         } else if change_percent < -20.0 {
-            Some(format!("Performance improving: {:.1}% decrease in latency", change_percent.abs()))
+            Some(format!(
+                "Performance improving: {:.1}% decrease in latency",
+                change_percent.abs()
+            ))
         } else {
             Some("Performance stable".to_string())
         }

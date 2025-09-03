@@ -144,15 +144,15 @@ pub struct TailscalePeer {
 pub struct TailscaleLocation {
     #[serde(rename = "Country", default)]
     pub country: String,
-        #[serde(rename = "CountryCode", default)]
+    #[serde(rename = "CountryCode", default)]
     pub country_code: String,
     #[serde(rename = "City", default)]
     pub city: String,
-        #[serde(rename = "CityCode", default)]
+    #[serde(rename = "CityCode", default)]
     pub city_code: String,
-        #[serde(rename = "Latitude", default)]
+    #[serde(rename = "Latitude", default)]
     pub latitude: f64,
-        #[serde(rename = "Longitude", default)]
+    #[serde(rename = "Longitude", default)]
     pub longitude: f64,
     #[serde(rename = "Priority", default)]
     pub priority: Option<i32>,
@@ -296,7 +296,9 @@ pub fn get_mullvad_actions(
     // Get ML predictions for best exit nodes if ML feature is enabled
     #[cfg(feature = "ml")]
     let ml_predictions = {
-        let peers: Vec<crate::tailscale::TailscalePeer> = status.peer.values()
+        let peers: Vec<crate::tailscale::TailscalePeer> = status
+            .peer
+            .values()
             .filter(|p| p.exit_node_option && p.dns_name.contains("mullvad.ts.net"))
             .cloned()
             .collect();
@@ -423,7 +425,8 @@ pub fn get_mullvad_actions(
 
     // Helper to get ML score for a node
     let get_ml_score = |node_name: &str| -> Option<f32> {
-        ml_predictions.iter()
+        ml_predictions
+            .iter()
             .find(|(name, _)| name == node_name || name.trim_end_matches('.') == node_name)
             .map(|(_, score)| *score)
     };
@@ -433,7 +436,9 @@ pub fn get_mullvad_actions(
     sorted_nodes.sort_by(|(name_a, _), (name_b, _)| {
         let score_a = get_ml_score(name_a).unwrap_or(0.0);
         let score_b = get_ml_score(name_b).unwrap_or(0.0);
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     for (node_name, peer) in sorted_nodes {
@@ -563,10 +568,7 @@ pub fn get_mullvad_actions(
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!(
-                            "{} - {} (suggested)",
-                            node_short_name, suggested_name
-                        ),
+                        &format!("{} - {} (suggested)", node_short_name, suggested_name),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
@@ -644,12 +646,10 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 /// Extracts the short name from a node name.
 fn extract_short_name(node_name: &str) -> &str {
     node_name.split('.').next().unwrap_or(node_name)
 }
-
 
 /// Get the suggested exit-node
 pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
@@ -818,7 +818,7 @@ pub async fn handle_tailscale_action(
                     crate::ml_integration::record_exit_node_performance(
                         &node_name,
                         simulated_latency,
-                        simulated_packet_loss
+                        simulated_packet_loss,
                     );
                 });
             }
@@ -1596,7 +1596,6 @@ mod tests {
         assert_eq!(get_flag(""), "❓");
     }
 
-
     #[test]
     fn test_get_mullvad_actions_success() {
         let status_json = r#"{
@@ -2085,7 +2084,8 @@ mod tests {
         // Create a TailscaleState with a lock_output that indicates lock is enabled
         let state = TailscaleState {
             lock_output: Some(
-                "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock.".to_string(),
+                "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock."
+                    .to_string(),
             ),
             ..Default::default()
         };

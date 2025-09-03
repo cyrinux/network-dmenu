@@ -118,11 +118,13 @@ impl SshProxyConfig {
         }
 
         // Kill the SSH process using the control socket
-        let kill_args = ["-S".to_string(),
+        let kill_args = [
+            "-S".to_string(),
             self.socket_path.clone(),
             "-O".to_string(),
             "exit".to_string(),
-            self.server.clone()];
+            self.server.clone(),
+        ];
 
         debug!("Stopping SSH SOCKS proxy: ssh {}", kill_args.join(" "));
 
@@ -132,14 +134,14 @@ impl SshProxyConfig {
                 if output.status.success() || output.status.code() == Some(255) {
                     // SSH returns 255 when connection is terminated, which is expected
                     debug!("SSH SOCKS proxy stopped successfully for {}", self.name);
-                    
+
                     // Clean up socket file if it still exists
                     if Path::new(&self.socket_path).exists() {
                         if let Err(e) = fs::remove_file(&self.socket_path) {
                             debug!("Failed to remove socket file: {}", e);
                         }
                     }
-                    
+
                     Ok(())
                 } else {
                     let error_msg = format!(
@@ -177,25 +179,30 @@ pub fn get_ssh_proxy_actions(ssh_configs: &HashMap<String, SshProxyConfig>) -> V
 /// Convert SSH action to display string
 pub fn ssh_action_to_string(action: &SshAction) -> String {
     match action {
-        SshAction::StartProxy(config) => {
-            format_entry(
-                "ssh-proxy",
-                "🔌",
-                &format!("Start SOCKS proxy {} ({}:{})", config.name, config.server, config.port),
-            )
-        }
-        SshAction::StopProxy(config) => {
-            format_entry(
-                "ssh-proxy",
-                ICON_CHECK,
-                &format!("Stop SOCKS proxy {} ({}:{})", config.name, config.server, config.port),
-            )
-        }
+        SshAction::StartProxy(config) => format_entry(
+            "ssh-proxy",
+            "🔌",
+            &format!(
+                "Start SOCKS proxy {} ({}:{})",
+                config.name, config.server, config.port
+            ),
+        ),
+        SshAction::StopProxy(config) => format_entry(
+            "ssh-proxy",
+            ICON_CHECK,
+            &format!(
+                "Stop SOCKS proxy {} ({}:{})",
+                config.name, config.server, config.port
+            ),
+        ),
     }
 }
 
 /// Handle SSH SOCKS proxy action
-pub fn handle_ssh_action(action: &SshAction, command_runner: &dyn CommandRunner) -> Result<(), String> {
+pub fn handle_ssh_action(
+    action: &SshAction,
+    command_runner: &dyn CommandRunner,
+) -> Result<(), String> {
     match action {
         SshAction::StartProxy(config) => {
             debug!("Starting SSH SOCKS proxy: {}", config.name);
@@ -215,7 +222,7 @@ mod tests {
     #[test]
     fn test_ssh_proxy_config_creation() {
         let config = SshProxyConfig::new("server1".to_string(), "example.com".to_string(), 1081);
-        
+
         assert_eq!(config.name, "server1");
         assert_eq!(config.server, "example.com");
         assert_eq!(config.port, 1081);
@@ -226,13 +233,13 @@ mod tests {
     #[test]
     fn test_ssh_action_to_string() {
         let config = SshProxyConfig::new("server1".to_string(), "example.com".to_string(), 1081);
-        
+
         let start_action = SshAction::StartProxy(config.clone());
         let stop_action = SshAction::StopProxy(config);
-        
+
         let start_str = ssh_action_to_string(&start_action);
         let stop_str = ssh_action_to_string(&stop_action);
-        
+
         assert!(start_str.contains("Start SOCKS proxy server1"));
         assert!(stop_str.contains("Stop SOCKS proxy server1"));
     }

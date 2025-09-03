@@ -133,7 +133,7 @@ mod tests {
     fn test_wrap_multiple_commands() {
         let commands = vec![
             "resolvectl dns wlan0 '1.1.1.1'",
-            "resolvectl dnsovertls wlan0 yes"
+            "resolvectl dnsovertls wlan0 yes",
         ];
         let wrapped = wrap_privileged_commands(&commands);
         assert!(wrapped.contains("&&"));
@@ -161,10 +161,6 @@ mod tests {
     #[test]
     fn test_privilege_method_description() {
         let desc = get_privilege_method_description();
-        assert!(
-            desc.contains("pkexec") ||
-            desc.contains("sudo") ||
-            desc.contains("No privilege")
-        );
+        assert!(desc.contains("pkexec") || desc.contains("sudo") || desc.contains("No privilege"));
     }
 }

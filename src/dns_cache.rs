@@ -1,3 +1,4 @@
+use crate::privilege::wrap_privileged_command;
 use dirs::cache_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -5,7 +6,6 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::privilege::wrap_privileged_command;
 
 const CACHE_DIR_NAME: &str = "network-dmenu";
 const CACHE_FILE_NAME: &str = "dns_benchmark_cache.json";
@@ -213,7 +213,11 @@ pub fn generate_dns_actions_from_cache(cache: &DnsBenchmarkCache) -> Vec<CustomA
 
         let cmd = if server.supports_dot {
             // DNS over TLS
-            let dns_cmd = format!("resolvectl dns \"${{iface}}\" '{}#{}'", server.ip, get_dot_hostname(&server.name));
+            let dns_cmd = format!(
+                "resolvectl dns \"${{iface}}\" '{}#{}'",
+                server.ip,
+                get_dot_hostname(&server.name)
+            );
             let dot_cmd = "resolvectl dnsovertls \"${iface}\" yes";
             // Include interface detection inside the privileged command
             let full_cmd = format!(
@@ -376,15 +380,13 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            servers: vec![
-                CachedDnsServer {
-                    name: "Test DNS".to_string(),
-                    ip: "1.2.3.4".to_string(),
-                    average_latency_ms: 5.0,
-                    success_rate: 100.0,
-                    supports_dot: true,
-                },
-            ],
+            servers: vec![CachedDnsServer {
+                name: "Test DNS".to_string(),
+                ip: "1.2.3.4".to_string(),
+                average_latency_ms: 5.0,
+                success_rate: 100.0,
+                supports_dot: true,
+            }],
         };
 
         let actions = generate_dns_actions_from_cache(&cache);

@@ -1,6 +1,6 @@
 use crate::command::{is_command_installed, CommandRunner};
 use crate::constants::{ACTION_TYPE_DIAGNOSTIC, ICON_CHECK, ICON_SIGNAL};
-use crate::dns_cache::{CachedDnsServer, DnsCacheStorage, get_current_network_id};
+use crate::dns_cache::{get_current_network_id, CachedDnsServer, DnsCacheStorage};
 use crate::format_entry;
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
@@ -676,10 +676,8 @@ async fn run_dns_benchmark(
     command_runner: &dyn CommandRunner,
 ) -> Result<DiagnosticResult, Box<dyn Error>> {
     // Run dns-bench with JSON output
-    let output = command_runner.run_command(
-        "dns-bench",
-        &["--format", "json", "--skip-system-servers"],
-    )?;
+    let output =
+        command_runner.run_command("dns-bench", &["--format", "json", "--skip-system-servers"])?;
 
     if !output.status.success() {
         return Ok(DiagnosticResult {
@@ -731,7 +729,9 @@ async fn run_dns_benchmark(
     }
 
     // Save results to cache
-    let network_id = get_current_network_id(command_runner).await.unwrap_or_else(|_| "default_network".to_string());
+    let network_id = get_current_network_id(command_runner)
+        .await
+        .unwrap_or_else(|_| "default_network".to_string());
 
     let cached_servers: Vec<CachedDnsServer> = valid_results
         .iter()
@@ -797,13 +797,7 @@ async fn run_dns_benchmark(
 
     summary.push_str("Top 5 DNS Servers:\n");
     for (i, (name, ip, avg_ms, _)) in valid_results.iter().take(5).enumerate() {
-        summary.push_str(&format!(
-            "{}. {} ({}) - {:.2}ms\n",
-            i + 1,
-            name,
-            ip,
-            avg_ms
-        ));
+        summary.push_str(&format!("{}. {} ({}) - {:.2}ms\n", i + 1, name, ip, avg_ms));
     }
 
     if success {

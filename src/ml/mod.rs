@@ -7,17 +7,17 @@
 //! - Performance prediction
 
 #[cfg(feature = "ml")]
-pub mod exit_node_predictor;
+pub mod action_prioritizer;
 #[cfg(feature = "ml")]
 pub mod diagnostic_analyzer;
 #[cfg(feature = "ml")]
-pub mod usage_patterns;
-#[cfg(feature = "ml")]
-pub mod performance_tracker;
+pub mod exit_node_predictor;
 #[cfg(feature = "ml")]
 pub mod network_predictor;
 #[cfg(feature = "ml")]
-pub mod action_prioritizer;
+pub mod performance_tracker;
+#[cfg(feature = "ml")]
+pub mod usage_patterns;
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -66,9 +66,9 @@ pub struct NetworkMetrics {
 /// Context information for predictions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkContext {
-    pub time_of_day: u8,  // 0-23 hours
-    pub day_of_week: u8,  // 0-6 (Mon-Sun)
-    pub location_hash: u64,  // Hashed location identifier
+    pub time_of_day: u8,    // 0-23 hours
+    pub day_of_week: u8,    // 0-6 (Mon-Sun)
+    pub location_hash: u64, // Hashed location identifier
     pub network_type: NetworkType,
     pub signal_strength: Option<f32>,
 }
@@ -127,7 +127,9 @@ impl Default for MlConfig {
 /// Trait for ML model persistence
 pub trait ModelPersistence {
     fn save(&self, path: &str) -> Result<(), MlError>;
-    fn load(path: &str) -> Result<Self, MlError> where Self: Sized;
+    fn load(path: &str) -> Result<Self, MlError>
+    where
+        Self: Sized;
 }
 
 /// Trait for feature extraction
@@ -210,17 +212,13 @@ pub fn normalize_features(features: &[f32]) -> Vec<f32> {
     }
 
     let mean = features.iter().sum::<f32>() / features.len() as f32;
-    let variance = features.iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f32>() / features.len() as f32;
+    let variance = features.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / features.len() as f32;
     let std_dev = variance.sqrt();
 
     if std_dev == 0.0 {
         features.to_vec()
     } else {
-        features.iter()
-            .map(|x| (x - mean) / std_dev)
-            .collect()
+        features.iter().map(|x| (x - mean) / std_dev).collect()
     }
 }
 
@@ -269,9 +267,7 @@ mod tests {
         assert!((mean - 0.0).abs() < 0.001);
 
         // Check that std dev is approximately 1
-        let variance: f32 = normalized.iter()
-            .map(|x| x * x)
-            .sum::<f32>() / normalized.len() as f32;
+        let variance: f32 = normalized.iter().map(|x| x * x).sum::<f32>() / normalized.len() as f32;
         assert!((variance - 1.0).abs() < 0.001);
     }
 

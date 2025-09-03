@@ -7,15 +7,15 @@
 //! - Smart test recommendations
 
 use super::{
-    MlError, NetworkContext, NetworkMetrics, PredictionResult,
-    TrainingData, ModelPersistence, cosine_similarity, NetworkType,
+    cosine_similarity, MlError, ModelPersistence, NetworkContext, NetworkMetrics, NetworkType,
+    PredictionResult, TrainingData,
 };
-use std::collections::HashMap;
-use std::path::Path;
-use std::fs;
-use serde::{Deserialize, Serialize};
-use log::debug;
 use chrono::{Datelike, Timelike};
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// Network symptoms that can be observed
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -134,22 +134,22 @@ impl DiagnosticAnalyzer {
                 symptoms: vec![NetworkSymptom::DnsFailure, NetworkSymptom::NoConnectivity],
                 cause: ProbableCause::DnsServerIssue,
                 confidence: 0.9,
-                recommended_tests: vec![
-                    DiagnosticTest::TestDnsResolution,
-                    DiagnosticTest::PingDns,
-                ],
+                recommended_tests: vec![DiagnosticTest::TestDnsResolution, DiagnosticTest::PingDns],
             },
             DiagnosticPattern {
-                symptoms: vec![NetworkSymptom::ConnectionTimeout, NetworkSymptom::NoConnectivity],
+                symptoms: vec![
+                    NetworkSymptom::ConnectionTimeout,
+                    NetworkSymptom::NoConnectivity,
+                ],
                 cause: ProbableCause::GatewayProblem,
                 confidence: 0.8,
-                recommended_tests: vec![
-                    DiagnosticTest::PingGateway,
-                    DiagnosticTest::CheckRouting,
-                ],
+                recommended_tests: vec![DiagnosticTest::PingGateway, DiagnosticTest::CheckRouting],
             },
             DiagnosticPattern {
-                symptoms: vec![NetworkSymptom::IntermittentConnection, NetworkSymptom::JitterSpike],
+                symptoms: vec![
+                    NetworkSymptom::IntermittentConnection,
+                    NetworkSymptom::JitterSpike,
+                ],
                 cause: ProbableCause::WifiInterference,
                 confidence: 0.75,
                 recommended_tests: vec![
@@ -158,7 +158,10 @@ impl DiagnosticAnalyzer {
                 ],
             },
             DiagnosticPattern {
-                symptoms: vec![NetworkSymptom::AuthenticationFailure, NetworkSymptom::ConnectionTimeout],
+                symptoms: vec![
+                    NetworkSymptom::AuthenticationFailure,
+                    NetworkSymptom::ConnectionTimeout,
+                ],
                 cause: ProbableCause::VpnConnectionIssue,
                 confidence: 0.85,
                 recommended_tests: vec![
@@ -170,10 +173,7 @@ impl DiagnosticAnalyzer {
                 symptoms: vec![NetworkSymptom::SlowThroughput, NetworkSymptom::PacketLoss],
                 cause: ProbableCause::MtuSizeMismatch,
                 confidence: 0.7,
-                recommended_tests: vec![
-                    DiagnosticTest::CheckMtu,
-                    DiagnosticTest::TestBandwidth,
-                ],
+                recommended_tests: vec![DiagnosticTest::CheckMtu, DiagnosticTest::TestBandwidth],
             },
             DiagnosticPattern {
                 symptoms: vec![NetworkSymptom::SlowThroughput],
@@ -188,9 +188,7 @@ impl DiagnosticAnalyzer {
                 symptoms: vec![NetworkSymptom::CertificateError],
                 cause: ProbableCause::ConfigurationError,
                 confidence: 0.9,
-                recommended_tests: vec![
-                    DiagnosticTest::VerifyConfiguration,
-                ],
+                recommended_tests: vec![DiagnosticTest::VerifyConfiguration],
             },
         ]
     }
@@ -212,10 +210,7 @@ impl DiagnosticAnalyzer {
     }
 
     /// Analyze symptoms and predict the probable cause
-    pub fn analyze_symptoms(
-        &self,
-        symptoms: &[NetworkSymptom],
-    ) -> PredictionResult<ProbableCause> {
+    pub fn analyze_symptoms(&self, symptoms: &[NetworkSymptom]) -> PredictionResult<ProbableCause> {
         let mut cause_scores: HashMap<ProbableCause, f32> = HashMap::new();
 
         // Pattern matching
@@ -224,7 +219,8 @@ impl DiagnosticAnalyzer {
 
             if match_score >= self.config.pattern_match_threshold {
                 let score = match_score * pattern.confidence;
-                cause_scores.entry(pattern.cause.clone())
+                cause_scores
+                    .entry(pattern.cause.clone())
                     .and_modify(|s| *s = s.max(score))
                     .or_insert(score);
             }
@@ -234,7 +230,8 @@ impl DiagnosticAnalyzer {
         for (historical_symptoms, historical_cause) in &self.symptom_history {
             let similarity = self.calculate_symptom_similarity(symptoms, historical_symptoms);
             if similarity > 0.5 {
-                cause_scores.entry(historical_cause.clone())
+                cause_scores
+                    .entry(historical_cause.clone())
                     .and_modify(|s| *s += similarity * 0.3)
                     .or_insert(similarity * 0.3);
             }
@@ -245,14 +242,14 @@ impl DiagnosticAnalyzer {
         sorted_causes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
         if let Some((cause, confidence)) = sorted_causes.first() {
-            let alternatives: Vec<(ProbableCause, f32)> = sorted_causes.iter()
+            let alternatives: Vec<(ProbableCause, f32)> = sorted_causes
+                .iter()
                 .skip(1)
                 .take(2)
                 .map(|(c, s)| (c.clone(), *s))
                 .collect();
 
-            PredictionResult::new(cause.clone(), *confidence)
-                .with_alternatives(alternatives)
+            PredictionResult::new(cause.clone(), *confidence).with_alternatives(alternatives)
         } else {
             // Default to network congestion if no pattern matches
             PredictionResult::new(ProbableCause::NetworkCongestion, 0.3)
@@ -272,7 +269,8 @@ impl DiagnosticAnalyzer {
 
     /// Convert symptoms to feature vector
     fn symptoms_to_vector(&self, symptoms: &[NetworkSymptom]) -> Vec<f32> {
-        let all_symptoms = [NetworkSymptom::HighLatency,
+        let all_symptoms = [
+            NetworkSymptom::HighLatency,
             NetworkSymptom::PacketLoss,
             NetworkSymptom::JitterSpike,
             NetworkSymptom::DnsFailure,
@@ -281,9 +279,11 @@ impl DiagnosticAnalyzer {
             NetworkSymptom::IntermittentConnection,
             NetworkSymptom::NoConnectivity,
             NetworkSymptom::AuthenticationFailure,
-            NetworkSymptom::CertificateError];
+            NetworkSymptom::CertificateError,
+        ];
 
-        all_symptoms.iter()
+        all_symptoms
+            .iter()
             .map(|s| {
                 if symptoms.contains(s) {
                     *self.feature_weights.get(s).unwrap_or(&0.5)
@@ -304,9 +304,7 @@ impl DiagnosticAnalyzer {
             return 0.0;
         }
 
-        let matched = pattern.iter()
-            .filter(|s| observed.contains(s))
-            .count() as f32;
+        let matched = pattern.iter().filter(|s| observed.contains(s)).count() as f32;
 
         let precision = matched / observed.len().max(1) as f32;
         let recall = matched / pattern.len() as f32;
@@ -328,7 +326,8 @@ impl DiagnosticAnalyzer {
 
             if match_score >= self.config.pattern_match_threshold {
                 for test in &pattern.recommended_tests {
-                    test_scores.entry(test.clone())
+                    test_scores
+                        .entry(test.clone())
                         .and_modify(|s| *s += match_score)
                         .or_insert(match_score);
                 }
@@ -339,9 +338,7 @@ impl DiagnosticAnalyzer {
         let mut sorted_tests: Vec<(DiagnosticTest, f32)> = test_scores.into_iter().collect();
         sorted_tests.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        sorted_tests.into_iter()
-            .map(|(test, _)| test)
-            .collect()
+        sorted_tests.into_iter().map(|(test, _)| test).collect()
     }
 
     /// Analyze network metrics to detect symptoms
@@ -379,30 +376,20 @@ impl DiagnosticAnalyzer {
         // Analyze trends
         let recent_metrics = &metrics_history[metrics_history.len() - 5..];
 
-        let latency_trend: Vec<f32> = recent_metrics.iter()
-            .map(|m| m.latency_ms)
-            .collect();
+        let latency_trend: Vec<f32> = recent_metrics.iter().map(|m| m.latency_ms).collect();
 
-        let packet_loss_trend: Vec<f32> = recent_metrics.iter()
-            .map(|m| m.packet_loss)
-            .collect();
+        let packet_loss_trend: Vec<f32> = recent_metrics.iter().map(|m| m.packet_loss).collect();
 
         // Check for degradation patterns
         let latency_increasing = Self::is_increasing_trend(&latency_trend);
         let packet_loss_increasing = Self::is_increasing_trend(&packet_loss_trend);
 
         if latency_increasing && latency_trend.last().copied().unwrap_or(0.0) > 80.0 {
-            return Some(PredictionResult::new(
-                NetworkSymptom::HighLatency,
-                0.75,
-            ));
+            return Some(PredictionResult::new(NetworkSymptom::HighLatency, 0.75));
         }
 
         if packet_loss_increasing && packet_loss_trend.last().copied().unwrap_or(0.0) > 0.03 {
-            return Some(PredictionResult::new(
-                NetworkSymptom::PacketLoss,
-                0.7,
-            ));
+            return Some(PredictionResult::new(NetworkSymptom::PacketLoss, 0.7));
         }
 
         None
@@ -425,12 +412,9 @@ impl DiagnosticAnalyzer {
     }
 
     /// Record a diagnosed issue for learning
-    pub fn record_diagnosis(
-        &mut self,
-        symptoms: Vec<NetworkSymptom>,
-        actual_cause: ProbableCause,
-    ) {
-        self.symptom_history.push((symptoms.clone(), actual_cause.clone()));
+    pub fn record_diagnosis(&mut self, symptoms: Vec<NetworkSymptom>, actual_cause: ProbableCause) {
+        self.symptom_history
+            .push((symptoms.clone(), actual_cause.clone()));
 
         // Limit history size
         if self.symptom_history.len() > self.config.max_history_size {
@@ -447,7 +431,8 @@ impl DiagnosticAnalyzer {
             signal_strength: None,
         };
 
-        self.training_data.add_sample(feature_vec, actual_cause, context);
+        self.training_data
+            .add_sample(feature_vec, actual_cause, context);
     }
 
     /// Update pattern confidence based on feedback
@@ -571,7 +556,7 @@ mod tests {
         let pattern = vec![NetworkSymptom::HighLatency, NetworkSymptom::PacketLoss];
 
         let score = analyzer.calculate_pattern_match(&observed, &pattern);
-        assert_eq!(score, 1.0);  // Perfect match
+        assert_eq!(score, 1.0); // Perfect match
 
         let partial_pattern = vec![NetworkSymptom::HighLatency];
         let partial_score = analyzer.calculate_pattern_match(&observed, &partial_pattern);
@@ -586,7 +571,7 @@ mod tests {
         let symptoms2 = vec![NetworkSymptom::HighLatency, NetworkSymptom::PacketLoss];
 
         let similarity = analyzer.calculate_symptom_similarity(&symptoms1, &symptoms2);
-        assert!(similarity > 0.99);  // Nearly identical
+        assert!(similarity > 0.99); // Nearly identical
 
         let symptoms3 = vec![NetworkSymptom::DnsFailure];
         let low_similarity = analyzer.calculate_symptom_similarity(&symptoms1, &symptoms3);

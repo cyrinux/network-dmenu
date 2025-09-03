@@ -5,10 +5,10 @@
 //! to track operation durations.
 use chrono::Local;
 use env_logger::{Builder, Env};
-#[cfg(any(debug_assertions, test))]
-use log::{debug, log_enabled, Level};
 #[cfg(not(any(debug_assertions, test)))]
 use log::debug;
+#[cfg(any(debug_assertions, test))]
+use log::{debug, log_enabled, Level};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
