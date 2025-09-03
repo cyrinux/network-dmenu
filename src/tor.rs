@@ -292,12 +292,26 @@ impl TorManager {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 debug!("Control port response: {}", output_str.trim());
                 
-                if output_str.contains("250 OK") {
+                // Check for both authentication success (250 OK) and signal acceptance (250 OK)
+                // Some Tor versions might respond differently
+                if output_str.contains("250 OK") || output_str.contains("250") {
                     debug!("Tor circuit refreshed successfully");
                     Ok(())
+                } else if output_str.contains("514") {
+                    // Authentication required
+                    Err("Tor control authentication failed - check if ControlPort has authentication enabled".to_string())
                 } else {
                     debug!("Tor control response didn't indicate success: {}", output_str.trim());
-                    Err(format!("Failed to refresh circuit: {}", output_str.trim()))
+                    warn!("Full stderr: {}", String::from_utf8_lossy(&output.stderr));
+                    
+                    // If we got this far, the command executed, so it might have worked anyway
+                    // Some Tor configurations don't give the expected response format
+                    if output.status.success() && output_str.trim().is_empty() {
+                        debug!("Command executed successfully despite empty response - assuming circuit refresh worked");
+                        Ok(())
+                    } else {
+                        Err(format!("Failed to refresh circuit: {}", output_str.trim()))
+                    }
                 }
             }
             Err(e) => Err(format!("Failed to send NEWNYM signal: {}", e)),

@@ -36,9 +36,9 @@ pub async fn select_action_from_menu_streaming(
         #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
-        // Apply ML personalization if enabled - DISABLED DUE TO 17GB JSON BUG
+        // Apply ML personalization if enabled
         #[cfg(feature = "ml")]
-        if false {
+        {
             let action_strings: Vec<String> = actions.iter()
                 .map(crate::action_to_string)
                 .collect();
@@ -66,9 +66,9 @@ pub async fn select_action_from_menu_streaming(
         #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
-        // Apply ML personalization if enabled - DISABLED DUE TO 17GB JSON BUG
+        // Apply ML personalization if enabled
         #[cfg(feature = "ml")]
-        if false {
+        {
             let action_strings: Vec<String> = actions.iter()
                 .map(crate::action_to_string)
                 .collect();

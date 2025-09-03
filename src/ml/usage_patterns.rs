@@ -893,6 +893,52 @@ impl ModelPersistence for UsagePatternLearner {
 use serde::{Serializer, Deserializer};
 use std::fmt;
 
+/// Convert UserAction to a safe string without debug formatting issues
+fn user_action_to_safe_string(action: &UserAction) -> String {
+    match action {
+        UserAction::ConnectWifi(name) => format!("ConnectWifi({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::DisconnectWifi => "DisconnectWifi".to_string(),
+        UserAction::ConnectBluetooth(name) => format!("ConnectBluetooth({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::DisconnectBluetooth => "DisconnectBluetooth".to_string(),
+        UserAction::EnableTailscale => "EnableTailscale".to_string(),
+        UserAction::DisableTailscale => "DisableTailscale".to_string(),
+        UserAction::SelectExitNode(name) => format!("SelectExitNode({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::DisableExitNode => "DisableExitNode".to_string(),
+        UserAction::RunDiagnostic(name) => format!("RunDiagnostic({})", name.replace('\\', "_").replace('"', "_")),
+        UserAction::ToggleAirplaneMode => "ToggleAirplaneMode".to_string(),
+        UserAction::CustomAction(name) => format!("CustomAction({})", name.replace('\\', "_").replace('"', "_")),
+    }
+}
+
+/// Parse a safe string back to UserAction
+fn safe_string_to_user_action(s: &str) -> Option<UserAction> {
+    if s == "DisconnectWifi" {
+        Some(UserAction::DisconnectWifi)
+    } else if s == "DisconnectBluetooth" {
+        Some(UserAction::DisconnectBluetooth)
+    } else if s == "EnableTailscale" {
+        Some(UserAction::EnableTailscale)
+    } else if s == "DisableTailscale" {
+        Some(UserAction::DisableTailscale)
+    } else if s == "DisableExitNode" {
+        Some(UserAction::DisableExitNode)
+    } else if s == "ToggleAirplaneMode" {
+        Some(UserAction::ToggleAirplaneMode)
+    } else if let Some(name) = s.strip_prefix("ConnectWifi(").and_then(|n| n.strip_suffix(')')) {
+        Some(UserAction::ConnectWifi(name.to_string()))
+    } else if let Some(name) = s.strip_prefix("ConnectBluetooth(").and_then(|n| n.strip_suffix(')')) {
+        Some(UserAction::ConnectBluetooth(name.to_string()))
+    } else if let Some(name) = s.strip_prefix("SelectExitNode(").and_then(|n| n.strip_suffix(')')) {
+        Some(UserAction::SelectExitNode(name.to_string()))
+    } else if let Some(name) = s.strip_prefix("RunDiagnostic(").and_then(|n| n.strip_suffix(')')) {
+        Some(UserAction::RunDiagnostic(name.to_string()))
+    } else if let Some(name) = s.strip_prefix("CustomAction(").and_then(|n| n.strip_suffix(')')) {
+        Some(UserAction::CustomAction(name.to_string()))
+    } else {
+        None
+    }
+}
+
 fn serialize_action_stats<S>(
     map: &HashMap<UserAction, ActionStats>,
     serializer: S,
@@ -903,7 +949,7 @@ where
     use serde::ser::SerializeMap;
     let mut ser_map = serializer.serialize_map(Some(map.len()))?;
     for (key, value) in map {
-        let key_string = format!("{:?}", key);
+        let key_string = user_action_to_safe_string(key);
         ser_map.serialize_entry(&key_string, value)?;
     }
     ser_map.end()
@@ -932,9 +978,11 @@ where
         {
             let mut result = HashMap::new();
             while let Some((key_string, value)) = map.next_entry::<String, ActionStats>()? {
-                // Parse the key string back to UserAction (simplified parsing)
-                let action = parse_debug_user_action(&key_string);
-                result.insert(action, value);
+                // Parse the key string back to UserAction using safe parsing
+                if let Some(action) = safe_string_to_user_action(&key_string) {
+                    result.insert(action, value);
+                }
+                // Skip entries that can't be parsed (backwards compatibility)
             }
             Ok(result)
         }
@@ -993,49 +1041,8 @@ where
     deserializer.deserialize_map(ContextAssociationsVisitor)
 }
 
-// Simple parser for UserAction from debug format (for deserialization)
-fn parse_debug_user_action(debug_str: &str) -> UserAction {
-    if debug_str.starts_with("ConnectWifi(") {
-        if let Some(network) = debug_str.strip_prefix("ConnectWifi(\"").and_then(|s| s.strip_suffix("\")")) {
-            UserAction::ConnectWifi(network.to_string())
-        } else {
-            UserAction::ConnectWifi("unknown".to_string())
-        }
-    } else if debug_str == "DisconnectWifi" {
-        UserAction::DisconnectWifi
-    } else if debug_str.starts_with("ConnectBluetooth(") {
-        if let Some(device) = debug_str.strip_prefix("ConnectBluetooth(\"").and_then(|s| s.strip_suffix("\")")) {
-            UserAction::ConnectBluetooth(device.to_string())
-        } else {
-            UserAction::ConnectBluetooth("unknown".to_string())
-        }
-    } else if debug_str == "DisconnectBluetooth" {
-        UserAction::DisconnectBluetooth
-    } else if debug_str == "EnableTailscale" {
-        UserAction::EnableTailscale
-    } else if debug_str == "DisableTailscale" {
-        UserAction::DisableTailscale
-    } else if debug_str.starts_with("SelectExitNode(") {
-        if let Some(node) = debug_str.strip_prefix("SelectExitNode(\"").and_then(|s| s.strip_suffix("\")")) {
-            UserAction::SelectExitNode(node.to_string())
-        } else {
-            UserAction::SelectExitNode("unknown".to_string())
-        }
-    } else if debug_str == "DisableExitNode" {
-        UserAction::DisableExitNode
-    } else if debug_str.starts_with("RunDiagnostic(") {
-        if let Some(diag) = debug_str.strip_prefix("RunDiagnostic(\"").and_then(|s| s.strip_suffix("\")")) {
-            UserAction::RunDiagnostic(diag.to_string())
-        } else {
-            UserAction::RunDiagnostic("unknown".to_string())
-        }
-    } else if debug_str == "ToggleAirplaneMode" {
-        UserAction::ToggleAirplaneMode
-    } else {
-        // Default to CustomAction for unknown patterns
-        UserAction::CustomAction(debug_str.to_string())
-    }
-}
+// The problematic parse_debug_user_action function has been removed.
+// We now use safe_string_to_user_action instead to prevent infinite backslash escaping.
 
 #[cfg(test)]
 mod tests {
