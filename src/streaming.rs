@@ -396,6 +396,15 @@ async fn produce_actions_streaming(
         send_ssh_actions(&tx_clone, &ssh_proxies).await;
     }));
 
+    // Tor proxies
+    if !args.no_tor {
+        let tx_clone = tx.clone();
+        let torsocks_apps = config.torsocks_apps.clone();
+        tasks.push(tokio::spawn(async move {
+            send_tor_actions(&tx_clone, &torsocks_apps).await;
+        }));
+    }
+
     // Wait for all tasks to complete
     for task in tasks {
         let _ = task.await;
@@ -705,11 +714,18 @@ async fn send_tor_actions(
     tx: &mpsc::UnboundedSender<ActionType>,
     torsocks_apps: &std::collections::HashMap<String, network_dmenu::TorsocksConfig>,
 ) {
+    use log::debug;
+    
     // Only show Tor daemon actions if tor command is available
     if is_command_installed("tor") {
+        debug!("Tor command found, getting actions");
         let actions = tor::get_tor_actions(torsocks_apps);
+        debug!("Got {} Tor actions", actions.len());
         for action in actions {
+            debug!("Sending Tor action: {:?}", action);
             let _ = tx.send(ActionType::Tor(action));
         }
+    } else {
+        debug!("Tor command not found, skipping Tor actions");
     }
 }

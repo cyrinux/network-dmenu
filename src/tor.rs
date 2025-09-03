@@ -59,24 +59,39 @@ impl TorManager {
 
     fn is_port_listening(&self, port: u16) -> bool {
         // Check if a process is listening on the specified port
-        match std::process::Command::new("lsof")
-            .args(["-i", &format!("tcp:{}", port)])
+        // Try ss first (modern and widely available)
+        match std::process::Command::new("ss")
+            .args(["-tln"])
             .output()
         {
-            Ok(output) => !output.stdout.is_empty(),
+            Ok(output) => {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                output_str.lines().any(|line| {
+                    line.contains(&format!(":{}", port)) && line.contains("LISTEN")
+                })
+            }
             Err(_) => {
-                // Fallback: check with netstat if lsof is not available
-                match std::process::Command::new("netstat")
-                    .args(["-tln"])
+                // Fallback: try lsof
+                match std::process::Command::new("lsof")
+                    .args(["-i", &format!("tcp:{}", port)])
                     .output()
                 {
-                    Ok(output) => {
-                        let output_str = String::from_utf8_lossy(&output.stdout);
-                        output_str.lines().any(|line| {
-                            line.contains(&format!(":{}", port)) && line.contains("LISTEN")
-                        })
+                    Ok(output) => !output.stdout.is_empty(),
+                    Err(_) => {
+                        // Last fallback: try netstat
+                        match std::process::Command::new("netstat")
+                            .args(["-tln"])
+                            .output()
+                        {
+                            Ok(output) => {
+                                let output_str = String::from_utf8_lossy(&output.stdout);
+                                output_str.lines().any(|line| {
+                                    line.contains(&format!(":{}", port)) && line.contains("LISTEN")
+                                })
+                            }
+                            Err(_) => false,
+                        }
                     }
-                    Err(_) => false,
                 }
             }
         }
