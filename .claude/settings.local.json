@@ -8,7 +8,9 @@
       "Bash(./target/debug/network-dmenu:*)",
       "Bash(git add:*)",
       "Bash(cargo clippy:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(rga:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

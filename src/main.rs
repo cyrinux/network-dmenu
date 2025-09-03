@@ -1258,6 +1258,8 @@ async fn set_action(
                         TorAction::StartTor => "Tor daemon started successfully".to_string(),
                         TorAction::StopTor => "Tor daemon stopped".to_string(),
                         TorAction::RestartTor => "Tor daemon restarted".to_string(),
+                        TorAction::RefreshCircuit => "Tor circuit refreshed".to_string(),
+                        TorAction::TestConnection => "Tor connection test completed".to_string(),
                         TorAction::StartTorsocks(config) => {
                             format!("Started {} via Tor", config.description)
                         }

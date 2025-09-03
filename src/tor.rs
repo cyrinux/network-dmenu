@@ -12,6 +12,8 @@ pub enum TorAction {
     StartTor,
     StopTor,
     RestartTor,
+    RefreshCircuit,
+    TestConnection,
     StartTorsocks(TorsocksConfig),
     StopTorsocks(TorsocksConfig),
 }
@@ -171,6 +173,71 @@ impl TorManager {
         }
     }
 
+    /// Refresh Tor circuit by sending NEWNYM signal
+    pub fn refresh_circuit(&self) -> Result<(), String> {
+        if !self.is_tor_running() {
+            return Err("Tor daemon is not running".to_string());
+        }
+
+        let newnym_cmd = format!("echo 'SIGNAL NEWNYM' | nc localhost {}", self.control_port);
+        match std::process::Command::new("sh")
+            .args(["-c", &newnym_cmd])
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    debug!("Sent NEWNYM signal to Tor - circuit refreshed");
+                    Ok(())
+                } else {
+                    Err(format!("Failed to refresh circuit: {}", String::from_utf8_lossy(&output.stderr)))
+                }
+            }
+            Err(e) => Err(format!("Failed to send NEWNYM signal: {}", e)),
+        }
+    }
+
+    /// Test Tor connection by checking IP via SOCKS proxy
+    pub fn test_connection(&self) -> Result<String, String> {
+        if !self.is_tor_running() {
+            return Err("Tor daemon is not running".to_string());
+        }
+
+        // Test connection by fetching IP through Tor SOCKS proxy
+        let test_cmd = format!(
+            "curl --silent --max-time 10 --socks5-hostname localhost:{} https://httpbin.org/ip",
+            self.socks_port
+        );
+
+        match std::process::Command::new("sh")
+            .args(["-c", &test_cmd])
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    let response = String::from_utf8_lossy(&output.stdout);
+                    debug!("Tor connection test successful: {}", response.trim());
+                    
+                    // Parse JSON to extract IP
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                        if let Some(origin) = parsed.get("origin").and_then(|o| o.as_str()) {
+                            return Ok(format!("✓ Tor working - Exit IP: {}", origin));
+                        }
+                    }
+                    Ok("✓ Tor connection working".to_string())
+                } else {
+                    let error_msg = format!("Connection test failed: {}", String::from_utf8_lossy(&output.stderr));
+                    warn!("{}", error_msg);
+                    Err(error_msg)
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to test connection: {}", e);
+                error!("{}", error_msg);
+                Err(error_msg)
+            }
+        }
+    }
+
     /// Restart Tor daemon
     pub fn restart_tor(&self, command_runner: &dyn CommandRunner) -> Result<(), String> {
         debug!("Restarting Tor");
@@ -262,6 +329,8 @@ pub fn get_tor_actions(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Ve
     if tor_manager.is_tor_running() {
         actions.push(TorAction::StopTor);
         actions.push(TorAction::RestartTor);
+        actions.push(TorAction::RefreshCircuit);
+        actions.push(TorAction::TestConnection);
     } else {
         actions.push(TorAction::StartTor);
     }
@@ -291,6 +360,12 @@ pub fn tor_action_to_string(action: &TorAction) -> String {
         }
         TorAction::RestartTor => {
             format_entry("tor", "🔄", "Restart Tor daemon")
+        }
+        TorAction::RefreshCircuit => {
+            format_entry("tor", "🔃", "Refresh Tor circuit")
+        }
+        TorAction::TestConnection => {
+            format_entry("tor", "🧪", "Test Tor connection")
         }
         TorAction::StartTorsocks(config) => {
             format_entry(
@@ -325,6 +400,20 @@ pub fn handle_tor_action(action: &TorAction, command_runner: &dyn CommandRunner)
         TorAction::RestartTor => {
             debug!("Restarting Tor daemon");
             tor_manager.restart_tor(command_runner)
+        }
+        TorAction::RefreshCircuit => {
+            debug!("Refreshing Tor circuit");
+            tor_manager.refresh_circuit()
+        }
+        TorAction::TestConnection => {
+            debug!("Testing Tor connection");
+            match tor_manager.test_connection() {
+                Ok(result) => {
+                    println!("{}", result);
+                    Ok(())
+                }
+                Err(e) => Err(e)
+            }
         }
         TorAction::StartTorsocks(config) => {
             debug!("Starting {} with torsocks", config.name);
