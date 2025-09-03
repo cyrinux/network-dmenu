@@ -300,8 +300,10 @@ impl ExitNodePredictor {
             let feature_vec = self.features_to_vec(features);
             let normalized = normalize_features(&feature_vec);
 
-            if let Ok(prediction) = model.predict(&DenseMatrix::from_2d_vec(&vec![normalized])) {
-                return prediction[0];
+            if let Ok(matrix) = DenseMatrix::from_2d_vec(&vec![normalized]) {
+                if let Ok(prediction) = model.predict(&matrix) {
+                    return prediction[0];
+                }
             }
         }
 
@@ -400,7 +402,8 @@ impl ExitNodePredictor {
 
         info!("Training exit node predictor with {} samples", self.training_data.len());
 
-        let features = DenseMatrix::from_2d_vec(&self.training_data.features);
+        let features = DenseMatrix::from_2d_vec(&self.training_data.features)
+            .map_err(|e| MlError::PredictionFailed(format!("Failed to create feature matrix: {}", e)))?;
         let labels = self.training_data.labels.clone();
 
         // Split data for training and testing

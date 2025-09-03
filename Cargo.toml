@@ -43,8 +43,8 @@ chrono = "0.4"
 once_cell = "1.18"
 
 # ML dependencies (optional)
-smartcore = { version = "0.3", optional = true, default-features = false, features = ["serde", "ndarray-bindings"] }
-ndarray = { version = "0.15", optional = true }
+smartcore = { version = "0.4", optional = true, default-features = false, features = ["serde", "ndarray-bindings"] }
+ndarray = { version = "0.16", optional = true }
 linfa = { version = "0.7", optional = true }
 linfa-trees = { version = "0.7", optional = true }
 
