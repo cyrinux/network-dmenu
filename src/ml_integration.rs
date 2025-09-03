@@ -11,12 +11,17 @@ use crate::ml::{
     network_predictor::{NetworkPredictor, WifiNetwork},
     performance_tracker::PerformanceTracker,
     usage_patterns::{UsagePatternLearner, UserAction},
+    action_prioritizer::ActionPrioritizer,
     MlConfig, NetworkContext, NetworkMetrics, NetworkType, ModelPersistence,
 };
 
 use crate::tailscale::TailscalePeer;
+
+#[cfg(feature = "ml")]
 use log::{debug, error, info};
+#[cfg(feature = "ml")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "ml")]
 use once_cell::sync::Lazy;
 
 #[cfg(feature = "ml")]
@@ -33,6 +38,7 @@ pub struct MlManager {
     network_predictor: NetworkPredictor,
     performance_tracker: PerformanceTracker,
     usage_learner: UsagePatternLearner,
+    action_prioritizer: ActionPrioritizer,
     initialized: bool,
 }
 
@@ -48,6 +54,7 @@ impl MlManager {
             network_predictor: NetworkPredictor::new(),
             performance_tracker: PerformanceTracker::new(),
             usage_learner: UsagePatternLearner::new(),
+            action_prioritizer: ActionPrioritizer::new(),
             initialized: false,
         }
     }
@@ -284,14 +291,47 @@ pub fn analyze_network_issues(symptoms: Vec<&str>) -> (String, Vec<String>) {
     (cause_str, test_strs)
 }
 
-/// Get personalized menu ordering based on usage patterns
+/// Get personalized menu ordering based on usage patterns and smart prioritization
 #[cfg(feature = "ml")]
 pub fn get_personalized_menu_order(menu_items: Vec<String>) -> Vec<String> {
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
 
     let context = get_current_context();
-    manager.usage_learner.get_personalized_menu_order(menu_items, &context)
+    
+    // Get usage-based ordering first
+    let usage_ordered = manager.usage_learner.get_personalized_menu_order(menu_items.clone(), &context);
+    
+    // Apply smart prioritization to create final sophisticated ordering
+    let mut scored_items: Vec<(String, f32)> = usage_ordered
+        .iter()
+        .enumerate()
+        .map(|(index, action_str)| {
+            // Calculate usage score based on position (higher for items that appear earlier)
+            let usage_score = 1.0 - (index as f32 / menu_items.len() as f32);
+            
+            // Get smart priority score
+            let priority_score = manager.action_prioritizer.calculate_priority_score(
+                action_str, 
+                &context, 
+                usage_score
+            );
+            
+            (action_str.clone(), priority_score)
+        })
+        .collect();
+    
+    // Sort by combined score (descending)
+    scored_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    
+    debug!("ML-enhanced menu ordering applied to {} items", scored_items.len());
+    if log::log_enabled!(log::Level::Debug) {
+        for (i, (action, score)) in scored_items.iter().take(5).enumerate() {
+            debug!("  {}. {} (score: {:.3})", i + 1, action, score);
+        }
+    }
+    
+    scored_items.into_iter().map(|(action, _)| action).collect()
 }
 
 /// Record user action for learning
@@ -318,26 +358,161 @@ pub fn record_user_action(action: &str) {
     }
 }
 
+/// Get personalized WiFi network ordering based on usage patterns
+#[cfg(feature = "ml")]
+pub fn get_personalized_wifi_order(available_networks: Vec<String>) -> Vec<String> {
+    let mut manager = ML_MANAGER.lock().unwrap();
+    manager.initialize();
+
+    let context = get_current_context();
+    manager.usage_learner.get_personalized_wifi_order(available_networks, &context)
+}
+
+/// Record action execution result for prioritization learning
+#[cfg(feature = "ml")]
+pub fn record_action_result(action: &str, success: bool, execution_time_ms: u64) {
+    let mut manager = ML_MANAGER.lock().unwrap();
+    manager.initialize();
+
+    let context = get_current_context();
+    let execution_time = execution_time_ms as f32 / 1000.0; // Convert to seconds
+    
+    manager.action_prioritizer.record_action_result(action, success, execution_time, &context);
+    
+    debug!("Recorded action result: '{}' = {} ({}ms)", action, success, execution_time_ms);
+}
+
+/// Update network state for better ML predictions
+#[cfg(feature = "ml")]
+pub fn update_network_state(is_online: bool, connection_quality: f32, available_interfaces: Vec<String>) {
+    let mut manager = ML_MANAGER.lock().unwrap();
+    manager.initialize();
+    
+    manager.action_prioritizer.update_network_state(is_online, connection_quality, available_interfaces);
+    debug!("Updated network state: online={}, quality={:.2}", is_online, connection_quality);
+}
+
 #[cfg(feature = "ml")]
 fn parse_user_action(action: &str) -> UserAction {
-    if action.contains("WiFi") && action.contains("Connect") {
-        UserAction::ConnectWifi(action.to_string())
-    } else if action.contains("WiFi") && action.contains("Disconnect") {
-        UserAction::DisconnectWifi
-    } else if action.contains("Bluetooth") && action.contains("Connect") {
-        UserAction::ConnectBluetooth(action.to_string())
-    } else if action.contains("Bluetooth") && action.contains("Disconnect") {
-        UserAction::DisconnectBluetooth
-    } else if action.contains("Enable Tailscale") {
+    let action_lower = action.to_lowercase();
+    
+    // Enhanced WiFi parsing to extract network names
+    if action_lower.contains("wifi") {
+        if action_lower.contains("disconnect") {
+            UserAction::DisconnectWifi
+        } else {
+            // Extract WiFi network name from various formats:
+            // "wifi      - 📶 NetworkName"
+            // "wifi      - ✅ Connect to NetworkName"
+            let network_name = extract_wifi_network_name(action);
+            UserAction::ConnectWifi(network_name)
+        }
+    } else if action_lower.contains("bluetooth") {
+        if action_lower.contains("disconnect") {
+            UserAction::DisconnectBluetooth
+        } else {
+            let device_name = extract_bluetooth_device_name(action);
+            UserAction::ConnectBluetooth(device_name)
+        }
+    } else if action_lower.contains("enable") && action_lower.contains("tailscale") {
         UserAction::EnableTailscale
-    } else if action.contains("Disable Tailscale") {
+    } else if action_lower.contains("disable") && action_lower.contains("tailscale") {
         UserAction::DisableTailscale
-    } else if action.contains("Exit Node") {
-        UserAction::SelectExitNode(action.to_string())
-    } else if action.contains("Diagnostic") {
-        UserAction::RunDiagnostic(action.to_string())
+    } else if action_lower.contains("exit") && action_lower.contains("node") {
+        let node_name = extract_exit_node_name(action);
+        UserAction::SelectExitNode(node_name)
+    } else if action_lower.contains("diagnostic") {
+        let diagnostic_type = extract_diagnostic_type(action);
+        UserAction::RunDiagnostic(diagnostic_type)
+    } else if action_lower.contains("airplane") {
+        UserAction::ToggleAirplaneMode
     } else {
         UserAction::CustomAction(action.to_string())
+    }
+}
+
+/// Extract WiFi network name from action string
+#[cfg(feature = "ml")]
+fn extract_wifi_network_name(action: &str) -> String {
+    // Try different patterns for WiFi network extraction
+    if let Some(captures) = action.split(" - ").nth(1) {
+        // Format: "wifi - 📶 NetworkName"
+        let network_part = captures.trim_start_matches(['📶', '✅', '❌', ' ']);
+        if !network_part.is_empty() && !network_part.to_lowercase().contains("connect") {
+            return network_part.to_string();
+        }
+    }
+    
+    // Fallback: try to find network name after common keywords
+    let keywords = ["connect to", "network", "wifi"];
+    for keyword in keywords {
+        if let Some(pos) = action.to_lowercase().find(keyword) {
+            let after_keyword = &action[pos + keyword.len()..].trim();
+            if !after_keyword.is_empty() {
+                // Take first word/phrase after the keyword
+                let network = after_keyword.split_whitespace().next().unwrap_or(after_keyword);
+                if network.len() > 1 {
+                    return network.to_string();
+                }
+            }
+        }
+    }
+    
+    // Ultimate fallback: use "unknown" but preserve some context
+    if action.len() > 20 {
+        format!("unknown_{}", &action[action.len()-8..]) // Last 8 chars as identifier
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// Extract Bluetooth device name from action string
+#[cfg(feature = "ml")]
+fn extract_bluetooth_device_name(action: &str) -> String {
+    if let Some(captures) = action.split(" - ").nth(1) {
+        let device_part = captures.trim_start_matches(['🎧', '📱', '⌚', '🔊', ' ']);
+        if !device_part.is_empty() {
+            return device_part.to_string();
+        }
+    }
+    "unknown_device".to_string()
+}
+
+/// Extract exit node name from action string  
+#[cfg(feature = "ml")]
+fn extract_exit_node_name(action: &str) -> String {
+    // Look for patterns like "us-nyc-wg-301.mullvad.ts.net"
+    if let Some(node) = action.split_whitespace().find(|s| s.contains(".mullvad.ts.net") || s.contains(".ts.net")) {
+        return node.to_string();
+    }
+    
+    // Look for country codes or city names
+    if let Some(captures) = action.split(" - ").nth(1) {
+        return captures.trim().to_string();
+    }
+    
+    "unknown_node".to_string()
+}
+
+/// Extract diagnostic test type from action string
+#[cfg(feature = "ml")]
+fn extract_diagnostic_type(action: &str) -> String {
+    let action_lower = action.to_lowercase();
+    
+    if action_lower.contains("connectivity") {
+        "connectivity".to_string()
+    } else if action_lower.contains("ping") {
+        "ping".to_string()
+    } else if action_lower.contains("traceroute") || action_lower.contains("trace") {
+        "traceroute".to_string()
+    } else if action_lower.contains("speed") {
+        "speedtest".to_string()
+    } else if action_lower.contains("dns") {
+        "dns".to_string()
+    } else if action_lower.contains("latency") {
+        "latency".to_string()
+    } else {
+        "general".to_string()
     }
 }
 
@@ -475,4 +650,16 @@ pub fn initialize_ml_system() {}
 #[cfg(not(feature = "ml"))]
 pub fn force_save_ml_models() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
+}
+
+#[cfg(not(feature = "ml"))]
+pub fn record_action_result(_action: &str, _success: bool, _execution_time_ms: u64) {}
+
+#[cfg(not(feature = "ml"))]
+pub fn update_network_state(_is_online: bool, _connection_quality: f32, _available_interfaces: Vec<String>) {}
+
+#[cfg(not(feature = "ml"))]
+pub fn get_personalized_wifi_order(available_networks: Vec<String>) -> Vec<String> {
+    // Return networks in original order when ML is disabled
+    available_networks
 }

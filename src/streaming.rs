@@ -32,6 +32,7 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdout mode - collect all actions first
     if use_stdout {
+        #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
         // Apply ML personalization if enabled
@@ -61,6 +62,7 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdin mode - collect all actions first
     if use_stdin {
+        #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
         // Apply ML personalization if enabled

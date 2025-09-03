@@ -177,16 +177,13 @@ impl NetworkPredictor {
 
     /// Predict connection quality for a network
     pub fn predict_quality(&self, network: &WifiNetwork) -> QualityPrediction {
-        let mut expected_latency = 50.0;  // Default
-        let mut expected_bandwidth = 50.0;  // Default
-        let mut expected_stability = 0.7;  // Default
         let mut connection_success_probability = 0.8;  // Default
 
         // Adjust based on signal strength
         let signal_factor = ((network.signal_strength + 100) as f32 / 70.0).clamp(0.0, 1.0);
-        expected_latency = 20.0 + (1.0 - signal_factor) * 100.0;
-        expected_bandwidth = signal_factor * 200.0;
-        expected_stability = signal_factor;
+        let mut expected_latency = 20.0 + (1.0 - signal_factor) * 100.0;
+        let mut expected_bandwidth = signal_factor * 200.0;
+        let mut expected_stability = signal_factor;
 
         // Adjust based on history
         if let Some(history) = self.network_history.get(&network.ssid) {

@@ -33,6 +33,19 @@ pub enum UserAction {
     CustomAction(String),
 }
 
+/// WiFi network preference patterns
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WiFiNetworkPattern {
+    pub network_name: String,
+    pub hourly_usage: [u32; 24],        // Usage count by hour of day
+    pub daily_usage: [u32; 7],          // Usage count by day of week  
+    pub total_connections: u32,
+    pub success_rate: f32,
+    pub last_connected: Option<i64>,    // Unix timestamp
+    pub average_connection_time: f32,   // Hours between connections
+    pub preferred_contexts: Vec<NetworkContext>, // Contexts where this network is preferred
+}
+
 /// Action sequence for pattern detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionSequence {
@@ -70,10 +83,13 @@ impl Default for ActionStats {
 /// Usage pattern learner for menu personalization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsagePatternLearner {
+    #[serde(serialize_with = "serialize_action_stats", deserialize_with = "deserialize_action_stats")]
     action_stats: HashMap<UserAction, ActionStats>,
     action_sequences: VecDeque<ActionSequence>,
     frequent_workflows: Vec<Vec<UserAction>>,
+    #[serde(serialize_with = "serialize_context_associations", deserialize_with = "deserialize_context_associations")]
     context_associations: HashMap<u64, Vec<UserAction>>,  // location_hash -> common actions
+    wifi_patterns: HashMap<String, WiFiNetworkPattern>,   // network_name -> usage patterns
     training_data: TrainingData<UserAction>,
     config: UsageConfig,
 }
@@ -108,6 +124,7 @@ impl UsagePatternLearner {
             action_sequences: VecDeque::new(),
             frequent_workflows: Vec::new(),
             context_associations: HashMap::new(),
+            wifi_patterns: HashMap::new(),
             training_data: TrainingData::default(),
             config: UsageConfig::default(),
         }
@@ -194,7 +211,152 @@ impl UsagePatternLearner {
 
         // Add training sample
         let features = self.extract_action_features(&action, &context);
-        self.training_data.add_sample(features, action, context);
+        self.training_data.add_sample(features, action.clone(), context.clone());
+        
+        // Special handling for WiFi connections
+        if let UserAction::ConnectWifi(ref network_name) = action {
+            self.record_wifi_connection(network_name.clone(), context);
+        }
+    }
+    
+    /// Record a WiFi connection for learning network preferences
+    pub fn record_wifi_connection(&mut self, network_name: String, context: NetworkContext) {
+        let now = chrono::Utc::now();
+        let now_timestamp = now.timestamp();
+        
+        let pattern = self.wifi_patterns.entry(network_name.clone()).or_insert_with(|| {
+            WiFiNetworkPattern {
+                network_name: network_name.clone(),
+                hourly_usage: [0; 24],
+                daily_usage: [0; 7],
+                total_connections: 0,
+                success_rate: 0.9, // Start with optimistic assumption
+                last_connected: None,
+                average_connection_time: 0.0,
+                preferred_contexts: Vec::new(),
+            }
+        });
+        
+        // Update connection statistics
+        pattern.total_connections += 1;
+        pattern.hourly_usage[now.hour() as usize] += 1;
+        pattern.daily_usage[now.weekday().num_days_from_monday() as usize] += 1;
+        
+        // Update timing information
+        if let Some(last_connected_ts) = pattern.last_connected {
+            let hours_since = ((now_timestamp - last_connected_ts) as f32) / 3600.0;
+            pattern.average_connection_time = 
+                (pattern.average_connection_time * (pattern.total_connections - 1) as f32 + hours_since)
+                / pattern.total_connections as f32;
+        }
+        pattern.last_connected = Some(now_timestamp);
+        
+        // Store context for this connection
+        pattern.preferred_contexts.push(context);
+        
+        // Limit context history to prevent unbounded growth
+        if pattern.preferred_contexts.len() > 50 {
+            pattern.preferred_contexts.remove(0);
+        }
+        
+        debug!("Recorded WiFi connection to '{}' at {}h on day {}", 
+               network_name, now.hour(), now.weekday().num_days_from_monday());
+    }
+    
+    /// Get WiFi network preference score for current context
+    pub fn get_wifi_network_score(&self, network_name: &str, context: &NetworkContext) -> f32 {
+        if let Some(pattern) = self.wifi_patterns.get(network_name) {
+            self.calculate_wifi_preference_score(pattern, context)
+        } else {
+            0.1 // Base score for unknown networks
+        }
+    }
+    
+    /// Calculate preference score for a WiFi network in given context
+    fn calculate_wifi_preference_score(&self, pattern: &WiFiNetworkPattern, context: &NetworkContext) -> f32 {
+        let mut score = 0.0;
+        
+        // Time-based preference (40% weight)
+        let hour_weight = pattern.hourly_usage[context.time_of_day as usize] as f32 
+            / pattern.total_connections.max(1) as f32;
+        let day_weight = pattern.daily_usage[context.day_of_week as usize] as f32 
+            / pattern.total_connections.max(1) as f32;
+        let time_score = (hour_weight + day_weight) / 2.0;
+        score += time_score * 0.4;
+        
+        // Frequency-based preference (30% weight)  
+        let frequency_score = (pattern.total_connections as f32 / 100.0).min(1.0);
+        score += frequency_score * 0.3;
+        
+        // Recency bonus (20% weight)
+        let recency_score = if let Some(last_connected_ts) = pattern.last_connected {
+            let hours_since = ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / 3600.0;
+            (-hours_since / 168.0).exp() // Exponential decay over weeks
+        } else {
+            0.0
+        };
+        score += recency_score * 0.2;
+        
+        // Success rate (10% weight)
+        score += pattern.success_rate * 0.1;
+        
+        // Contextual similarity bonus
+        let context_bonus = self.calculate_wifi_context_similarity(pattern, context);
+        score += context_bonus * 0.1;
+        
+        debug!("WiFi score for '{}': {:.3} (time: {:.2}, freq: {:.2}, recency: {:.2}, context: {:.2})",
+               pattern.network_name, score, time_score, frequency_score, recency_score, context_bonus);
+        
+        score.min(1.0)
+    }
+    
+    /// Calculate how similar current context is to historical WiFi usage contexts
+    fn calculate_wifi_context_similarity(&self, pattern: &WiFiNetworkPattern, context: &NetworkContext) -> f32 {
+        if pattern.preferred_contexts.is_empty() {
+            return 0.5;
+        }
+        
+        // Find most similar context from history
+        let current_context_vec = vec![
+            context.time_of_day as f32 / 24.0,
+            context.day_of_week as f32 / 7.0,
+            context.location_hash as f32 / u64::MAX as f32,
+        ];
+        
+        let max_similarity = pattern.preferred_contexts.iter()
+            .map(|hist_context| {
+                let hist_vec = vec![
+                    hist_context.time_of_day as f32 / 24.0,
+                    hist_context.day_of_week as f32 / 7.0,
+                    hist_context.location_hash as f32 / u64::MAX as f32,
+                ];
+                cosine_similarity(&current_context_vec, &hist_vec)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+        
+        max_similarity
+    }
+    
+    /// Get personalized WiFi network ordering based on current context
+    pub fn get_personalized_wifi_order(&self, available_networks: Vec<String>, context: &NetworkContext) -> Vec<String> {
+        let mut scored_networks: Vec<(String, f32)> = available_networks
+            .into_iter()
+            .map(|network| {
+                let score = self.get_wifi_network_score(&network, context);
+                (network, score)
+            })
+            .collect();
+        
+        // Sort by score (descending)
+        scored_networks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        
+        debug!("WiFi network ordering for context ({}h, day {}):", context.time_of_day, context.day_of_week);
+        for (i, (network, score)) in scored_networks.iter().take(5).enumerate() {
+            debug!("  {}. {} (score: {:.3})", i + 1, network, score);
+        }
+        
+        scored_networks.into_iter().map(|(network, _)| network).collect()
     }
 
     /// Update frequently used workflows
@@ -288,46 +450,190 @@ impl UsagePatternLearner {
             .collect()
     }
 
-    /// Calculate score for an action based on usage patterns
+    /// Calculate score for an action based on usage patterns and smart criteria
     fn calculate_action_score(&self, action_str: &str, context: &NetworkContext) -> f32 {
         // Try to match action string to UserAction
         let action = self.parse_action_string(action_str);
-
-        if let Some(action) = action {
+        
+        // Base score calculation
+        let mut base_score = if let Some(action) = action {
             if let Some(stats) = self.action_stats.get(&action) {
-                // Recency score
+                // Recency score with exponential decay
                 let recency_score = if let Some(last_used_ts) = stats.last_used {
                     let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
-                    1.0 / (1.0 + hours_since / 24.0)  // Decay over days
+                    (-hours_since / 168.0).exp()  // Exponential decay over weeks
                 } else {
                     0.0
                 };
 
-                // Frequency score
-                let frequency_score = (stats.total_count as f32 / 100.0).min(1.0);
+                // Frequency score with logarithmic scaling
+                let frequency_score = (1.0 + stats.total_count as f32).ln() / 10.0;
 
                 // Context score
                 let context_score = self.calculate_context_similarity(&action, context);
 
-                // Time-based score
+                // Time-based score with better temporal modeling
                 let time_score = {
                     let hour_weight = stats.hourly_distribution[context.time_of_day as usize] as f32
                         / stats.total_count.max(1) as f32;
                     let day_weight = stats.daily_distribution[context.day_of_week as usize] as f32
                         / stats.total_count.max(1) as f32;
-                    (hour_weight + day_weight) / 2.0
+                    
+                    // Add periodicity bonus for consistent usage patterns
+                    let hour_consistency = self.calculate_temporal_consistency(&stats.hourly_distribution);
+                    let day_consistency = self.calculate_temporal_consistency(&stats.daily_distribution);
+                    
+                    (hour_weight + day_weight) / 2.0 + 
+                    (hour_consistency + day_consistency) * 0.1
+                };
+
+                // Recent usage boost (actions used in last 24 hours get priority)
+                let recent_boost = if let Some(last_used_ts) = stats.last_used {
+                    let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
+                    if hours_since <= 24.0 { 0.2 } else { 0.0 }
+                } else {
+                    0.0
                 };
 
                 // Weighted combination
                 recency_score * self.config.recency_weight +
                 frequency_score * self.config.frequency_weight +
                 context_score * self.config.context_weight +
-                time_score * 0.1  // Small time bonus
+                time_score * 0.15 +  // Increased time bonus
+                recent_boost
             } else {
                 0.1  // Base score for unseen actions
             }
         } else {
             0.05  // Minimal score for unrecognized actions
+        };
+        
+        // Apply smart criteria bonuses
+        base_score += self.calculate_smart_criteria_bonus(action_str, context);
+        
+        base_score.min(1.0)  // Cap at 1.0
+    }
+    
+    /// Calculate smart criteria bonuses based on network conditions and action types
+    fn calculate_smart_criteria_bonus(&self, action_str: &str, context: &NetworkContext) -> f32 {
+        let action = action_str.to_lowercase();
+        let mut bonus = 0.0;
+        
+        // Network-specific bonuses
+        match context.network_type {
+            NetworkType::WiFi => {
+                // Boost WiFi-related actions when on WiFi
+                if action.contains("wifi") || action.contains("disconnect") {
+                    bonus += 0.1;
+                }
+                // Lower priority for mobile data actions
+                if action.contains("mobile") {
+                    bonus -= 0.05;
+                }
+            }
+            NetworkType::Ethernet => {
+                // Boost VPN and Tailscale when on stable connection
+                if action.contains("tailscale") || action.contains("vpn") {
+                    bonus += 0.15;
+                }
+            }
+            NetworkType::Mobile => {
+                // Boost data-saving actions on mobile
+                if action.contains("disconnect") || action.contains("airplane") {
+                    bonus += 0.1;
+                }
+            }
+            _ => {}
+        }
+        
+        // Signal strength bonuses
+        if let Some(signal) = context.signal_strength {
+            if signal < 0.3 {
+                // Poor signal - boost diagnostic and network switching actions
+                if action.contains("diagnostic") || action.contains("wifi") || action.contains("disconnect") {
+                    bonus += 0.2;
+                }
+            } else if signal > 0.8 {
+                // Good signal - boost bandwidth-intensive actions
+                if action.contains("speed") || action.contains("update") {
+                    bonus += 0.1;
+                }
+            }
+        }
+        
+        // Time-based bonuses
+        match context.time_of_day {
+            6..=9 => {
+                // Morning - boost work-related connections
+                if action.contains("vpn") || action.contains("tailscale") {
+                    bonus += 0.1;
+                }
+            }
+            12..=14 => {
+                // Lunch - boost personal connections
+                if action.contains("bluetooth") || action.contains("personal") {
+                    bonus += 0.05;
+                }
+            }
+            18..=22 => {
+                // Evening - boost entertainment connections
+                if action.contains("streaming") || action.contains("exit") {
+                    bonus += 0.1;
+                }
+            }
+            _ => {}
+        }
+        
+        // Day-based bonuses
+        match context.day_of_week {
+            0..=4 => {
+                // Weekdays - boost work connections
+                if action.contains("vpn") || action.contains("work") {
+                    bonus += 0.05;
+                }
+            }
+            5..=6 => {
+                // Weekends - boost personal actions
+                if action.contains("bluetooth") || action.contains("entertainment") {
+                    bonus += 0.05;
+                }
+            }
+            _ => {}
+        }
+        
+        // Priority action types
+        if action.contains("diagnostic") && action.contains("connectivity") {
+            bonus += 0.15;  // Always prioritize basic connectivity tests
+        }
+        
+        if action.contains("disconnect") || action.contains("disable") {
+            bonus += 0.05;  // Slightly boost disconnect actions for quick access
+        }
+        
+        bonus
+    }
+    
+    /// Calculate temporal consistency of usage patterns
+    fn calculate_temporal_consistency(&self, distribution: &[u32]) -> f32 {
+        let total: u32 = distribution.iter().sum();
+        if total == 0 {
+            return 0.0;
+        }
+        
+        // Calculate coefficient of variation (lower = more consistent)
+        let mean = total as f32 / distribution.len() as f32;
+        let variance: f32 = distribution.iter()
+            .map(|&x| {
+                let diff = x as f32 - mean;
+                diff * diff
+            })
+            .sum::<f32>() / distribution.len() as f32;
+        
+        let std_dev = variance.sqrt();
+        if mean == 0.0 {
+            0.0
+        } else {
+            1.0 / (1.0 + std_dev / mean)  // Higher consistency = higher score
         }
     }
 
@@ -365,38 +671,108 @@ impl UsagePatternLearner {
         }
     }
 
-    /// Parse action string to UserAction
+    /// Parse action string to UserAction with sophisticated pattern matching
     fn parse_action_string(&self, action_str: &str) -> Option<UserAction> {
-        // Simple pattern matching - in real implementation, this would be more sophisticated
-        if action_str.contains("WiFi") {
-            if action_str.contains("Disconnect") {
+        let action = action_str.to_lowercase();
+        
+        // WiFi actions (handle format: "wifi      - 📶 NetworkName" or "wifi      - ❌ Disconnect")
+        if action.contains("wifi") {
+            if action.contains("disconnect") {
                 Some(UserAction::DisconnectWifi)
+            } else if action.contains("connect") && action.contains("hidden") {
+                Some(UserAction::ConnectWifi("hidden".to_string()))
             } else {
-                Some(UserAction::ConnectWifi("network".to_string()))
+                // Extract network name from format "wifi      - 📶 NetworkName"
+                let parts: Vec<&str> = action_str.splitn(3, ' ').collect();
+                if parts.len() >= 3 {
+                    let network_part = parts[2..].join(" ");
+                    // Remove emoji and extract network name
+                    let network = network_part.trim_start_matches(['📶', '✅', '❌', ' ']);
+                    if !network.is_empty() && !network.to_lowercase().contains("connect") {
+                        Some(UserAction::ConnectWifi(network.to_string()))
+                    } else {
+                        Some(UserAction::ConnectWifi("network".to_string()))
+                    }
+                } else {
+                    Some(UserAction::ConnectWifi("network".to_string()))
+                }
             }
-        } else if action_str.contains("Bluetooth") {
-            if action_str.contains("Disconnect") {
+        }
+        // Bluetooth actions (handle format: "bluetooth- 🎧 DeviceName" or similar)
+        else if action.contains("bluetooth") || action_str.contains("🎧") || action_str.contains("📱") {
+            if action.contains("disconnect") {
                 Some(UserAction::DisconnectBluetooth)
             } else {
-                Some(UserAction::ConnectBluetooth("device".to_string()))
+                // Extract device name from the action string
+                let device_name = if action_str.contains(" - ") {
+                    action_str.split(" - ").nth(1).unwrap_or("device").trim()
+                        .trim_start_matches(['🎧', '📱', '⌚', ' '])
+                } else {
+                    "device"
+                };
+                Some(UserAction::ConnectBluetooth(device_name.to_string()))
             }
-        } else if action_str.contains("Tailscale") {
-            if action_str.contains("Disable") {
+        }
+        // Tailscale actions (handle format: "tailscale - ✅ Enable tailscale")
+        else if action.contains("tailscale") {
+            if action.contains("disable") && !action.contains("exit") {
                 Some(UserAction::DisableTailscale)
-            } else {
+            } else if action.contains("enable") && !action.contains("exit") {
                 Some(UserAction::EnableTailscale)
-            }
-        } else if action_str.contains("Exit Node") {
-            if action_str.contains("Disable") {
-                Some(UserAction::DisableExitNode)
+            } else if action.contains("exit") || action.contains("mullvad") {
+                if action.contains("disable") {
+                    Some(UserAction::DisableExitNode)
+                } else {
+                    // Extract node name from exit node selection
+                    let node_name = if action_str.contains(".mullvad.ts.net") {
+                        action_str.split_whitespace()
+                            .find(|s| s.contains(".mullvad.ts.net"))
+                            .unwrap_or("node")
+                    } else {
+                        "node"
+                    };
+                    Some(UserAction::SelectExitNode(node_name.to_string()))
+                }
             } else {
-                Some(UserAction::SelectExitNode("node".to_string()))
+                Some(UserAction::CustomAction(action_str.to_string()))
             }
-        } else if action_str.contains("Airplane") {
+        }
+        // System actions
+        else if action.contains("airplane") || action.contains("✈️") {
             Some(UserAction::ToggleAirplaneMode)
-        } else if action_str.contains("Diagnostic") {
-            Some(UserAction::RunDiagnostic(action_str.to_string()))
-        } else {
+        }
+        // Diagnostic actions (handle format: "diagnostic- ✅ Test Connectivity")
+        else if action.contains("diagnostic") {
+            let diagnostic_type = if action.contains("connectivity") {
+                "connectivity"
+            } else if action.contains("ping") {
+                "ping"
+            } else if action.contains("speed") {
+                "speedtest"
+            } else if action.contains("dns") {
+                "dns"
+            } else if action.contains("traceroute") {
+                "traceroute"
+            } else {
+                "diagnostic"
+            };
+            Some(UserAction::RunDiagnostic(diagnostic_type.to_string()))
+        }
+        // VPN actions
+        else if action.contains("vpn") {
+            // This is for NetworkManager VPN connections, not Tailscale
+            Some(UserAction::CustomAction(format!("vpn_{}", action_str)))
+        }
+        // NextDNS actions
+        else if action.contains("nextdns") || action.contains("dns") {
+            Some(UserAction::CustomAction(format!("nextdns_{}", action_str)))
+        }
+        // System/RFKill actions
+        else if action.contains("turn on") || action.contains("turn off") || action.contains("rfkill") {
+            Some(UserAction::CustomAction(format!("system_{}", action_str)))
+        }
+        // Custom actions (catch-all for user-defined actions)
+        else {
             Some(UserAction::CustomAction(action_str.to_string()))
         }
     }
@@ -504,6 +880,154 @@ impl ModelPersistence for UsagePatternLearner {
         debug!("Usage pattern learner loaded from {}", path);
 
         Ok(learner)
+    }
+}
+
+// Custom serialization functions to handle HashMap keys that aren't strings
+use serde::{Serializer, Deserializer};
+use std::fmt;
+
+fn serialize_action_stats<S>(
+    map: &HashMap<UserAction, ActionStats>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut ser_map = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        let key_string = format!("{:?}", key);
+        ser_map.serialize_entry(&key_string, value)?;
+    }
+    ser_map.end()
+}
+
+fn deserialize_action_stats<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<UserAction, ActionStats>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{MapAccess, Visitor};
+    
+    struct ActionStatsVisitor;
+    
+    impl<'de> Visitor<'de> for ActionStatsVisitor {
+        type Value = HashMap<UserAction, ActionStats>;
+        
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map with UserAction keys")
+        }
+        
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut result = HashMap::new();
+            while let Some((key_string, value)) = map.next_entry::<String, ActionStats>()? {
+                // Parse the key string back to UserAction (simplified parsing)
+                let action = parse_debug_user_action(&key_string);
+                result.insert(action, value);
+            }
+            Ok(result)
+        }
+    }
+    
+    deserializer.deserialize_map(ActionStatsVisitor)
+}
+
+fn serialize_context_associations<S>(
+    map: &HashMap<u64, Vec<UserAction>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut ser_map = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        let key_string = key.to_string();
+        ser_map.serialize_entry(&key_string, value)?;
+    }
+    ser_map.end()
+}
+
+fn deserialize_context_associations<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<u64, Vec<UserAction>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{MapAccess, Visitor};
+    
+    struct ContextAssociationsVisitor;
+    
+    impl<'de> Visitor<'de> for ContextAssociationsVisitor {
+        type Value = HashMap<u64, Vec<UserAction>>;
+        
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map with u64 keys")
+        }
+        
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut result = HashMap::new();
+            while let Some((key_string, value)) = map.next_entry::<String, Vec<UserAction>>()? {
+                if let Ok(key_u64) = key_string.parse::<u64>() {
+                    result.insert(key_u64, value);
+                }
+            }
+            Ok(result)
+        }
+    }
+    
+    deserializer.deserialize_map(ContextAssociationsVisitor)
+}
+
+// Simple parser for UserAction from debug format (for deserialization)
+fn parse_debug_user_action(debug_str: &str) -> UserAction {
+    if debug_str.starts_with("ConnectWifi(") {
+        if let Some(network) = debug_str.strip_prefix("ConnectWifi(\"").and_then(|s| s.strip_suffix("\")")) {
+            UserAction::ConnectWifi(network.to_string())
+        } else {
+            UserAction::ConnectWifi("unknown".to_string())
+        }
+    } else if debug_str == "DisconnectWifi" {
+        UserAction::DisconnectWifi
+    } else if debug_str.starts_with("ConnectBluetooth(") {
+        if let Some(device) = debug_str.strip_prefix("ConnectBluetooth(\"").and_then(|s| s.strip_suffix("\")")) {
+            UserAction::ConnectBluetooth(device.to_string())
+        } else {
+            UserAction::ConnectBluetooth("unknown".to_string())
+        }
+    } else if debug_str == "DisconnectBluetooth" {
+        UserAction::DisconnectBluetooth
+    } else if debug_str == "EnableTailscale" {
+        UserAction::EnableTailscale
+    } else if debug_str == "DisableTailscale" {
+        UserAction::DisableTailscale
+    } else if debug_str.starts_with("SelectExitNode(") {
+        if let Some(node) = debug_str.strip_prefix("SelectExitNode(\"").and_then(|s| s.strip_suffix("\")")) {
+            UserAction::SelectExitNode(node.to_string())
+        } else {
+            UserAction::SelectExitNode("unknown".to_string())
+        }
+    } else if debug_str == "DisableExitNode" {
+        UserAction::DisableExitNode
+    } else if debug_str.starts_with("RunDiagnostic(") {
+        if let Some(diag) = debug_str.strip_prefix("RunDiagnostic(\"").and_then(|s| s.strip_suffix("\")")) {
+            UserAction::RunDiagnostic(diag.to_string())
+        } else {
+            UserAction::RunDiagnostic("unknown".to_string())
+        }
+    } else if debug_str == "ToggleAirplaneMode" {
+        UserAction::ToggleAirplaneMode
+    } else {
+        // Default to CustomAction for unknown patterns
+        UserAction::CustomAction(debug_str.to_string())
     }
 }
 

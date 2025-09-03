@@ -16,6 +16,8 @@ pub mod usage_patterns;
 pub mod performance_tracker;
 #[cfg(feature = "ml")]
 pub mod network_predictor;
+#[cfg(feature = "ml")]
+pub mod action_prioritizer;
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -71,7 +73,7 @@ pub struct NetworkContext {
     pub signal_strength: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum NetworkType {
     WiFi,
     Ethernet,
