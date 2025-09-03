@@ -70,6 +70,19 @@ impl TorManager {
         }
     }
 
+    /// Check if Tor daemon is running (async version for streaming)
+    pub async fn is_tor_running_async_fast(&self) -> bool {
+        // Use a simple heuristic check - look for tor processes (async version)
+        match tokio::process::Command::new("pgrep")
+            .args(["-x", "tor"])
+            .output()
+            .await
+        {
+            Ok(output) => !output.stdout.is_empty(),
+            Err(_) => false,
+        }
+    }
+
     async fn is_port_listening_async(&self, port: u16) -> bool {
         // Check if a process is listening on the specified port
         // Try ss first (modern and widely available)
@@ -171,11 +184,34 @@ impl TorManager {
         if self.control_shutdown().is_err() {
             warn!("Graceful shutdown failed, attempting force kill");
             
-            // Force kill Tor processes
-            let killall_args = ["tor"];
-            match command_runner.run_command("killall", &killall_args) {
-                Ok(_) => debug!("Tor processes killed"),
-                Err(e) => warn!("Failed to kill Tor processes: {}", e),
+            // Try multiple methods to kill Tor processes
+            // Method 1: killall
+            let killall_result = command_runner.run_command("killall", &["tor"]);
+            if let Err(e) = killall_result {
+                debug!("killall failed: {}", e);
+                
+                // Method 2: pkill
+                let pkill_result = command_runner.run_command("pkill", &["-f", "^tor$"]);
+                if let Err(e2) = pkill_result {
+                    debug!("pkill failed: {}", e2);
+                    
+                    // Method 3: Find PIDs with pgrep and kill them
+                    if let Ok(pgrep_output) = command_runner.run_command("pgrep", &["-x", "tor"]) {
+                        let pids_str = String::from_utf8_lossy(&pgrep_output.stdout);
+                        for pid in pids_str.lines() {
+                            if !pid.is_empty() {
+                                debug!("Trying to kill Tor PID: {}", pid);
+                                let _ = command_runner.run_command("kill", &["-TERM", pid]);
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                let _ = command_runner.run_command("kill", &["-KILL", pid]);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Tor processes killed with pkill");
+                }
+            } else {
+                debug!("Tor processes killed with killall");
             }
         }
 
@@ -190,15 +226,33 @@ impl TorManager {
     }
 
     fn control_shutdown(&self) -> Result<(), String> {
-        // Send SHUTDOWN signal via control port using telnet/nc
-        let shutdown_cmd = format!("echo 'SIGNAL SHUTDOWN' | nc localhost {}", self.control_port);
+        // Send proper Tor control protocol commands
+        // First authenticate (if no password set, authenticate with empty password)
+        // Then send SIGNAL SHUTDOWN
+        let shutdown_cmd = format!(
+            r#"printf "AUTHENTICATE \"\"\r\nSIGNAL SHUTDOWN\r\nQUIT\r\n" | nc localhost {} -w 3"#,
+            self.control_port
+        );
+        
+        debug!("Attempting graceful Tor shutdown via control port");
         match std::process::Command::new("sh")
             .args(["-c", &shutdown_cmd])
             .output()
         {
-            Ok(_) => {
-                debug!("Sent shutdown signal to Tor");
-                Ok(())
+            Ok(output) => {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                debug!("Control port response: {}", output_str.trim());
+                
+                // Check if authentication and shutdown were successful
+                if output_str.contains("250 OK") {
+                    debug!("Tor graceful shutdown successful");
+                    // Wait a bit for Tor to actually shut down
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    Ok(())
+                } else {
+                    debug!("Tor control response didn't indicate success: {}", output_str.trim());
+                    Err("Control port shutdown failed".to_string())
+                }
             }
             Err(e) => Err(format!("Failed to send shutdown signal: {}", e)),
         }
@@ -210,17 +264,26 @@ impl TorManager {
             return Err("Tor daemon is not running".to_string());
         }
 
-        let newnym_cmd = format!("echo 'SIGNAL NEWNYM' | nc localhost {}", self.control_port);
+        let newnym_cmd = format!(
+            r#"printf "AUTHENTICATE \"\"\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc localhost {} -w 3"#,
+            self.control_port
+        );
+        
+        debug!("Refreshing Tor circuit");
         match std::process::Command::new("sh")
             .args(["-c", &newnym_cmd])
             .output()
         {
             Ok(output) => {
-                if output.status.success() {
-                    debug!("Sent NEWNYM signal to Tor - circuit refreshed");
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                debug!("Control port response: {}", output_str.trim());
+                
+                if output_str.contains("250 OK") {
+                    debug!("Tor circuit refreshed successfully");
                     Ok(())
                 } else {
-                    Err(format!("Failed to refresh circuit: {}", String::from_utf8_lossy(&output.stderr)))
+                    debug!("Tor control response didn't indicate success: {}", output_str.trim());
+                    Err(format!("Failed to refresh circuit: {}", output_str.trim()))
                 }
             }
             Err(e) => Err(format!("Failed to send NEWNYM signal: {}", e)),
@@ -398,8 +461,8 @@ pub async fn get_tor_actions_async(torsocks_configs: &HashMap<String, TorsocksCo
     let mut actions = Vec::new();
     let tor_manager = TorManager::new();
 
-    // Tor daemon management - use faster process check for streaming
-    let is_running = tor_manager.is_tor_running();
+    // Tor daemon management - use async process check for streaming
+    let is_running = tor_manager.is_tor_running_async_fast().await;
     if is_running {
         actions.push(TorAction::StopTor);
         actions.push(TorAction::RestartTor);
