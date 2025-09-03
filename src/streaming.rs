@@ -36,9 +36,9 @@ pub async fn select_action_from_menu_streaming(
         #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
-        // Apply ML personalization if enabled
+        // Apply ML personalization if enabled - DISABLED DUE TO 17GB JSON BUG
         #[cfg(feature = "ml")]
-        {
+        if false {
             let action_strings: Vec<String> = actions.iter()
                 .map(crate::action_to_string)
                 .collect();
@@ -66,9 +66,9 @@ pub async fn select_action_from_menu_streaming(
         #[allow(unused_mut)] // Needed for ML feature
         let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
 
-        // Apply ML personalization if enabled
+        // Apply ML personalization if enabled - DISABLED DUE TO 17GB JSON BUG
         #[cfg(feature = "ml")]
-        {
+        if false {
             let action_strings: Vec<String> = actions.iter()
                 .map(crate::action_to_string)
                 .collect();
@@ -716,16 +716,35 @@ async fn send_tor_actions(
 ) {
     use log::debug;
     
+    debug!("TOR_DEBUG: Starting send_tor_actions()");
+    let start_time = std::time::Instant::now();
+    
     // Only show Tor daemon actions if tor command is available
-    if is_command_installed("tor") {
-        debug!("Tor command found, getting actions");
+    debug!("TOR_DEBUG: Checking if 'tor' command is installed...");
+    let tor_installed = is_command_installed("tor");
+    debug!("TOR_DEBUG: tor command available: {}", tor_installed);
+    
+    if tor_installed {
+        debug!("TOR_DEBUG: Tor command found, getting actions with {} torsocks configs", torsocks_apps.len());
+        
+        let actions_start = std::time::Instant::now();
         let actions = tor::get_tor_actions_async(torsocks_apps).await;
-        debug!("Got {} Tor actions", actions.len());
-        for action in actions {
-            debug!("Sending Tor action: {:?}", action);
-            let _ = tx.send(ActionType::Tor(action));
+        let actions_elapsed = actions_start.elapsed();
+        
+        debug!("TOR_DEBUG: get_tor_actions_async() took {:?}, got {} actions", actions_elapsed, actions.len());
+        
+        for (i, action) in actions.iter().enumerate() {
+            debug!("TOR_DEBUG: Sending Tor action {}/{}: {:?}", i + 1, actions.len(), action);
+            let send_result = tx.send(ActionType::Tor(action.clone()));
+            if let Err(e) = send_result {
+                debug!("TOR_DEBUG: Failed to send action: {:?}", e);
+            }
         }
+        debug!("TOR_DEBUG: Finished sending all {} Tor actions", actions.len());
     } else {
-        debug!("Tor command not found, skipping Tor actions");
+        debug!("TOR_DEBUG: Tor command not found, skipping Tor actions");
     }
+    
+    let total_elapsed = start_time.elapsed();
+    debug!("TOR_DEBUG: send_tor_actions() completed in {:?}", total_elapsed);
 }

@@ -72,15 +72,29 @@ impl TorManager {
 
     /// Check if Tor daemon is running (async version for streaming)
     pub async fn is_tor_running_async_fast(&self) -> bool {
+        debug!("TOR_DEBUG: Starting is_tor_running_async_fast()");
+        let start_time = std::time::Instant::now();
+        
         // Use a simple heuristic check - look for tor processes (async version)
-        match tokio::process::Command::new("pgrep")
+        let result = match tokio::process::Command::new("pgrep")
             .args(["-x", "tor"])
             .output()
             .await
         {
-            Ok(output) => !output.stdout.is_empty(),
-            Err(_) => false,
-        }
+            Ok(output) => {
+                let is_running = !output.stdout.is_empty();
+                debug!("TOR_DEBUG: pgrep result: {} bytes stdout, running={}", output.stdout.len(), is_running);
+                is_running
+            },
+            Err(e) => {
+                debug!("TOR_DEBUG: pgrep error: {}", e);
+                false
+            }
+        };
+        
+        let elapsed = start_time.elapsed();
+        debug!("TOR_DEBUG: is_tor_running_async_fast() took {:?}, result={}", elapsed, result);
+        result
     }
 
     async fn is_port_listening_async(&self, port: u16) -> bool {
@@ -366,15 +380,34 @@ impl TorsocksConfig {
 
     /// Check if the application is running with torsocks (async version)
     pub async fn is_running_async(&self) -> bool {
+        debug!("TOR_DEBUG: Starting TorsocksConfig.is_running_async() for '{}'", self.name);
+        let start_time = std::time::Instant::now();
+        
         // Check if there are processes matching our command
-        match tokio::process::Command::new("pgrep")
-            .args(["-f", &format!("torsocks {}", self.command)])
+        let pattern = format!("torsocks {}", self.command);
+        debug!("TOR_DEBUG: Looking for pattern: '{}'", pattern);
+        
+        let result = match tokio::process::Command::new("pgrep")
+            .args(["-f", &pattern])
             .output()
             .await
         {
-            Ok(output) => !output.stdout.is_empty(),
-            Err(_) => false,
-        }
+            Ok(output) => {
+                let is_running = !output.stdout.is_empty();
+                debug!("TOR_DEBUG: pgrep -f result for '{}': {} bytes stdout, running={}", 
+                       self.name, output.stdout.len(), is_running);
+                is_running
+            },
+            Err(e) => {
+                debug!("TOR_DEBUG: pgrep -f error for '{}': {}", self.name, e);
+                false
+            }
+        };
+        
+        let elapsed = start_time.elapsed();
+        debug!("TOR_DEBUG: TorsocksConfig.is_running_async() for '{}' took {:?}, result={}", 
+               self.name, elapsed, result);
+        result
     }
 
     /// Start application with torsocks
@@ -458,32 +491,60 @@ pub fn get_tor_actions(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Ve
 
 /// Get Tor proxy actions based on current state (async version for streaming)
 pub async fn get_tor_actions_async(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Vec<TorAction> {
+    debug!("TOR_DEBUG: Starting get_tor_actions_async() with {} torsocks configs", torsocks_configs.len());
+    let start_time = std::time::Instant::now();
+    
     let mut actions = Vec::new();
     let tor_manager = TorManager::new();
 
     // Tor daemon management - use async process check for streaming
+    debug!("TOR_DEBUG: Checking if Tor is running...");
     let is_running = tor_manager.is_tor_running_async_fast().await;
+    debug!("TOR_DEBUG: Tor running status: {}", is_running);
+    
     if is_running {
+        debug!("TOR_DEBUG: Adding Tor daemon actions (running)");
         actions.push(TorAction::StopTor);
         actions.push(TorAction::RestartTor);
         actions.push(TorAction::RefreshCircuit);
         actions.push(TorAction::TestConnection);
     } else {
+        debug!("TOR_DEBUG: Adding Tor daemon actions (not running)");
         actions.push(TorAction::StartTor);
     }
 
     // Torsocks application management (only if Tor is running and torsocks is available)
-    if is_running && is_command_installed("torsocks") {
-        for config in torsocks_configs.values() {
+    debug!("TOR_DEBUG: Checking torsocks availability...");
+    let torsocks_available = is_command_installed("torsocks");
+    debug!("TOR_DEBUG: torsocks available: {}", torsocks_available);
+    
+    if is_running && torsocks_available {
+        debug!("TOR_DEBUG: Processing {} torsocks configs...", torsocks_configs.len());
+        for (config_name, config) in torsocks_configs {
+            debug!("TOR_DEBUG: Checking torsocks config '{}'", config_name);
+            let config_start = std::time::Instant::now();
+            
             // Use async version of is_running check
             if config.is_running_async().await {
+                debug!("TOR_DEBUG: Config '{}' is running, adding stop action", config_name);
                 actions.push(TorAction::StopTorsocks(config.clone()));
             } else {
+                debug!("TOR_DEBUG: Config '{}' is not running, adding start action", config_name);
                 actions.push(TorAction::StartTorsocks(config.clone()));
             }
+            
+            let config_elapsed = config_start.elapsed();
+            debug!("TOR_DEBUG: Processing config '{}' took {:?}", config_name, config_elapsed);
         }
+        debug!("TOR_DEBUG: Finished processing all torsocks configs");
+    } else {
+        debug!("TOR_DEBUG: Skipping torsocks configs (tor_running={}, torsocks_available={})", 
+               is_running, torsocks_available);
     }
 
+    let total_elapsed = start_time.elapsed();
+    debug!("TOR_DEBUG: get_tor_actions_async() completed in {:?}, returning {} actions", 
+           total_elapsed, actions.len());
     actions
 }
 

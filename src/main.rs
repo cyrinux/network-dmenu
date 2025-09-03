@@ -260,9 +260,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     logger::init();
 
-    // Initialize ML system if enabled
+    // Initialize ML system if enabled - TEMPORARILY DISABLED DUE TO 17GB JSON BUG
     #[cfg(feature = "ml")]
-    {
+    if false {
         network_dmenu::initialize_ml_system();
     }
 
@@ -422,9 +422,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if !action.is_empty() {
-        // Record user action for ML learning
+        // Record user action for ML learning - DISABLED DUE TO 17GB JSON BUG
         #[cfg(feature = "ml")]
-        {
+        if false {
             network_dmenu::record_user_action(&action);
         }
 
@@ -443,9 +443,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     // When action is empty (user pressed Escape or closed window), just exit silently
 
-    // Save ML models before exit
+    // Save ML models before exit - DISABLED DUE TO 17GB JSON BUG
     #[cfg(feature = "ml")]
-    {
+    if false {
         if let Err(e) = network_dmenu::force_save_ml_models() {
             debug!("Failed to save ML models on exit: {}", e);
         }
