@@ -14,6 +14,7 @@ pub enum TorAction {
     RestartTor,
     RefreshCircuit,
     TestConnection,
+    DebugControlPort,
     StartTorsocks(TorsocksConfig),
     StopTorsocks(TorsocksConfig),
 }
@@ -278,44 +279,171 @@ impl TorManager {
             return Err("Tor daemon is not running".to_string());
         }
 
+        // First try to get current circuit info to compare before/after
+        let before_circuit = self.get_current_circuit_info();
+        debug!("Circuit before refresh: {:?}", before_circuit);
+
         let newnym_cmd = format!(
-            r#"printf "AUTHENTICATE \"\"\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc localhost {} -w 3"#,
+            r#"printf "AUTHENTICATE \"\"\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc localhost {} -w 5"#,
             self.control_port
         );
         
-        debug!("Refreshing Tor circuit");
+        debug!("Refreshing Tor circuit with command: {}", newnym_cmd);
         match std::process::Command::new("sh")
             .args(["-c", &newnym_cmd])
             .output()
         {
             Ok(output) => {
                 let output_str = String::from_utf8_lossy(&output.stdout);
-                debug!("Control port response: {}", output_str.trim());
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
+                debug!("Control port stdout: '{}'", output_str);
+                debug!("Control port stderr: '{}'", stderr_str);
+                debug!("Exit status: {}", output.status);
                 
-                // Check for both authentication success (250 OK) and signal acceptance (250 OK)
-                // Some Tor versions might respond differently
-                if output_str.contains("250 OK") || output_str.contains("250") {
-                    debug!("Tor circuit refreshed successfully");
-                    Ok(())
-                } else if output_str.contains("514") {
-                    // Authentication required
-                    Err("Tor control authentication failed - check if ControlPort has authentication enabled".to_string())
-                } else {
-                    debug!("Tor control response didn't indicate success: {}", output_str.trim());
-                    warn!("Full stderr: {}", String::from_utf8_lossy(&output.stderr));
-                    
-                    // If we got this far, the command executed, so it might have worked anyway
-                    // Some Tor configurations don't give the expected response format
-                    if output.status.success() && output_str.trim().is_empty() {
-                        debug!("Command executed successfully despite empty response - assuming circuit refresh worked");
-                        Ok(())
-                    } else {
-                        Err(format!("Failed to refresh circuit: {}", output_str.trim()))
+                // Parse the response line by line to understand what happened
+                let lines: Vec<&str> = output_str.lines().collect();
+                debug!("Response lines: {:?}", lines);
+                
+                let mut auth_ok = false;
+                let mut signal_ok = false;
+                
+                for line in lines {
+                    if line.contains("250 OK") {
+                        if !auth_ok {
+                            auth_ok = true;
+                            debug!("Authentication successful");
+                        } else {
+                            signal_ok = true;
+                            debug!("NEWNYM signal sent successfully");
+                        }
+                    } else if line.contains("250") {
+                        debug!("Got 250 response: {}", line);
+                        signal_ok = true; // Assume success for any 250 response
+                    } else if line.contains("514") {
+                        return Err("Authentication failed - Tor control port requires authentication".to_string());
+                    } else if line.contains("551") {
+                        return Err("NEWNYM signal failed - command not recognized or not allowed".to_string());
+                    } else if !line.trim().is_empty() {
+                        debug!("Other response: {}", line);
                     }
+                }
+                
+                if signal_ok {
+                    debug!("NEWNYM signal appears to have been sent successfully");
+                    // Wait a moment for the circuit to actually change
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    
+                    // Try to verify the circuit actually changed
+                    let after_circuit = self.get_current_circuit_info();
+                    debug!("Circuit after refresh: {:?}", after_circuit);
+                    
+                    if before_circuit != after_circuit {
+                        debug!("Circuit successfully changed!");
+                        Ok(())
+                    } else if before_circuit.is_some() && after_circuit.is_some() {
+                        warn!("Circuit info appears unchanged - NEWNYM might not have worked");
+                        Ok(()) // Still return OK since the command succeeded
+                    } else {
+                        debug!("Could not verify circuit change, but NEWNYM signal was sent");
+                        Ok(())
+                    }
+                } else {
+                    Err(format!("NEWNYM signal was not accepted. Response: {}", output_str.trim()))
                 }
             }
             Err(e) => Err(format!("Failed to send NEWNYM signal: {}", e)),
         }
+    }
+    
+    /// Get current circuit information for comparison
+    fn get_current_circuit_info(&self) -> Option<String> {
+        let info_cmd = format!(
+            r#"printf "AUTHENTICATE \"\"\r\nGETINFO circuit-status\r\nQUIT\r\n" | nc localhost {} -w 3"#,
+            self.control_port
+        );
+        
+        match std::process::Command::new("sh")
+            .args(["-c", &info_cmd])
+            .output()
+        {
+            Ok(output) => {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                // Extract just the circuit info part
+                for line in output_str.lines() {
+                    if line.starts_with("250+circuit-status=") || line.starts_with("250-circuit-status=") {
+                        return Some(line.to_string());
+                    }
+                }
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Debug Tor control port communication
+    pub fn debug_control_port(&self) -> Result<(), String> {
+        if !self.is_tor_running() {
+            return Err("Tor daemon is not running".to_string());
+        }
+
+        debug!("=== DEBUGGING TOR CONTROL PORT ===");
+        
+        // Test 1: Basic connection
+        debug!("Test 1: Basic connection to control port {}...", self.control_port);
+        let test_cmd = format!("echo 'QUIT' | nc localhost {} -w 2", self.control_port);
+        match std::process::Command::new("sh").args(["-c", &test_cmd]).output() {
+            Ok(output) => {
+                debug!("Basic connection result: {}", String::from_utf8_lossy(&output.stdout));
+            }
+            Err(e) => {
+                debug!("Basic connection failed: {}", e);
+            }
+        }
+
+        // Test 2: Authentication test
+        debug!("Test 2: Authentication test...");
+        let auth_cmd = format!(r#"printf "AUTHENTICATE \"\"\r\nQUIT\r\n" | nc localhost {} -w 3"#, self.control_port);
+        match std::process::Command::new("sh").args(["-c", &auth_cmd]).output() {
+            Ok(output) => {
+                let out = String::from_utf8_lossy(&output.stdout);
+                debug!("Auth test result: '{}'", out);
+                if out.contains("250") {
+                    debug!("Authentication appears to work");
+                } else {
+                    debug!("Authentication may be failing");
+                }
+            }
+            Err(e) => {
+                debug!("Auth test failed: {}", e);
+            }
+        }
+
+        // Test 3: Try GETINFO to see if we can get any info
+        debug!("Test 3: GETINFO test...");
+        let info_cmd = format!(r#"printf "AUTHENTICATE \"\"\r\nGETINFO version\r\nQUIT\r\n" | nc localhost {} -w 3"#, self.control_port);
+        match std::process::Command::new("sh").args(["-c", &info_cmd]).output() {
+            Ok(output) => {
+                debug!("GETINFO result: '{}'", String::from_utf8_lossy(&output.stdout));
+            }
+            Err(e) => {
+                debug!("GETINFO test failed: {}", e);
+            }
+        }
+
+        // Test 4: Check if NEWNYM is rate limited
+        debug!("Test 4: Checking MaxClientCircuitsPending...");
+        let rate_cmd = format!(r#"printf "AUTHENTICATE \"\"\r\nGETINFO config/MaxCircuitDirtiness\r\nQUIT\r\n" | nc localhost {} -w 3"#, self.control_port);
+        match std::process::Command::new("sh").args(["-c", &rate_cmd]).output() {
+            Ok(output) => {
+                debug!("Rate limit info: '{}'", String::from_utf8_lossy(&output.stdout));
+            }
+            Err(e) => {
+                debug!("Rate limit check failed: {}", e);
+            }
+        }
+
+        debug!("=== END CONTROL PORT DEBUG ===");
+        Ok(())
     }
 
     /// Test Tor connection by checking IP via SOCKS proxy
@@ -485,6 +613,7 @@ pub fn get_tor_actions(torsocks_configs: &HashMap<String, TorsocksConfig>) -> Ve
         actions.push(TorAction::RestartTor);
         actions.push(TorAction::RefreshCircuit);
         actions.push(TorAction::TestConnection);
+        actions.push(TorAction::DebugControlPort);
     } else {
         actions.push(TorAction::StartTor);
     }
@@ -522,6 +651,7 @@ pub async fn get_tor_actions_async(torsocks_configs: &HashMap<String, TorsocksCo
         actions.push(TorAction::RestartTor);
         actions.push(TorAction::RefreshCircuit);
         actions.push(TorAction::TestConnection);
+        actions.push(TorAction::DebugControlPort);
     } else {
         debug!("TOR_DEBUG: Adding Tor daemon actions (not running)");
         actions.push(TorAction::StartTor);
@@ -579,6 +709,9 @@ pub fn tor_action_to_string(action: &TorAction) -> String {
         }
         TorAction::TestConnection => {
             format_entry("tor", "🧪", "Test Tor connection")
+        }
+        TorAction::DebugControlPort => {
+            format_entry("tor", "🔧", "Debug Tor control port")
         }
         TorAction::StartTorsocks(config) => {
             format_entry(
@@ -642,6 +775,7 @@ pub fn handle_tor_action(action: &TorAction, command_runner: &dyn CommandRunner)
             debug!("Stopping {} with torsocks", config.name);
             config.stop(command_runner)
         }
+        TorAction::DebugControlPort => todo!() 
     }
 }
 

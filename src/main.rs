@@ -2,8 +2,8 @@ mod streaming;
 
 // Import modules from the library crate
 use network_dmenu::{
-    bluetooth, command, constants, diagnostics, iwd, logger,
-    networkmanager, nextdns, rfkill, ssh, utils, SshProxyConfig, TorsocksConfig
+    bluetooth, command, constants, diagnostics, iwd, logger, networkmanager, nextdns, rfkill, ssh,
+    utils, SshProxyConfig, TorsocksConfig,
 };
 
 #[macro_use]
@@ -784,12 +784,8 @@ fn find_selected_action<'a>(
             ActionType::NextDns(nextdns_action) => {
                 action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
             }
-            ActionType::Ssh(ssh_action) => {
-                action == ssh::ssh_action_to_string(ssh_action)
-            }
-            ActionType::Tor(tor_action) => {
-                action == tor_action_to_string(tor_action)
-            }
+            ActionType::Ssh(ssh_action) => action == ssh::ssh_action_to_string(ssh_action),
+            ActionType::Tor(tor_action) => action == tor_action_to_string(tor_action),
         })
         .ok_or(format!("Action not found: {action}").into())
 }
@@ -1148,7 +1144,9 @@ async fn set_action(
             } else {
                 // Fall back to config file API key
                 debug!("Command line API key is empty in set_action, checking config file");
-                let key_opt = get_config(config_path).ok().and_then(|c| c.nextdns_api_key.clone());
+                let key_opt = get_config(config_path)
+                    .ok()
+                    .and_then(|c| c.nextdns_api_key.clone());
                 if let Some(key) = key_opt {
                     let trimmed_key = key.trim().to_string();
                     if !trimmed_key.is_empty() {
@@ -1224,65 +1222,65 @@ async fn set_action(
                 .show();
             Ok(result.success)
         }
-        ActionType::Ssh(ssh_action) => {
-            match ssh::handle_ssh_action(ssh_action, command_runner) {
-                Ok(_) => {
-                    let message = match ssh_action {
-                        network_dmenu::SshAction::StartProxy(config) => {
-                            format!("SSH SOCKS proxy {} started on port {}", config.name, config.port)
-                        }
-                        network_dmenu::SshAction::StopProxy(config) => {
-                            format!("SSH SOCKS proxy {} stopped", config.name)
-                        }
-                    };
-                    let _ = Notification::new()
-                        .summary("SSH Proxy")
-                        .body(&message)
-                        .show();
-                    Ok(true)
-                }
-                Err(e) => {
-                    let error_msg = format!("SSH proxy operation failed: {}", e);
-                    let _ = Notification::new()
-                        .summary("SSH Proxy Error")
-                        .body(&error_msg)
-                        .show();
-                    Ok(false)
-                }
+        ActionType::Ssh(ssh_action) => match ssh::handle_ssh_action(ssh_action, command_runner) {
+            Ok(_) => {
+                let message = match ssh_action {
+                    network_dmenu::SshAction::StartProxy(config) => {
+                        format!(
+                            "SSH SOCKS proxy {} started on port {}",
+                            config.name, config.port
+                        )
+                    }
+                    network_dmenu::SshAction::StopProxy(config) => {
+                        format!("SSH SOCKS proxy {} stopped", config.name)
+                    }
+                };
+                let _ = Notification::new()
+                    .summary("SSH Proxy")
+                    .body(&message)
+                    .show();
+                Ok(true)
             }
-        }
-        ActionType::Tor(tor_action) => {
-            match handle_tor_action(tor_action, command_runner) {
-                Ok(_) => {
-                    let message = match tor_action {
-                        TorAction::StartTor => "Tor daemon started successfully".to_string(),
-                        TorAction::StopTor => "Tor daemon stopped".to_string(),
-                        TorAction::RestartTor => "Tor daemon restarted".to_string(),
-                        TorAction::RefreshCircuit => "Tor circuit refreshed".to_string(),
-                        TorAction::TestConnection => "Tor connection test completed".to_string(),
-                        TorAction::StartTorsocks(config) => {
-                            format!("Started {} via Tor", config.description)
-                        }
-                        TorAction::StopTorsocks(config) => {
-                            format!("Stopped {} via Tor", config.description)
-                        }
-                    };
-                    let _ = Notification::new()
-                        .summary("Tor Proxy")
-                        .body(&message)
-                        .show();
-                    Ok(true)
-                }
-                Err(e) => {
-                    let error_msg = format!("Tor operation failed: {}", e);
-                    let _ = Notification::new()
-                        .summary("Tor Error")
-                        .body(&error_msg)
-                        .show();
-                    Ok(false)
-                }
+            Err(e) => {
+                let error_msg = format!("SSH proxy operation failed: {}", e);
+                let _ = Notification::new()
+                    .summary("SSH Proxy Error")
+                    .body(&error_msg)
+                    .show();
+                Ok(false)
             }
-        }
+        },
+        ActionType::Tor(tor_action) => match handle_tor_action(tor_action, command_runner) {
+            Ok(_) => {
+                let message = match tor_action {
+                    TorAction::StartTor => "Tor daemon started successfully".to_string(),
+                    TorAction::StopTor => "Tor daemon stopped".to_string(),
+                    TorAction::RestartTor => "Tor daemon restarted".to_string(),
+                    TorAction::RefreshCircuit => "Tor circuit refreshed".to_string(),
+                    TorAction::TestConnection => "Tor connection test completed".to_string(),
+                    TorAction::StartTorsocks(config) => {
+                        format!("Started {} via Tor", config.description)
+                    }
+                    TorAction::StopTorsocks(config) => {
+                        format!("Stopped {} via Tor", config.description)
+                    }
+                    TorAction::DebugControlPort => todo!(),
+                };
+                let _ = Notification::new()
+                    .summary("Tor Proxy")
+                    .body(&message)
+                    .show();
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = format!("Tor operation failed: {}", e);
+                let _ = Notification::new()
+                    .summary("Tor Error")
+                    .body(&error_msg)
+                    .show();
+                Ok(false)
+            }
+        },
     }
 }
 
@@ -1743,10 +1741,7 @@ mod tests {
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args
-            .country
-            .as_deref()
-            .or(config.country_filter.as_deref());
+        let country = args.country.as_deref().or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(2));
         assert_eq!(country, Some("Sweden"));
@@ -1756,10 +1751,7 @@ mod tests {
         args.country = Some("USA".to_string());
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args
-            .country
-            .as_deref()
-            .or(config.country_filter.as_deref());
+        let country = args.country.as_deref().or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(3));
         assert_eq!(country, Some("USA"));
