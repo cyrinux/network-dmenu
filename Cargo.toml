@@ -12,7 +12,7 @@ homepage = "https://github.com/cyrinux/network-dmenu"
 repository = "https://github.com/cyrinux/network-dmenu"
 
 [features]
-default = ["ml", "geofencing"]
+default = ["ml", "geofencing", "firewalld"]
 ml = ["smartcore", "ndarray", "linfa", "linfa-trees"]
 geofencing = ["sha2", "uuid", "thiserror"]
 firewalld = []

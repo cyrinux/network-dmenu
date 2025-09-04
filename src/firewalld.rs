@@ -21,6 +21,8 @@ pub enum FirewalldAction {
     GetCurrentZone,
     /// List all zones
     ListZones,
+    /// Open firewalld configuration editor
+    OpenConfigEditor,
 }
 
 /// Information about a firewalld zone
@@ -52,6 +54,9 @@ impl FirewalldAction {
             FirewalldAction::ListZones => {
                 format!("firewalld  - {} List all zones", ICON_LOCK)
             }
+            FirewalldAction::OpenConfigEditor => {
+                "firewalld  - ⚙️ Open firewall configuration".to_string()
+            }
         }
     }
 }
@@ -66,6 +71,7 @@ pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<Firewall
     let mut actions = vec![
         FirewalldAction::GetCurrentZone,
         FirewalldAction::ListZones,
+        FirewalldAction::OpenConfigEditor,
     ];
 
     // Add zone switching actions
@@ -125,6 +131,10 @@ pub async fn handle_firewalld_action(
                 };
                 println!("  {}{} - {}", zone.name, marker, zone.description);
             }
+            Ok(true)
+        }
+        FirewalldAction::OpenConfigEditor => {
+            open_firewall_config_editor()?;
             Ok(true)
         }
     }
@@ -255,6 +265,89 @@ fn set_panic_mode(enable: bool, command_runner: &dyn CommandRunner) -> Result<()
     Ok(())
 }
 
+/// Open firewalld configuration editor
+fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
+    debug!("Opening firewalld configuration editor");
+
+    // Try different firewalld GUI tools in order of preference
+    let gui_tools = [
+        "firewall-config",      // Official GNOME firewalld GUI
+        "firewall-applet",      // System tray applet with config option
+        "gufw",                 // UFW frontend that can work with firewalld
+    ];
+
+    for tool in &gui_tools {
+        if Command::new("which")
+            .arg(tool)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            debug!("Found firewall GUI tool: {}", tool);
+            let status = Command::new(tool).status()?;
+            
+            if status.success() {
+                debug!("Successfully launched {}", tool);
+                return Ok(());
+            } else {
+                debug!("Failed to launch {}", tool);
+            }
+        }
+    }
+
+    // Fallback: try to open firewall configuration with system settings
+    let fallback_commands = [
+        ("gnome-control-center", vec!["network"]),
+        ("systemsettings5", vec!["kcm_firewall"]),
+        ("systemsettings", vec!["firewall"]),
+        ("unity-control-center", vec!["network"]),
+    ];
+
+    for (command, args) in &fallback_commands {
+        if Command::new("which")
+            .arg(command)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            debug!("Trying fallback: {} with args {:?}", command, args);
+            let status = Command::new(command).args(args).status()?;
+            
+            if status.success() {
+                debug!("Successfully launched {} with network settings", command);
+                return Ok(());
+            }
+        }
+    }
+
+    // Final fallback: open a terminal with firewall-cmd help
+    let terminal_commands = [
+        ("gnome-terminal", vec!["--", "firewall-cmd", "--help"]),
+        ("konsole", vec!["-e", "firewall-cmd", "--help"]),
+        ("xterm", vec!["-e", "firewall-cmd", "--help"]),
+        ("terminator", vec!["-e", "firewall-cmd --help"]),
+    ];
+
+    for (terminal, args) in &terminal_commands {
+        if Command::new("which")
+            .arg(terminal)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            debug!("Opening terminal with firewall-cmd help: {}", terminal);
+            let status = Command::new(terminal).args(args).status()?;
+            
+            if status.success() {
+                debug!("Successfully launched terminal with firewall-cmd help");
+                return Ok(());
+            }
+        }
+    }
+
+    Err("No firewall configuration tool found. Please install firewall-config, gufw, or a system settings app.".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +369,9 @@ mod tests {
     }
 
     impl CommandRunner for MockCommandRunner {
-        fn run_command(&self, _program: &str, _args: &[&str]) -> Result<Output, Box<dyn Error>> {
+        fn run_command(&self, _program: &str, _args: &[&str]) -> Result<Output, std::io::Error> {
+            use std::os::unix::process::ExitStatusExt;
+            
             Ok(Output {
                 status: if self.should_succeed {
                     ExitStatus::from_raw(0)
@@ -305,6 +400,9 @@ mod tests {
 
         let list_zones = FirewalldAction::ListZones;
         assert!(list_zones.to_display_string().contains("List all zones"));
+
+        let config_editor = FirewalldAction::OpenConfigEditor;
+        assert!(config_editor.to_display_string().contains("Open firewall configuration"));
     }
 
     #[test]
