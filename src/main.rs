@@ -117,6 +117,10 @@ struct Args {
     create_zone: Option<String>,
     
     #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Add fingerprint to existing zone (for large areas)")]
+    add_fingerprint: Option<String>,
+    
+    #[cfg(feature = "geofencing")]
     #[arg(long, help = "List all geofence zones")]
     list_zones: bool,
     
@@ -1942,9 +1946,38 @@ async fn handle_geofencing_commands(args: &Args) -> Result<Option<Result<(), Box
         match client.create_zone(zone_name.clone(), actions).await {
             Ok(zone) => {
                 println!("Created zone '{}' with ID: {}", zone.name, zone.id);
-                println!("Confidence score: {:.2}", zone.fingerprint.confidence_score);
+                if let Some(first_fingerprint) = zone.fingerprints.first() {
+                    println!("Confidence score: {:.2}", first_fingerprint.confidence_score);
+                }
+                println!("Fingerprints: {}", zone.fingerprints.len());
             },
             Err(e) => eprintln!("Failed to create zone: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Add fingerprint to existing zone
+    if let Some(ref zone_name) = args.add_fingerprint {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+        
+        match client.send_command(DaemonCommand::AddFingerprint { zone_name: zone_name.clone() }).await {
+            Ok(DaemonResponse::FingerprintAdded { success, message }) => {
+                if success {
+                    println!("✅ {}", message);
+                } else {
+                    println!("ℹ️ {}", message);
+                }
+            },
+            Ok(_) => {
+                eprintln!("Unexpected response from daemon");
+            },
+            Err(e) => {
+                eprintln!("Failed to add fingerprint: {}", e);
+            }
         }
         return Ok(Some(Ok(())));
     }

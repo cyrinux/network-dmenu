@@ -9,6 +9,7 @@ use super::{
     PrivacyMode, Result, ZoneActions,
 };
 use chrono::{DateTime, Utc};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -186,7 +187,7 @@ impl ZoneManager {
         let zone = GeofenceZone {
             id: generate_zone_id(),
             name,
-            fingerprint,
+            fingerprints: vec![fingerprint],
             confidence_threshold: self.config.confidence_threshold,
             actions,
             created_at: Utc::now(),
@@ -201,6 +202,56 @@ impl ZoneManager {
         self.save_zones_to_disk()?;
         
         Ok(zone)
+    }
+
+    /// Add a new fingerprint to an existing zone (for large areas with multiple rooms)
+    pub async fn add_fingerprint_to_zone(&mut self, zone_name: &str) -> Result<bool> {
+        // Create location fingerprint from current location
+        let fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
+        
+        if fingerprint.confidence_score < 0.3 {
+            return Err(GeofenceError::LocationDetection(
+                "Insufficient WiFi networks for reliable fingerprint".to_string()
+            ));
+        }
+        
+        // Find zone by name (get the first matching zone if multiple zones have the same name)
+        let zone_id = self.zones
+            .iter()
+            .find(|(_, zone)| zone.name == zone_name)
+            .map(|(id, _)| id.clone());
+            
+        if let Some(id) = zone_id {
+            if let Some(zone) = self.zones.get_mut(&id) {
+                // Check if this fingerprint is too similar to existing ones
+                let is_significantly_different = zone.fingerprints.iter().all(|existing| {
+                    calculate_weighted_similarity(&fingerprint, existing) < 0.9
+                });
+                
+                if is_significantly_different {
+                    zone.fingerprints.push(fingerprint);
+                    // Borrow ends here naturally
+                } else {
+                    info!("Fingerprint too similar to existing ones in zone '{}'", zone_name);
+                    return Ok(false);
+                }
+            } else {
+                return Err(GeofenceError::ZoneNotFound(format!("Zone '{}' not found", zone_name)));
+            }
+            
+            // Now we can borrow self immutably 
+            self.save_zones_to_disk()?;
+            
+            if let Some(zone) = self.zones.get(&id) {
+                info!("Added new fingerprint to zone '{}' (total: {} fingerprints)", zone_name, zone.fingerprints.len());
+                Ok(true)
+            } else {
+                // This shouldn't happen but handle it gracefully
+                Ok(true)
+            }
+        } else {
+            Err(GeofenceError::ZoneNotFound(format!("No zone named '{}' found", zone_name)))
+        }
     }
     
     /// Detect current location and find matching zone
@@ -261,10 +312,14 @@ impl ZoneManager {
         let mut best_similarity = 0.0;
         
         for zone in self.zones.values() {
-            let similarity = calculate_weighted_similarity(&zone.fingerprint, fingerprint);
+            // Check similarity against all fingerprints in the zone, use the best match
+            let max_similarity = zone.fingerprints
+                .iter()
+                .map(|zone_fingerprint| calculate_weighted_similarity(zone_fingerprint, fingerprint))
+                .fold(0.0, f64::max);
             
-            if similarity > best_similarity && similarity >= zone.confidence_threshold {
-                best_similarity = similarity;
+            if max_similarity > best_similarity && max_similarity >= zone.confidence_threshold {
+                best_similarity = max_similarity;
                 best_match = Some(zone.clone());
             }
         }
@@ -356,15 +411,27 @@ impl ZoneManager {
         let current_fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
         
         if let Some(zone) = self.zones.get_mut(zone_id) {
-            // Merge fingerprints - simple approach: add new networks
-            zone.fingerprint.wifi_networks.extend(current_fingerprint.wifi_networks);
+            // Check if this fingerprint is significantly different from existing ones
+            let is_significantly_different = zone.fingerprints.iter().all(|existing| {
+                calculate_weighted_similarity(&current_fingerprint, existing) < 0.9
+            });
             
-            // Update timestamp
-            zone.fingerprint.timestamp = Utc::now();
-            
-            // Recalculate confidence
-            zone.fingerprint.confidence_score = zone.fingerprint.wifi_networks.len() as f64 / 10.0;
-            zone.fingerprint.confidence_score = zone.fingerprint.confidence_score.min(0.95);
+            if is_significantly_different {
+                // Add as new fingerprint
+                zone.fingerprints.push(current_fingerprint);
+            } else {
+                // Merge with the most similar existing fingerprint
+                if let Some(most_similar_fp) = zone.fingerprints.iter_mut().max_by(|a, b| {
+                    let sim_a = calculate_weighted_similarity(&current_fingerprint, a);
+                    let sim_b = calculate_weighted_similarity(&current_fingerprint, b);
+                    sim_a.partial_cmp(&sim_b).unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    // Merge new networks into existing fingerprint
+                    most_similar_fp.wifi_networks.extend(current_fingerprint.wifi_networks);
+                    most_similar_fp.timestamp = Utc::now();
+                    most_similar_fp.confidence_score = (most_similar_fp.wifi_networks.len() as f64 / 10.0).min(0.95);
+                }
+            }
             
             Ok(())
         } else {

@@ -121,8 +121,8 @@ pub struct GeofenceZone {
     pub id: String,
     /// Human-readable zone name
     pub name: String,
-    /// Location fingerprint for matching
-    pub fingerprint: LocationFingerprint,
+    /// Location fingerprints for matching (supports multiple fingerprints per zone)
+    pub fingerprints: Vec<LocationFingerprint>,
     /// Confidence threshold for zone matching (0.0 to 1.0)
     pub confidence_threshold: f64,
     /// Actions to execute in this zone
@@ -197,6 +197,9 @@ pub enum GeofenceError {
     
     #[error("Zone matching failed: {0}")]
     ZoneMatching(String),
+    
+    #[error("Zone not found: {0}")]
+    ZoneNotFound(String),
     
     #[error("Configuration error: {0}")]
     Config(String),

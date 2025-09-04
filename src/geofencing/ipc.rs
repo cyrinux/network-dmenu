@@ -34,6 +34,10 @@ pub enum DaemonCommand {
     ActivateZone {
         zone_id: String,
     },
+    /// Add fingerprint to existing zone
+    AddFingerprint {
+        zone_name: String,
+    },
     /// Execute specific actions
     ExecuteActions {
         actions: ZoneActions,
@@ -68,6 +72,11 @@ pub enum DaemonResponse {
     /// Zone creation result
     ZoneCreated {
         zone: GeofenceZone,
+    },
+    /// Fingerprint addition result
+    FingerprintAdded {
+        success: bool,
+        message: String,
     },
     /// Daemon status information
     Status {
