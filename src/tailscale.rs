@@ -1,5 +1,5 @@
 use crate::command::{is_command_installed, CommandRunner};
-use crate::constants::{ICON_CHECK, ICON_LEAF, ICON_STAR, MULLVAD_CONNECTED_API, SUGGESTED_CHECK};
+use crate::constants::{ICON_CHECK, ICON_STAR, MULLVAD_CONNECTED_API, SUGGESTED_CHECK};
 use crate::format_entry;
 use crate::utils::get_flag;
 use log::{debug, error};
@@ -522,14 +522,14 @@ pub fn get_mullvad_actions(
             );
             let flag = get_flag(country);
 
-            // Create display text with active check - include IP for extract_node_ip()
-            let active_mark = if is_active { ICON_CHECK } else { &flag };
+            // Create display text with consistent formatting - include IP for extract_node_ip()
+            let display_icon = if is_active { ICON_CHECK } else { &flag };
             let display_text = format!(
-                "{} {} - {} [{}] {}",
-                active_mark, node_short_name, node_name, country, node_ip
+                "{} - {} ({}) [{}]",
+                node_short_name, node_name, country, node_ip
             );
 
-            format_entry("exit-node", ICON_LEAF, &display_text)
+            format_entry("exit-node", display_icon, &display_text)
         })
         .collect();
 
@@ -546,7 +546,7 @@ pub fn get_mullvad_actions(
                 // Mark as suggested and move to top
                 let mut existing_action = mullvad_results.remove(pos);
                 if !existing_action.contains(SUGGESTED_CHECK) {
-                    existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
+                    existing_action = format!("{} (suggested)", existing_action);
                 }
                 mullvad_results.insert(0, existing_action);
             } else if let Some(pos) = other_nodes
@@ -569,7 +569,7 @@ pub fn get_mullvad_actions(
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!("{} - {} (suggested) {}", node_short_name, suggested_name, node_ip),
+                        &format!("{} - {} [{}] (suggested)", node_short_name, suggested_name, node_ip),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
