@@ -13,7 +13,7 @@
 
 ![network-dmenu](https://github.com/user-attachments/assets/d07a6fb4-7558-4cc8-b7cd-9bb1321265c7)
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration) • [Contributing](#-contributing)
+[Features](#-features) • [Geofencing](#-geofencing--location-based-automation) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration) • [Contributing](#-contributing)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## 🎯 Overview
 
-`network-dmenu` is a powerful, dmenu-based network management tool that unifies control over multiple networking subsystems into a single, fast interface. Whether you're managing VPN connections, switching between WiFi networks, controlling Bluetooth devices, or running network diagnostics, network-dmenu provides instant access to all these capabilities through a simple menu system.
+`network-dmenu` is a powerful, dmenu-based network management tool that unifies control over multiple networking subsystems into a single, fast interface. Whether you're managing VPN connections, switching between WiFi networks, controlling Bluetooth devices, running network diagnostics, or setting up automatic location-based network configuration, network-dmenu provides instant access to all these capabilities through a simple menu system.
 
 ### Why network-dmenu?
 
@@ -29,6 +29,7 @@
 - **🎮 Single Interface**: Control WiFi, VPN, Bluetooth, Tailscale, and more from one menu
 - **🔧 Highly Configurable**: Extensive customization options via TOML configuration
 - **🛡️ Security Focused**: Supports Tailscale Lock, secure password prompts, and privilege escalation
+- **📍 Privacy-First Geofencing**: Automatic location-based network configuration without GPS
 - **📊 Comprehensive Diagnostics**: Built-in network troubleshooting tools
 - **🎨 Clean UI**: Intuitive menu organization with emoji indicators and smart filtering
 
@@ -92,6 +93,69 @@
 - 🔌 Active connection monitoring
 - 🏎️ Speed tests (multiple providers)
 - 🎯 DNS benchmark testing
+
+### 📍 Geofencing & Location-Based Automation
+
+#### **Privacy-First Location Detection**
+- 📶 WiFi fingerprinting without GPS or location services
+- 🔐 SHA-256 hashing of network identifiers for privacy
+- 🏠 Automatic "home", "office", "coffee shop" zone detection
+- ⚡ Real-time location monitoring with 30-second intervals
+- 🎯 Configurable confidence thresholds (0.8 default)
+
+#### **Zone-Based Network Actions**
+- 🔄 Automatic WiFi network switching per location
+- 🛡️ Location-specific VPN connections
+- 🌐 Tailscale exit node switching based on zones
+- 🎧 Bluetooth device connection automation
+- ⚙️ Custom command execution per zone
+
+#### **Geofencing Daemon**
+- 🚀 Background monitoring service with Unix socket IPC
+- 📊 Zone change statistics and confidence tracking
+- 💾 Persistent zone storage in `~/.local/share/network-dmenu/`
+- 🔔 Desktop notifications on zone transitions
+- 🎮 Complete CLI management interface
+
+#### **CLI Commands**
+```bash
+# Start background monitoring
+network-dmenu --daemon
+
+# Create zone from current location  
+network-dmenu --create-zone "home"
+
+# Show current location fingerprint
+network-dmenu --where-am-i
+
+# List all configured zones
+network-dmenu --list-zones
+
+# Check daemon status
+network-dmenu --daemon-status
+
+# Stop monitoring
+network-dmenu --stop-daemon
+```
+
+#### **Zone Configuration Example**
+```toml
+[geofencing]
+enabled = true
+privacy_mode = "High"           # Only WiFi, hashed identifiers
+scan_interval_seconds = 30      # Check location every 30 seconds
+confidence_threshold = 0.8      # 80% confidence required
+notifications = true            # Desktop notifications on zone changes
+
+[[geofencing.zones]]
+name = "Home"
+[geofencing.zones.actions]
+wifi = "HomeWiFi"
+vpn = "HomeVPN"  
+tailscale_exit_node = "home-server"
+bluetooth = ["Headphones", "Mouse"]
+custom_commands = ["systemctl --user start syncthing"]
+```
 
 ### 🎛️ System Controls
 

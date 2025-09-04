@@ -1,0 +1,2 @@
+- implement geofencing actions
+- add an auto exit-node action, that just use the recommended exit-node

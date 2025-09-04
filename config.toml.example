@@ -26,3 +26,105 @@ cmd = "sudo resolvectl dns wlan0 '1.1.1.1#cloudflare-dns.com'; sudo resolvectl d
 [[actions]]
 display = "📡 DNS: Use Hagezi's server"
 cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.com'; sudo resolvectl dnsovertls wlan0 yes"
+
+# Geofencing Configuration
+# Automatically detect location changes using WiFi fingerprinting and execute network actions
+[geofencing]
+# Enable geofencing daemon
+enabled = true
+
+# Privacy mode for location detection
+# - "High": Only WiFi networks, hashed identifiers, local processing only (recommended)
+# - "Medium": WiFi + Bluetooth beacons, some caching allowed (planned)
+# - "Low": All methods including IP geolocation (planned)
+privacy_mode = "High"
+
+# How often to scan for location changes (in seconds)
+scan_interval_seconds = 30
+
+# Minimum confidence threshold to trigger zone changes (0.0-1.0)
+# Higher values = more accurate detection but may miss legitimate changes
+confidence_threshold = 0.8
+
+# Send desktop notifications on zone changes
+notifications = true
+
+# Geofence zones - these are automatically created via CLI commands
+# Use: network-dmenu --create-zone "home" to create a new zone
+# Example zones (automatically populated by the daemon):
+
+[[geofencing.zones]]
+id = "home-12345678"
+name = "Home"
+created_at = "2025-09-04T12:00:00Z"
+
+# Zone actions - what to do when entering this zone
+[geofencing.zones.actions]
+# Send desktop notifications
+notifications = true
+
+# Connect to specific WiFi network
+wifi = "HomeWiFi"
+
+# Connect to VPN
+vpn = "HomeVPN"
+
+# Set Tailscale exit node
+tailscale_exit_node = "home-server"
+
+# Enable/disable Tailscale shields
+tailscale_shields = false
+
+# Connect Bluetooth devices
+bluetooth = ["Bluetooth Headphones", "Wireless Mouse"]
+
+# Execute custom commands
+custom_commands = [
+    "systemctl --user start syncthing",
+    "notify-send 'Welcome Home' 'Network configured for home use'"
+]
+
+# WiFi fingerprint (automatically generated)
+[geofencing.zones.fingerprint]
+confidence_score = 0.90
+timestamp = "2025-09-04T12:00:00Z"
+# WiFi signatures are automatically collected and hashed for privacy
+
+[[geofencing.zones]]
+id = "office-87654321" 
+name = "Office"
+created_at = "2025-09-04T09:00:00Z"
+
+[geofencing.zones.actions]
+notifications = true
+wifi = "OfficeWiFi"
+vpn = "CorporateVPN"
+tailscale_exit_node = "office-gateway"
+tailscale_shields = true
+custom_commands = [
+    "systemctl --user stop syncthing",
+    "notify-send 'At Office' 'Corporate network configured'"
+]
+
+[geofencing.zones.fingerprint]
+confidence_score = 0.85
+timestamp = "2025-09-04T09:00:00Z"
+
+# Coffee shop example
+[[geofencing.zones]]
+id = "cafe-11223344"
+name = "Coffee Shop"
+created_at = "2025-09-04T14:30:00Z"
+
+[geofencing.zones.actions] 
+notifications = true
+wifi = "CafeWiFi"
+vpn = "PublicVPN"
+tailscale_shields = true
+custom_commands = [
+    "notify-send 'Public WiFi' 'Secure connection enabled'"
+]
+
+[geofencing.zones.fingerprint]
+confidence_score = 0.75
+timestamp = "2025-09-04T14:30:00Z"
