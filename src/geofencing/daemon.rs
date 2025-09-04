@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
 
+// Import network functions from the main codebase
+use crate::command::{CommandRunner, RealCommandRunner};
+
 /// Main geofencing daemon
 pub struct GeofencingDaemon {
     zone_manager: Arc<Mutex<ZoneManager>>,
@@ -337,23 +340,110 @@ impl GeofencingDaemon {
         // Connect to WiFi
         if let Some(ref wifi_ssid) = actions.wifi {
             info!("Connecting to WiFi: {}", wifi_ssid);
-            // TODO: Implement WiFi connection using existing networkmanager code
-            // For now, just log the action
-            debug!("Would connect to WiFi: {}", wifi_ssid);
+            
+            let command_runner = RealCommandRunner;
+            
+            // Try NetworkManager first, then fall back to IWD
+            let success = if crate::command::is_command_installed("nmcli") {
+                // Use NetworkManager - attempt connection without password first
+                let result = command_runner.run_command(
+                    "nmcli", 
+                    &["device", "wifi", "connect", wifi_ssid]
+                );
+                
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Successfully connected to WiFi: {}", wifi_ssid);
+                        true
+                    },
+                    _ => {
+                        warn!("Failed to connect to WiFi {} (may need password)", wifi_ssid);
+                        false
+                    }
+                }
+            } else if crate::command::is_command_installed("iwctl") {
+                // Use IWD - attempt connection
+                let result = command_runner.run_command(
+                    "iwctl",
+                    &["station", "wlan0", "connect", wifi_ssid]
+                );
+                
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Successfully connected to WiFi: {}", wifi_ssid);
+                        true
+                    },
+                    _ => {
+                        warn!("Failed to connect to WiFi {} (may need password)", wifi_ssid);
+                        false
+                    }
+                }
+            } else {
+                warn!("No WiFi manager (nmcli/iwctl) available");
+                false
+            };
+            
+            if !success {
+                error!("WiFi connection to {} failed - geofencing may not work as expected", wifi_ssid);
+            }
         }
 
         // Connect to VPN
         if let Some(ref vpn_name) = actions.vpn {
             info!("Connecting to VPN: {}", vpn_name);
-            // TODO: Implement VPN connection
-            debug!("Would connect to VPN: {}", vpn_name);
+            
+            let command_runner = RealCommandRunner;
+            
+            if crate::command::is_command_installed("nmcli") {
+                let result = command_runner.run_command(
+                    "nmcli", 
+                    &["connection", "up", vpn_name]
+                );
+                
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Successfully connected to VPN: {}", vpn_name);
+                    },
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        error!("Failed to connect to VPN {}: {}", vpn_name, stderr);
+                    },
+                    Err(e) => {
+                        error!("Error connecting to VPN {}: {}", vpn_name, e);
+                    }
+                }
+            } else {
+                warn!("NetworkManager (nmcli) not available for VPN connection");
+            }
         }
 
         // Configure Tailscale exit node
         if let Some(ref exit_node) = actions.tailscale_exit_node {
             info!("Setting Tailscale exit node: {}", exit_node);
-            // TODO: Implement Tailscale exit node switching
-            debug!("Would set Tailscale exit node: {}", exit_node);
+            
+            let command_runner = RealCommandRunner;
+            
+            if crate::command::is_command_installed("tailscale") {
+                let result = command_runner.run_command(
+                    "tailscale", 
+                    &["set", &format!("--exit-node={}", exit_node)]
+                );
+                
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Successfully set Tailscale exit node: {}", exit_node);
+                    },
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        error!("Failed to set Tailscale exit node {}: {}", exit_node, stderr);
+                    },
+                    Err(e) => {
+                        error!("Error setting Tailscale exit node {}: {}", exit_node, e);
+                    }
+                }
+            } else {
+                warn!("Tailscale not available for exit node configuration");
+            }
         }
 
         // Configure Tailscale shields
@@ -362,25 +452,161 @@ impl GeofencingDaemon {
                 "Setting Tailscale shields: {}",
                 if shields_up { "up" } else { "down" }
             );
-            // TODO: Implement Tailscale shields control
-            debug!("Would set Tailscale shields: {}", shields_up);
+            
+            let command_runner = RealCommandRunner;
+            
+            if crate::command::is_command_installed("tailscale") {
+                let shield_arg = if shields_up { "--shields-up=true" } else { "--shields-up=false" };
+                let result = command_runner.run_command("tailscale", &["set", shield_arg]);
+                
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Successfully set Tailscale shields: {}", if shields_up { "up" } else { "down" });
+                    },
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        error!("Failed to set Tailscale shields: {}", stderr);
+                    },
+                    Err(e) => {
+                        error!("Error setting Tailscale shields: {}", e);
+                    }
+                }
+            } else {
+                warn!("Tailscale not available for shields configuration");
+            }
         }
 
         // Connect Bluetooth devices
-        for device in &actions.bluetooth {
-            info!("Connecting Bluetooth device: {}", device);
-            // TODO: Implement Bluetooth connection
-            debug!("Would connect Bluetooth device: {}", device);
+        for device_name in &actions.bluetooth {
+            info!("Connecting Bluetooth device: {}", device_name);
+            
+            let command_runner = RealCommandRunner;
+            
+            if crate::command::is_command_installed("bluetoothctl") {
+                // First, try to find the device by name to get its address
+                match command_runner.run_command("bluetoothctl", &["devices"]) {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let mut device_address: Option<String> = None;
+                        
+                        // Look for the device by name in the output
+                        for line in stdout.lines() {
+                            if line.contains(device_name) {
+                                // Extract MAC address from line format: "Device AA:BB:CC:DD:EE:FF Device Name"
+                                if let Some(address_start) = line.find("Device ") {
+                                    if let Some(address_end) = line[address_start + 7..].find(' ') {
+                                        device_address = Some(line[address_start + 7..address_start + 7 + address_end].to_string());
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let Some(address) = device_address {
+                            // Try to connect using the address
+                            match command_runner.run_command("bluetoothctl", &["connect", &address]) {
+                                Ok(output) if output.status.success() => {
+                                    info!("Successfully connected to Bluetooth device: {} ({})", device_name, address);
+                                },
+                                _ => {
+                                    warn!("Failed to connect to Bluetooth device: {} ({})", device_name, address);
+                                }
+                            }
+                        } else {
+                            warn!("Bluetooth device '{}' not found in paired devices", device_name);
+                        }
+                    },
+                    _ => {
+                        error!("Failed to list Bluetooth devices for {}", device_name);
+                    }
+                }
+            } else {
+                warn!("bluetoothctl not available for Bluetooth connection");
+            }
         }
 
         // Execute custom commands
         for command in &actions.custom_commands {
             info!("Executing custom command: {}", command);
-            // TODO: Implement safe custom command execution
-            debug!("Would execute custom command: {}", command);
+            
+            // Security: Only allow predefined safe commands or whitelist patterns
+            if Self::is_safe_command(command) {
+                match tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .output()
+                    .await
+                {
+                    Ok(output) => {
+                        if output.status.success() {
+                            info!("Successfully executed custom command: {}", command);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stdout.trim().is_empty() {
+                                debug!("Command output: {}", stdout.trim());
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            error!("Custom command failed: {} - Error: {}", command, stderr.trim());
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to execute custom command '{}': {}", command, e);
+                    }
+                }
+            } else {
+                warn!("Skipped potentially unsafe custom command: {}", command);
+            }
         }
 
         Ok(())
+    }
+
+    /// Check if a custom command is safe to execute
+    /// This is a security measure to prevent dangerous commands
+    fn is_safe_command(command: &str) -> bool {
+        let command_lower = command.to_lowercase();
+        
+        // Block dangerous commands and patterns
+        let dangerous_patterns = [
+            "rm -rf", "rm -r", "sudo rm", "format", "mkfs",
+            "dd if=", "fdisk", "parted", "> /dev/", "shutdown", "reboot", "halt",
+            "iptables -F", "ufw --force", "chmod 777", "chmod -R 777",
+            "curl", "wget", "nc ", "netcat", "telnet", "ssh ", "scp ",
+            "python -c", "perl -e", "eval", "exec", "`", "$(", 
+            "passwd", "su ", "sudo su", "/etc/shadow", "/etc/passwd",
+            "crontab", "/var/", "/etc/", "/root/", "/boot/"
+        ];
+        
+        // Check for dangerous patterns
+        for pattern in &dangerous_patterns {
+            if command_lower.contains(pattern) {
+                return false;
+            }
+        }
+        
+        // Allow safe commands (whitelist approach would be more secure)
+        let safe_prefixes = [
+            "systemctl --user start",
+            "systemctl --user stop", 
+            "systemctl --user restart",
+            "notify-send",
+            "echo ",
+            "printf ",
+            "logger ",
+            "touch /tmp/",
+            "mkdir -p /tmp/",
+        ];
+        
+        // Check for safe command prefixes
+        for prefix in &safe_prefixes {
+            if command_lower.starts_with(prefix) {
+                return true;
+            }
+        }
+        
+        // For now, be conservative and reject unknown commands
+        // In production, you might want a more sophisticated whitelist
+        false
     }
 
     /// Send zone change notification
