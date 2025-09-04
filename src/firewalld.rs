@@ -1,0 +1,335 @@
+//! Firewalld integration module
+//!
+//! This module provides functionality to interact with firewalld zones and panic mode
+//! using the firewall-cmd command.
+
+use crate::command::CommandRunner;
+use crate::constants::{ICON_FIREWALL_ALLOW, ICON_FIREWALL_BLOCK, ICON_LOCK};
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::process::Command;
+
+/// Firewalld-related actions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FirewalldAction {
+    /// Change to a specific zone
+    SetZone(String),
+    /// Toggle panic mode on/off
+    TogglePanicMode(bool),
+    /// Get current zone
+    GetCurrentZone,
+    /// List all zones
+    ListZones,
+}
+
+/// Information about a firewalld zone
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewalldZone {
+    pub name: String,
+    pub description: String,
+    pub is_active: bool,
+    pub is_default: bool,
+}
+
+impl FirewalldAction {
+    /// Convert action to display string
+    pub fn to_display_string(&self) -> String {
+        match self {
+            FirewalldAction::SetZone(zone) => {
+                format!("firewalld  - {} Switch to zone: {}", ICON_FIREWALL_ALLOW, zone)
+            }
+            FirewalldAction::TogglePanicMode(enable) => {
+                if *enable {
+                    format!("firewalld  - {} Enable panic mode", ICON_FIREWALL_BLOCK)
+                } else {
+                    format!("firewalld  - {} Disable panic mode", ICON_FIREWALL_ALLOW)
+                }
+            }
+            FirewalldAction::GetCurrentZone => {
+                format!("firewalld  - {} Show current zone", ICON_LOCK)
+            }
+            FirewalldAction::ListZones => {
+                format!("firewalld  - {} List all zones", ICON_LOCK)
+            }
+        }
+    }
+}
+
+/// Get available firewalld actions
+pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<FirewalldAction> {
+    if !is_firewalld_available() {
+        debug!("firewall-cmd not available, skipping firewalld actions");
+        return vec![];
+    }
+
+    let mut actions = vec![
+        FirewalldAction::GetCurrentZone,
+        FirewalldAction::ListZones,
+    ];
+
+    // Add zone switching actions
+    if let Ok(zones) = get_available_zones(command_runner) {
+        let current_zone = get_current_zone(command_runner).unwrap_or_default();
+        
+        for zone in zones {
+            // Don't show action for current zone
+            if zone.name != current_zone {
+                actions.push(FirewalldAction::SetZone(zone.name));
+            }
+        }
+    }
+
+    // Add panic mode toggle
+    let panic_enabled = is_panic_mode_enabled(command_runner).unwrap_or(false);
+    actions.push(FirewalldAction::TogglePanicMode(!panic_enabled));
+
+    actions
+}
+
+/// Handle firewalld action execution
+pub async fn handle_firewalld_action(
+    action: &FirewalldAction,
+    command_runner: &dyn CommandRunner,
+) -> Result<bool, Box<dyn Error>> {
+    if !is_firewalld_available() {
+        return Err("firewall-cmd command not found. Please install firewalld.".into());
+    }
+
+    debug!("Handling firewalld action: {:?}", action);
+
+    match action {
+        FirewalldAction::SetZone(zone) => {
+            set_default_zone(zone, command_runner)?;
+            Ok(true)
+        }
+        FirewalldAction::TogglePanicMode(enable) => {
+            set_panic_mode(*enable, command_runner)?;
+            Ok(true)
+        }
+        FirewalldAction::GetCurrentZone => {
+            let zone = get_current_zone(command_runner)?;
+            println!("Current firewalld zone: {}", zone);
+            Ok(true)
+        }
+        FirewalldAction::ListZones => {
+            let zones = get_available_zones(command_runner)?;
+            println!("Available firewalld zones:");
+            for zone in zones {
+                let marker = if zone.is_active {
+                    " (active)"
+                } else if zone.is_default {
+                    " (default)"
+                } else {
+                    ""
+                };
+                println!("  {}{} - {}", zone.name, marker, zone.description);
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// Check if firewall-cmd is available
+fn is_firewalld_available() -> bool {
+    Command::new("which")
+        .arg("firewall-cmd")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Get the current active zone
+fn get_current_zone(command_runner: &dyn CommandRunner) -> Result<String, Box<dyn Error>> {
+    let output = command_runner.run_command("firewall-cmd", &["--get-default-zone"])?;
+    
+    if !output.status.success() {
+        return Err("Failed to get current zone".into());
+    }
+
+    let zone = String::from_utf8(output.stdout)?
+        .trim()
+        .to_string();
+    
+    debug!("Current firewalld zone: {}", zone);
+    Ok(zone)
+}
+
+/// Get available firewalld zones with information
+fn get_available_zones(command_runner: &dyn CommandRunner) -> Result<Vec<FirewalldZone>, Box<dyn Error>> {
+    // Get list of zones
+    let zones_output = command_runner.run_command("firewall-cmd", &["--get-zones"])?;
+    if !zones_output.status.success() {
+        return Err("Failed to get zones list".into());
+    }
+
+    let zones_str = String::from_utf8(zones_output.stdout)?;
+    let zone_names: Vec<&str> = zones_str.split_whitespace().collect();
+
+    // Get current default zone
+    let current_zone = get_current_zone(command_runner).unwrap_or_default();
+    
+    // Get active zones
+    let active_zones_output = command_runner.run_command("firewall-cmd", &["--get-active-zones"])?;
+    let active_zones_str = if active_zones_output.status.success() {
+        String::from_utf8(active_zones_output.stdout).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let mut zones = Vec::new();
+    
+    for zone_name in zone_names {
+        // Get zone description
+        let info_output = command_runner.run_command(
+            "firewall-cmd", 
+            &["--zone", zone_name, "--get-description"]
+        )?;
+        
+        let description = if info_output.status.success() {
+            String::from_utf8(info_output.stdout)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        } else {
+            format!("Zone: {}", zone_name)
+        };
+
+        let is_active = active_zones_str.contains(zone_name);
+        let is_default = zone_name == current_zone;
+
+        zones.push(FirewalldZone {
+            name: zone_name.to_string(),
+            description,
+            is_active,
+            is_default,
+        });
+    }
+
+    debug!("Found {} firewalld zones", zones.len());
+    Ok(zones)
+}
+
+/// Set the default firewalld zone
+fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
+    debug!("Setting firewalld zone to: {}", zone);
+    
+    let output = command_runner.run_command(
+        "firewall-cmd", 
+        &["--set-default-zone", zone]
+    )?;
+
+    if !output.status.success() {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to set zone to {}: {}", zone, error_msg).into());
+    }
+
+    debug!("Successfully set firewalld zone to: {}", zone);
+    Ok(())
+}
+
+/// Check if panic mode is enabled
+fn is_panic_mode_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
+    let output = command_runner.run_command("firewall-cmd", &["--query-panic-on"])?;
+    
+    // firewall-cmd returns 0 if panic mode is on, 1 if off
+    Ok(output.status.success())
+}
+
+/// Set panic mode on or off
+fn set_panic_mode(enable: bool, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
+    let arg = if enable { "--panic-on" } else { "--panic-off" };
+    
+    debug!("Setting firewalld panic mode: {}", enable);
+    
+    let output = command_runner.run_command("firewall-cmd", &[arg])?;
+
+    if !output.status.success() {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to {} panic mode: {}", 
+                          if enable { "enable" } else { "disable" }, 
+                          error_msg).into());
+    }
+
+    debug!("Successfully {} panic mode", if enable { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::CommandRunner;
+    use std::process::{ExitStatus, Output};
+
+    struct MockCommandRunner {
+        should_succeed: bool,
+        mock_output: String,
+    }
+
+    impl MockCommandRunner {
+        fn new(should_succeed: bool, output: &str) -> Self {
+            Self {
+                should_succeed,
+                mock_output: output.to_string(),
+            }
+        }
+    }
+
+    impl CommandRunner for MockCommandRunner {
+        fn run_command(&self, _program: &str, _args: &[&str]) -> Result<Output, Box<dyn Error>> {
+            Ok(Output {
+                status: if self.should_succeed {
+                    ExitStatus::from_raw(0)
+                } else {
+                    ExitStatus::from_raw(1)
+                },
+                stdout: self.mock_output.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_firewalld_action_display_strings() {
+        let set_zone = FirewalldAction::SetZone("public".to_string());
+        assert!(set_zone.to_display_string().contains("Switch to zone: public"));
+
+        let panic_on = FirewalldAction::TogglePanicMode(true);
+        assert!(panic_on.to_display_string().contains("Enable panic mode"));
+
+        let panic_off = FirewalldAction::TogglePanicMode(false);
+        assert!(panic_off.to_display_string().contains("Disable panic mode"));
+
+        let current_zone = FirewalldAction::GetCurrentZone;
+        assert!(current_zone.to_display_string().contains("Show current zone"));
+
+        let list_zones = FirewalldAction::ListZones;
+        assert!(list_zones.to_display_string().contains("List all zones"));
+    }
+
+    #[test]
+    fn test_get_current_zone() {
+        let mock_runner = MockCommandRunner::new(true, "public\n");
+        let result = get_current_zone(&mock_runner);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "public");
+    }
+
+    #[test]
+    fn test_get_current_zone_failure() {
+        let mock_runner = MockCommandRunner::new(false, "");
+        let result = get_current_zone(&mock_runner);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_panic_mode_enabled() {
+        let mock_runner_on = MockCommandRunner::new(true, "");
+        assert_eq!(is_panic_mode_enabled(&mock_runner_on).unwrap(), true);
+
+        let mock_runner_off = MockCommandRunner::new(false, "");
+        assert_eq!(is_panic_mode_enabled(&mock_runner_off).unwrap(), false);
+    }
+}

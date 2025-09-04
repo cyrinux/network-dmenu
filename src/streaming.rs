@@ -16,6 +16,9 @@ use network_dmenu::{
     tailscale_prefs::parse_tailscale_prefs,
     tor,
 };
+
+#[cfg(feature = "firewalld")]
+use network_dmenu::firewalld::get_firewalld_actions;
 use std::error::Error;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -292,6 +295,15 @@ async fn stream_actions_simple(args: &Args, config: &Config, tx: mpsc::Unbounded
         }));
     }
 
+    // Firewalld
+    #[cfg(feature = "firewalld")]
+    {
+        let tx_clone = tx.clone();
+        handles.push(tokio::spawn(async move {
+            send_firewalld_actions(&tx_clone).await;
+        }));
+    }
+
     // Wait for all tasks
     for handle in handles {
         let _ = handle.await;
@@ -430,6 +442,15 @@ async fn produce_actions_streaming(
         let torsocks_apps = config.torsocks_apps.clone();
         tasks.push(tokio::spawn(async move {
             send_tor_actions(&tx_clone, &torsocks_apps).await;
+        }));
+    }
+
+    // Firewalld
+    #[cfg(feature = "firewalld")]
+    {
+        let tx_clone = tx.clone();
+        tasks.push(tokio::spawn(async move {
+            send_firewalld_actions(&tx_clone).await;
         }));
     }
 
@@ -816,6 +837,47 @@ async fn send_tor_actions(
     let total_elapsed = start_time.elapsed();
     debug!(
         "TOR_DEBUG: send_tor_actions() completed in {:?}",
+        total_elapsed
+    );
+}
+
+/// Send firewalld actions
+#[cfg(feature = "firewalld")]
+async fn send_firewalld_actions(tx: &mpsc::UnboundedSender<ActionType>) {
+    let start_time = std::time::Instant::now();
+    debug!("FIREWALLD_DEBUG: Starting send_firewalld_actions()");
+
+    let command_runner = RealCommandRunner;
+    let actions_start = std::time::Instant::now();
+    let actions = get_firewalld_actions(&command_runner);
+    let actions_elapsed = actions_start.elapsed();
+
+    debug!(
+        "FIREWALLD_DEBUG: get_firewalld_actions() took {:?}, got {} actions",
+        actions_elapsed,
+        actions.len()
+    );
+
+    for (i, action) in actions.iter().enumerate() {
+        debug!(
+            "FIREWALLD_DEBUG: Sending firewalld action {}/{}: {:?}",
+            i + 1,
+            actions.len(),
+            action
+        );
+        let send_result = tx.send(ActionType::Firewalld(action.clone()));
+        if let Err(e) = send_result {
+            debug!("FIREWALLD_DEBUG: Failed to send action: {:?}", e);
+        }
+    }
+    debug!(
+        "FIREWALLD_DEBUG: Finished sending all {} firewalld actions",
+        actions.len()
+    );
+
+    let total_elapsed = start_time.elapsed();
+    debug!(
+        "FIREWALLD_DEBUG: send_firewalld_actions() completed in {:?}",
         total_elapsed
     );
 }

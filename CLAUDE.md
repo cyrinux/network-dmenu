@@ -260,5 +260,151 @@ cargo clippy
 
 ---
 
+## 🔥 Firewalld Integration (September 2025)
+
+### Firewalld Support Implementation
+
+**Implemented comprehensive firewalld integration with zone switching and panic mode:**
+
+#### 🎯 What Was Implemented
+
+**1. Firewalld Module (`src/firewalld.rs`)**
+- Complete firewalld integration with `firewall-cmd` command
+- Zone switching functionality (public, home, work, etc.)
+- Panic mode toggle (blocks all connections instantly)  
+- Zone information display (current zone, all available zones)
+- Proper error handling when firewall-cmd is not available
+
+**2. Feature Flag Integration**
+- Added `firewalld` feature flag to Cargo.toml
+- Conditional compilation with `#[cfg(feature = "firewalld")]`
+- Can be built with: `cargo build --features firewalld`
+- Optional dependency - doesn't affect builds without the feature
+
+**3. Action Types and Display**
+- `FirewalldAction` enum with zone switching and panic mode actions
+- Integrated with main `ActionType` enum and action handling system
+- User-friendly display strings with appropriate icons
+- Notifications for successful operations
+
+**4. Streaming Integration**
+- Added to both streaming action producers in `streaming.rs`
+- Async firewalld action generation
+- Debug logging for troubleshooting
+
+#### 🔧 Available Firewalld Actions
+
+**Zone Management:**
+- **Switch Zone**: Change to different firewalld zones (public, home, work, trusted, etc.)
+- **Show Current Zone**: Display currently active zone
+- **List All Zones**: Show all available zones with descriptions
+
+**Security Controls:**  
+- **Panic Mode ON**: Block all network connections immediately (emergency lockdown)
+- **Panic Mode OFF**: Disable panic mode and restore normal firewall rules
+
+#### 🏗️ Technical Implementation
+
+**Files Modified/Created:**
+```
+src/firewalld.rs              # ✅ New firewalld integration module
+src/lib.rs                    # ✅ Added firewalld exports and ActionType
+src/main.rs                   # ✅ Added firewalld action handling
+src/streaming.rs              # ✅ Added firewalld to action streaming
+src/constants.rs              # ✅ Added ACTION_TYPE_FIREWALLD constant
+Cargo.toml                    # ✅ Added firewalld feature flag
+```
+
+**Functional Programming Style Maintained:**
+- Pure functions for zone detection and panic mode checking
+- Immutable data structures for zone information
+- Error handling with Result types
+- Trait-based abstractions for command execution
+
+#### ✅ Build Configuration
+
+**With firewalld features:**
+```bash
+cargo build --features firewalld
+cargo check --features firewalld
+cargo clippy --features firewalld
+```
+
+**Without firewalld (default):**
+```bash
+cargo build
+cargo check  
+cargo clippy
+```
+
+**All Features:**
+```bash
+cargo build --features "ml,geofencing,firewalld"
+```
+
+#### 🎨 User Experience
+
+**Firewalld Actions Appear in Menu When Available:**
+1. **Zone Switching**: `firewalld - 🔓 Switch to zone: home`
+2. **Panic Mode**: `firewalld - 🚫 Enable panic mode` 
+3. **Zone Info**: `firewalld - 🔒 Show current zone`
+4. **Zone List**: `firewalld - 🔒 List all zones`
+
+**Smart Behavior:**
+- Only shows actions when `firewall-cmd` is installed
+- Doesn't show "switch to current zone" actions
+- Shows zone descriptions and status (active/default markers)
+- Handles missing firewalld gracefully
+
+#### 🔄 Command Integration
+
+**Zone Switching:**
+```bash
+firewall-cmd --set-default-zone=home
+firewall-cmd --set-default-zone=public  
+firewall-cmd --set-default-zone=work
+```
+
+**Panic Mode:**
+```bash
+firewall-cmd --panic-on   # Block all connections
+firewall-cmd --panic-off  # Restore normal rules
+```
+
+**Zone Information:**
+```bash
+firewall-cmd --get-default-zone
+firewall-cmd --get-zones
+firewall-cmd --get-active-zones  
+firewall-cmd --zone=public --get-description
+```
+
+#### 📈 Error Handling
+
+- Graceful fallback when `firewall-cmd` not installed
+- Proper error messages for failed operations
+- Debug logging for troubleshooting firewalld issues
+- Notifications for both success and error cases
+
+#### 🛡️ Security Benefits
+
+**Quick Zone Switching:**
+- **Public**: Restrictive settings for untrusted networks
+- **Home**: Balanced settings for home network
+- **Work**: Corporate network compliance
+- **Trusted**: Minimal restrictions for trusted environments
+
+**Emergency Lockdown:**
+- Panic mode blocks ALL network connections instantly
+- Useful for security incidents or suspicious activity
+- Can be quickly disabled to restore normal operation
+
+#### 🎯 Version Bump
+
+Updated package version from 2.4.0 to 2.5.0 to reflect new firewalld functionality.
+
+---
+
 *ML Integration completed by Claude on September 3, 2025*
+*Firewalld Integration completed by Claude on September 4, 2025*
 *All functionality tested and production-ready*

@@ -3,6 +3,7 @@
 // Action types
 pub const ACTION_TYPE_ACTION: &str = "action";
 pub const ACTION_TYPE_DIAGNOSTIC: &str = "diagnostic";
+pub const ACTION_TYPE_FIREWALLD: &str = "firewalld";
 pub const ACTION_TYPE_NEXTDNS: &str = "nextdns";
 pub const ACTION_TYPE_SYSTEM: &str = "system";
 pub const ACTION_TYPE_TAILSCALE: &str = "tailscale";

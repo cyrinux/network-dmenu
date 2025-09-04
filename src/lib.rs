@@ -8,6 +8,8 @@ pub mod command;
 pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
+#[cfg(feature = "firewalld")]
+pub mod firewalld;
 #[cfg(feature = "geofencing")]
 pub mod geofencing;
 pub mod iwd;
@@ -37,6 +39,8 @@ pub use dns_cache::{
     generate_dns_actions_from_cache, get_current_network_id, CachedDnsServer, DnsBenchmarkCache,
     DnsCacheStorage,
 };
+#[cfg(feature = "firewalld")]
+pub use firewalld::{get_firewalld_actions, handle_firewalld_action, FirewalldAction};
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
@@ -88,6 +92,8 @@ pub enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    #[cfg(feature = "firewalld")]
+    Firewalld(FirewalldAction),
     NextDns(NextDnsAction),
     Ssh(SshAction),
     System(SystemAction),

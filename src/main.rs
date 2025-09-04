@@ -6,6 +6,9 @@ use network_dmenu::{
     utils, SshProxyConfig, TorsocksConfig,
 };
 
+#[cfg(feature = "firewalld")]
+use network_dmenu::firewalld;
+
 #[macro_use]
 extern crate log;
 use crate::utils::get_flag;
@@ -14,6 +17,8 @@ use clap::Parser;
 use command::{is_command_installed, CommandRunner, RealCommandRunner};
 use constants::*;
 use diagnostics::{diagnostic_action_to_string, handle_diagnostic_action, DiagnosticAction};
+#[cfg(feature = "firewalld")]
+use firewalld::{handle_firewalld_action, FirewalldAction};
 use dirs::config_dir;
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi};
 use log::error;
@@ -181,6 +186,8 @@ enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    #[cfg(feature = "firewalld")]
+    Firewalld(FirewalldAction),
     NextDns(nextdns::NextDnsAction),
     Ssh(network_dmenu::SshAction),
     System(SystemAction),
@@ -656,6 +663,8 @@ fn action_to_string(action: &ActionType) -> String {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
         },
         ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
+        #[cfg(feature = "firewalld")]
+        ActionType::Firewalld(firewalld_action) => firewalld_action.to_display_string(),
         ActionType::NextDns(nextdns_action) => {
             format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
         }
@@ -842,6 +851,10 @@ fn find_selected_action<'a>(
             },
             ActionType::Diagnostic(diagnostic_action) => {
                 action == diagnostic_action_to_string(diagnostic_action)
+            }
+            #[cfg(feature = "firewalld")]
+            ActionType::Firewalld(firewalld_action) => {
+                action == firewalld_action.to_display_string()
             }
             ActionType::NextDns(nextdns_action) => {
                 action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
@@ -1283,6 +1296,40 @@ async fn set_action(
                 .body(&result.output)
                 .show();
             Ok(result.success)
+        }
+        #[cfg(feature = "firewalld")]
+        ActionType::Firewalld(firewalld_action) => {
+            match handle_firewalld_action(firewalld_action, command_runner).await {
+                Ok(success) => {
+                    let message = match firewalld_action {
+                        FirewalldAction::SetZone(zone) => {
+                            format!("Switched to firewalld zone: {}", zone)
+                        }
+                        FirewalldAction::TogglePanicMode(enable) => {
+                            if *enable {
+                                "Firewalld panic mode enabled - all connections blocked".to_string()
+                            } else {
+                                "Firewalld panic mode disabled".to_string()
+                            }
+                        }
+                        FirewalldAction::GetCurrentZone => "Current firewalld zone displayed".to_string(),
+                        FirewalldAction::ListZones => "Firewalld zones listed".to_string(),
+                    };
+                    let _ = Notification::new()
+                        .summary("🔥 Firewalld")
+                        .body(&message)
+                        .show();
+                    Ok(success)
+                }
+                Err(e) => {
+                    let error_msg = format!("Firewalld operation failed: {}", e);
+                    let _ = Notification::new()
+                        .summary("🔥 Firewalld Error")
+                        .body(&error_msg)
+                        .show();
+                    Ok(false)
+                }
+            }
         }
         ActionType::Ssh(ssh_action) => match ssh::handle_ssh_action(ssh_action, command_runner) {
             Ok(_) => {
