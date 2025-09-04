@@ -43,7 +43,7 @@ pub async fn select_action_from_menu_streaming(
             let personalized = network_dmenu::get_personalized_menu_order(action_strings);
 
             // Reorder actions based on personalized order
-            let mut reordered = Vec::new();
+            let mut reordered = Vec::with_capacity(actions.len());
             for action_str in personalized {
                 if let Some(pos) = actions
                     .iter()
@@ -74,7 +74,7 @@ pub async fn select_action_from_menu_streaming(
             let personalized = network_dmenu::get_personalized_menu_order(action_strings);
 
             // Reorder actions based on personalized order
-            let mut reordered = Vec::new();
+            let mut reordered = Vec::with_capacity(actions.len());
             for action_str in personalized {
                 if let Some(pos) = actions
                     .iter()
