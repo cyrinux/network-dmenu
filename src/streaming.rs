@@ -1,6 +1,8 @@
+#[cfg(feature = "tailscale")]
+use crate::TailscaleAction;
 use crate::{
-    format_entry, ActionType, Args, Config, CustomAction, SystemAction, TailscaleAction, VpnAction,
-    WifiAction, ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
+    format_entry, ActionType, Args, Config, CustomAction, SystemAction, VpnAction, WifiAction,
+    ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
 };
 use network_dmenu::{
     bluetooth::get_paired_bluetooth_devices,
@@ -8,13 +10,15 @@ use network_dmenu::{
     diagnostics, dns_cache,
     iwd::get_iwd_networks,
     networkmanager::{get_nm_vpn_networks, get_nm_wifi_networks},
-    nextdns, rfkill,
+    nextdns, rfkill, tor,
+};
+#[cfg(feature = "tailscale")]
+use network_dmenu::{
     tailscale::{
         get_locked_nodes, get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled,
         TailscaleState,
     },
     tailscale_prefs::parse_tailscale_prefs,
-    tor,
 };
 
 #[cfg(feature = "firewalld")]
@@ -220,6 +224,7 @@ async fn stream_actions_simple(
     }
 
     // Tailscale
+    #[cfg(feature = "tailscale")]
     if !args.no_tailscale && is_command_installed("tailscale") {
         let tx_clone = tx.clone();
         let max_nodes_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
@@ -381,6 +386,7 @@ async fn produce_actions_streaming(
 
     // Tailscale (can be slow)
     // Handle Tailscale
+    #[cfg(feature = "tailscale")]
     if !args.no_tailscale && is_command_installed("tailscale") {
         let tx_clone = tx.clone();
         let max_nodes_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
@@ -564,6 +570,7 @@ async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interfac
 }
 
 // Simplified tailscale action sender
+#[cfg(feature = "tailscale")]
 async fn send_tailscale_actions_simple(
     tx: &mpsc::UnboundedSender<ActionType>,
     exclude_exit_node: Vec<String>,
@@ -787,7 +794,7 @@ async fn send_rfkill_actions(
     }
 }
 
-/// Send Tor proxy actions  
+/// Send Tor proxy actions
 async fn send_tor_actions(
     tx: &mpsc::UnboundedSender<ActionType>,
     torsocks_apps: &std::collections::HashMap<String, network_dmenu::TorsocksConfig>,

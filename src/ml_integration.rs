@@ -8,13 +8,16 @@
 use crate::ml::{
     action_prioritizer::ActionPrioritizer,
     diagnostic_analyzer::{DiagnosticAnalyzer, DiagnosticTest, NetworkSymptom},
-    exit_node_predictor::ExitNodePredictor,
     network_predictor::{NetworkPredictor, WifiNetwork},
     performance_tracker::PerformanceTracker,
     usage_patterns::{UsagePatternLearner, UserAction},
     MlConfig, ModelPersistence, NetworkContext, NetworkMetrics, NetworkType,
 };
 
+#[cfg(all(feature = "ml", feature = "tailscale"))]
+use crate::ml::exit_node_predictor::ExitNodePredictor;
+
+#[cfg(feature = "tailscale")]
 use crate::tailscale::TailscalePeer;
 
 #[cfg(feature = "ml")]
@@ -32,6 +35,7 @@ static ML_MANAGER: Lazy<Arc<Mutex<MlManager>>> =
 #[cfg(feature = "ml")]
 pub struct MlManager {
     config: MlConfig,
+    #[cfg(feature = "tailscale")]
     exit_node_predictor: ExitNodePredictor,
     diagnostic_analyzer: DiagnosticAnalyzer,
     network_predictor: NetworkPredictor,
@@ -55,6 +59,7 @@ impl MlManager {
 
         Self {
             config: config.clone(),
+            #[cfg(feature = "tailscale")]
             exit_node_predictor: ExitNodePredictor::new(),
             diagnostic_analyzer: DiagnosticAnalyzer::new(),
             network_predictor: NetworkPredictor::new(),
@@ -81,10 +86,15 @@ impl MlManager {
 
         let mut loaded_any = false;
 
-        if let Ok(predictor) = ExitNodePredictor::load(&format!("{}/exit_node.json", model_base)) {
-            self.exit_node_predictor = predictor;
-            debug!("Loaded exit node predictor from disk");
-            loaded_any = true;
+        #[cfg(feature = "tailscale")]
+        {
+            if let Ok(predictor) =
+                ExitNodePredictor::load(&format!("{}/exit_node.json", model_base))
+            {
+                self.exit_node_predictor = predictor;
+                debug!("Loaded exit node predictor from disk");
+                loaded_any = true;
+            }
         }
 
         if let Ok(analyzer) = DiagnosticAnalyzer::load(&format!("{}/diagnostic.json", model_base)) {
@@ -127,6 +137,7 @@ impl MlManager {
     pub fn save_models(&self) -> Result<(), Box<dyn std::error::Error>> {
         let model_base = &self.config.model_path;
 
+        #[cfg(feature = "tailscale")]
         self.exit_node_predictor
             .save(&format!("{}/exit_node.json", model_base))?;
         self.diagnostic_analyzer
@@ -213,7 +224,7 @@ fn get_signal_strength() -> Option<f32> {
 }
 
 /// Predict best exit nodes using ML
-#[cfg(feature = "ml")]
+#[cfg(all(feature = "ml", feature = "tailscale"))]
 pub fn predict_best_exit_nodes(peers: &[TailscalePeer], top_n: usize) -> Vec<(String, f32)> {
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
@@ -232,7 +243,7 @@ pub fn predict_best_exit_nodes(peers: &[TailscalePeer], top_n: usize) -> Vec<(St
 }
 
 /// Record exit node performance for learning
-#[cfg(feature = "ml")]
+#[cfg(all(feature = "ml", feature = "tailscale"))]
 pub fn record_exit_node_performance(node_id: &str, latency: f32, packet_loss: f32) {
     let mut manager = ML_MANAGER.lock().unwrap();
 
@@ -357,10 +368,10 @@ pub fn record_user_action(action: &str) {
     let mut manager = ML_MANAGER.lock().unwrap();
     manager.initialize();
 
-    let user_action = parse_user_action(action);
-    let context = get_current_context();
-
-    manager.usage_learner.record_action(user_action, context);
+    if let Some(user_action) = parse_user_action(action) {
+        let context = get_current_context();
+        manager.usage_learner.record_action(user_action, context);
+    }
 
     // Save on every 5th user action for better persistence
     static ACTION_COUNTER: Lazy<Arc<Mutex<u32>>> = Lazy::new(|| Arc::new(Mutex::new(0)));
@@ -431,42 +442,50 @@ pub fn update_network_state(
 }
 
 #[cfg(feature = "ml")]
-fn parse_user_action(action: &str) -> UserAction {
+fn parse_user_action(action: &str) -> Option<UserAction> {
     let action_lower = action.to_lowercase();
 
     // Enhanced WiFi parsing to extract network names
     if action_lower.contains("wifi") {
         if action_lower.contains("disconnect") {
-            UserAction::DisconnectWifi
+            return Some(UserAction::DisconnectWifi);
         } else {
             // Extract WiFi network name from various formats:
             // "wifi      - 📶 NetworkName"
             // "wifi      - ✅ Connect to NetworkName"
             let network_name = extract_wifi_network_name(action);
-            UserAction::ConnectWifi(network_name)
+            return Some(UserAction::ConnectWifi(network_name));
         }
     } else if action_lower.contains("bluetooth") {
         if action_lower.contains("disconnect") {
-            UserAction::DisconnectBluetooth
+            return Some(UserAction::DisconnectBluetooth);
         } else {
             let device_name = extract_bluetooth_device_name(action);
-            UserAction::ConnectBluetooth(device_name)
+            return Some(UserAction::ConnectBluetooth(device_name));
         }
-    } else if action_lower.contains("enable") && action_lower.contains("tailscale") {
-        UserAction::EnableTailscale
-    } else if action_lower.contains("disable") && action_lower.contains("tailscale") {
-        UserAction::DisableTailscale
-    } else if action_lower.contains("exit") && action_lower.contains("node") {
-        let node_name = extract_exit_node_name(action);
-        UserAction::SelectExitNode(node_name)
-    } else if action_lower.contains("diagnostic") {
-        let diagnostic_type = extract_diagnostic_type(action);
-        UserAction::RunDiagnostic(diagnostic_type)
-    } else if action_lower.contains("airplane") {
-        UserAction::ToggleAirplaneMode
-    } else {
-        UserAction::CustomAction(action.to_string())
     }
+    #[cfg(feature = "tailscale")]
+    if action_lower.contains("enable") && action_lower.contains("tailscale") {
+        return Some(UserAction::EnableTailscale);
+    }
+    #[cfg(feature = "tailscale")]
+    if action_lower.contains("disable") && action_lower.contains("tailscale") {
+        return Some(UserAction::DisableTailscale);
+    }
+    #[cfg(feature = "tailscale")]
+    if action_lower.contains("exit") && action_lower.contains("node") {
+        let node_name = extract_exit_node_name(action);
+        return Some(UserAction::SelectExitNode(node_name));
+    }
+
+    if action_lower.contains("diagnostic") {
+        let diagnostic_name = extract_diagnostic_name(action);
+        return Some(UserAction::RunDiagnostic(diagnostic_name));
+    } else if action_lower.contains("airplane") {
+        return Some(UserAction::ToggleAirplaneMode);
+    }
+
+    Some(UserAction::CustomAction(action.to_string()))
 }
 
 /// Extract WiFi network name from action string
@@ -519,8 +538,8 @@ fn extract_bluetooth_device_name(action: &str) -> String {
     "unknown_device".to_string()
 }
 
-/// Extract exit node name from action string  
-#[cfg(feature = "ml")]
+/// Extract exit node name from action string
+#[cfg(all(feature = "ml", feature = "tailscale"))]
 fn extract_exit_node_name(action: &str) -> String {
     // Look for patterns like "us-nyc-wg-301.mullvad.ts.net"
     if let Some(node) = action
@@ -540,7 +559,7 @@ fn extract_exit_node_name(action: &str) -> String {
 
 /// Extract diagnostic test type from action string
 #[cfg(feature = "ml")]
-fn extract_diagnostic_type(action: &str) -> String {
+fn extract_diagnostic_name(action: &str) -> String {
     let action_lower = action.to_lowercase();
 
     if action_lower.contains("connectivity") {
@@ -660,12 +679,12 @@ pub fn get_performance_summary(connection_id: &str) -> Option<String> {
 
 // Non-ML fallback functions for when ML feature is disabled
 
-#[cfg(not(feature = "ml"))]
-pub fn predict_best_exit_nodes(_peers: &[TailscalePeer], _top_n: usize) -> Vec<(String, f32)> {
+#[cfg(not(all(feature = "ml", feature = "tailscale")))]
+pub fn predict_best_exit_nodes<T>(_peers: &[T], _top_n: usize) -> Vec<(String, f32)> {
     Vec::new()
 }
 
-#[cfg(not(feature = "ml"))]
+#[cfg(not(all(feature = "ml", feature = "tailscale")))]
 pub fn record_exit_node_performance(_node_id: &str, _latency: f32, _packet_loss: f32) {}
 
 #[cfg(not(feature = "ml"))]

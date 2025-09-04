@@ -408,3 +408,113 @@ Updated package version from 2.4.0 to 2.5.0 to reflect new firewalld functionali
 *ML Integration completed by Claude on September 3, 2025*
 *Firewalld Integration completed by Claude on September 4, 2025*
 *All functionality tested and production-ready*
+
+---
+
+## 🎯 Tailscale Feature Flag Refactoring (September 2025)
+
+### Tailscale Functionality Made Optional
+
+**Refactored all Tailscale/Mullvad/Exit-node functionality behind a feature flag:**
+
+#### 🔧 What Was Changed
+
+**1. Feature Flag Addition**
+- Added `tailscale` feature flag to `Cargo.toml`
+- Included in default features for backwards compatibility
+- Can be disabled for lighter builds without VPN functionality
+
+**2. Conditional Compilation**
+- All Tailscale modules (`tailscale.rs`, `tailscale_prefs.rs`) now behind feature flag
+- Exit node predictor ML module requires both `ml` and `tailscale` features
+- Tailscale-related CLI arguments only available when feature enabled
+- Tailscale actions in streaming only generated when feature enabled
+
+**3. ML Module Independence**
+- ML functionality works independently of Tailscale feature
+- `UserAction` enum variants for Tailscale are conditional
+- Usage pattern learning adapts based on available features
+- Graceful fallback when Tailscale actions not available
+
+**4. Code Organization**
+- Clean separation of concerns with conditional imports
+- Maintained functional programming style throughout
+- No breaking changes for existing users (Tailscale in default features)
+
+#### ✅ Build Configurations
+
+**Full build (default):**
+```bash
+cargo build
+# or explicitly:
+cargo build --features "ml,geofencing,firewalld,tailscale"
+```
+
+**Without Tailscale:**
+```bash
+cargo build --no-default-features --features "ml,geofencing,firewalld"
+```
+
+**Minimal build (no optional features):**
+```bash
+cargo build --no-default-features
+```
+
+**ML-only build:**
+```bash
+cargo build --no-default-features --features "ml"
+```
+
+#### 🏗️ Implementation Details
+
+**Conditional Compilation Patterns Used:**
+```rust
+// Module level
+#[cfg(feature = "tailscale")]
+pub mod tailscale;
+
+// Import level
+#[cfg(feature = "tailscale")]
+use crate::tailscale::TailscaleAction;
+
+// Enum variant level
+enum ActionType {
+    #[cfg(feature = "tailscale")]
+    Tailscale(TailscaleAction),
+    // other variants...
+}
+
+// Function level
+#[cfg(feature = "tailscale")]
+fn handle_tailscale_functionality() { ... }
+
+// Combined features
+#[cfg(all(feature = "ml", feature = "tailscale"))]
+pub mod exit_node_predictor;
+```
+
+**Files Modified:**
+- `Cargo.toml` - Added tailscale feature flag
+- `src/lib.rs` - Conditional module exports and ActionType
+- `src/main.rs` - Conditional CLI args and action handling  
+- `src/streaming.rs` - Conditional Tailscale action streaming
+- `src/ml/mod.rs` - Exit node predictor requires tailscale
+- `src/ml/usage_patterns.rs` - Conditional UserAction variants
+- `src/ml_integration.rs` - Conditional exit node functions
+
+#### 📈 Benefits
+
+**1. Flexibility**: Users can build without VPN dependencies if not needed
+**2. Smaller Binary**: Reduced binary size when Tailscale not included
+**3. Faster Compilation**: Skip Tailscale code when feature disabled
+**4. Cleaner Dependencies**: Only include what you need
+**5. ML Independence**: Machine learning works without VPN features
+
+#### 🎯 Version Update
+
+Updated version from 2.5.0 to 2.6.0 to reflect this architectural improvement.
+
+---
+
+*Tailscale Feature Flag Refactoring completed by Claude on September 4, 2025*
+*Backwards compatible - Tailscale still included by default*

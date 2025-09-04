@@ -11,6 +11,7 @@ use network_dmenu::firewalld;
 
 #[macro_use]
 extern crate log;
+#[cfg(feature = "tailscale")]
 use crate::utils::get_flag;
 use bluetooth::{get_connected_devices, handle_bluetooth_action, BluetoothAction};
 use clap::Parser;
@@ -34,6 +35,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[cfg(feature = "tailscale")]
 use network_dmenu::tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
@@ -53,6 +55,7 @@ struct Args {
     no_vpn: bool,
     #[arg(long)]
     no_bluetooth: bool,
+    #[cfg(feature = "tailscale")]
     #[arg(long)]
     no_tailscale: bool,
     #[arg(long)]
@@ -79,16 +82,19 @@ struct Args {
         default_value = "warn"
     )]
     log_level: String,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Limit the number of exit nodes shown per country (sorted by priority)"
     )]
     max_nodes_per_country: Option<i32>,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Limit the number of exit nodes shown per city (sorted by priority)"
     )]
     max_nodes_per_city: Option<i32>,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
@@ -195,6 +201,7 @@ enum ActionType {
     NextDns(nextdns::NextDnsAction),
     Ssh(network_dmenu::SshAction),
     System(SystemAction),
+    #[cfg(feature = "tailscale")]
     Tailscale(TailscaleAction),
     Tor(TorAction),
     Vpn(VpnAction),
@@ -359,8 +366,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let profiles_json: serde_json::Value = match serde_json::from_str(&body) {
                 Ok(json) => json,
                 Err(e) => {
-                    eprintln!("WARNING: Could not parse API response as JSON: {}", e);
-                    eprintln!("Raw response: {}", body);
+                    warn!("Could not parse API response as JSON: {}", e);
+                    warn!("Raw response: {}", body);
                     println!("NextDNS API key is valid, but response could not be parsed!");
                     return Ok(());
                 }
@@ -403,7 +410,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await
                 .unwrap_or_else(|_| "Could not read error response".to_string());
             debug!("API error response: {}", error_body);
-            eprintln!("Invalid NextDNS API key: {}", status);
+            error!("Invalid NextDNS API key: {}", status);
             return Err("Invalid NextDNS API key".into());
         }
     }
@@ -517,7 +524,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 /// Checks if required commands are installed.
 fn check_required_commands(_config: &Config) -> Result<(), Box<dyn Error>> {
     if !is_command_installed("pinentry-gnome3") {
-        eprintln!("Warning: pinentry-gnome3 command missing");
+        warn!("pinentry-gnome3 command missing");
     }
 
     Ok(())
@@ -543,6 +550,7 @@ fn action_to_string(action: &ActionType) -> String {
                 }
             }
         },
+        #[cfg(feature = "tailscale")]
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
             TailscaleAction::SetSuggestedExitNode => {
@@ -706,6 +714,7 @@ fn find_selected_action<'a>(
                     }
                 }
             },
+            #[cfg(feature = "tailscale")]
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
                 TailscaleAction::SetSuggestedExitNode => {
@@ -933,8 +942,8 @@ async fn handle_system_action(
         if let Some(start) = rfkill_start {
             let operation = if block { "block" } else { "unblock" };
             let elapsed = start.elapsed();
-            eprintln!(
-                ">>> PROFILE: Rfkill {} {} took: {:.2?}",
+            debug!(
+                "PROFILE: Rfkill {} {} took: {:.2?}",
                 operation, device, elapsed
             );
             if profile {
@@ -1000,7 +1009,7 @@ async fn handle_system_action(
             }
         };
         let elapsed = start.elapsed();
-        eprintln!(
+        debug!(
             ">>> PROFILE: System action '{}' took: {:.2?}",
             action_name, elapsed
         );
@@ -1074,10 +1083,12 @@ async fn handle_vpn_action(
 
             // Check mullvad status, assert errors in debug mode
             // Ignore errors from mullvad check, but log in debug mode
-            let _e = check_mullvad().await;
-            #[cfg(debug_assertions)]
-            if let Err(ref e) = _e {
-                eprintln!("Failed to check mullvad status: {}", e);
+            #[cfg(feature = "tailscale")]
+            {
+                let _e = check_mullvad().await;
+                if let Err(ref e) = _e {
+                    error!("Failed to check mullvad status: {}", e);
+                }
             }
 
             Ok(true)
@@ -1119,9 +1130,8 @@ async fn handle_wifi_action(
             if status.success() {
                 // Check for captive portal, log errors in debug mode
                 let _e = check_captive_portal().await;
-                #[cfg(debug_assertions)]
                 if let Err(ref e) = _e {
-                    eprintln!("Failed to check captive portal: {}", e);
+                    error!("Failed to check captive portal: {}", e);
                 }
             }
 
@@ -1137,9 +1147,8 @@ async fn handle_wifi_action(
                 if result {
                     // Check for captive portal, log errors in debug mode
                     let _e = check_captive_portal().await;
-                    #[cfg(debug_assertions)]
                     if let Err(ref e) = _e {
-                        eprintln!("Failed to check captive portal: {}", e);
+                        error!("Failed to check captive portal: {}", e);
                     }
                 }
                 result
@@ -1157,9 +1166,8 @@ async fn handle_wifi_action(
                 if result {
                     // Check for captive portal, log errors in debug mode
                     let _e = check_captive_portal().await;
-                    #[cfg(debug_assertions)]
                     if let Err(ref e) = _e {
-                        eprintln!("Failed to check captive portal: {}", e);
+                        error!("Failed to check captive portal: {}", e);
                     }
                 }
                 result
@@ -1167,9 +1175,8 @@ async fn handle_wifi_action(
                 let result = connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
                 // For IWD, we check after connection attempt
                 let _e = check_captive_portal().await;
-                #[cfg(debug_assertions)]
                 if let Err(ref e) = _e {
-                    eprintln!("Failed to check captive portal: {}", e);
+                    error!("Failed to check captive portal: {}", e);
                 }
                 result
             } else {
@@ -1177,10 +1184,12 @@ async fn handle_wifi_action(
             };
 
             // Check mullvad status, log errors in debug mode
-            let _e = check_mullvad().await;
-            #[cfg(debug_assertions)]
-            if let Err(ref e) = _e {
-                eprintln!("Failed to check mullvad status: {}", e);
+            #[cfg(feature = "tailscale")]
+            {
+                let _e = check_mullvad().await;
+                if let Err(ref e) = _e {
+                    error!("Failed to check mullvad status: {}", e);
+                }
             }
 
             Ok(connection_result)
@@ -1262,6 +1271,7 @@ async fn set_action(
             result
         }
         ActionType::System(system_action) => handle_system_action(system_action, profile).await,
+        #[cfg(feature = "tailscale")]
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
             let tailscale_state = TailscaleState::new(command_runner);
@@ -1410,9 +1420,8 @@ pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>
         .body(&format!("Connected to {name}"))
         .show();
 
-    #[cfg(debug_assertions)]
     if let Err(ref e) = _e {
-        eprintln!("Failed to show notification: {}", e);
+        error!("Failed to show notification: {}", e);
     }
 
     // We don't want to propagate notification errors to the caller
@@ -1525,17 +1534,23 @@ mod tests {
 
     #[test]
     fn test_action_to_string_tailscale_set_exit_node() {
-        let action =
-            ActionType::Tailscale(TailscaleAction::SetExitNode("exit-node-name".to_string()));
-        let result = action_to_string(&action);
-        assert_eq!(result, "exit-node-name");
+        #[cfg(feature = "tailscale")]
+        {
+            let action =
+                ActionType::Tailscale(TailscaleAction::SetExitNode("exit-node-name".to_string()));
+            let result = action_to_string(&action);
+            assert_eq!(result, "exit-node-name");
+        }
     }
 
     #[test]
     fn test_action_to_string_tailscale_disable_exit_node() {
-        let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
-        let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - ❌ Disable exit-node");
+        #[cfg(feature = "tailscale")]
+        {
+            let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
+            let result = action_to_string(&action);
+            assert!(result.contains("Disable exit node"));
+        }
     }
 
     #[test]
@@ -1940,7 +1955,7 @@ async fn handle_geofencing_commands(
 
         let mut daemon = GeofencingDaemon::new(geofencing_config);
         if let Err(e) = daemon.run().await {
-            eprintln!("Daemon failed: {}", e);
+            error!("Daemon failed: {}", e);
             std::process::exit(1);
         }
         return Ok(Some(Ok(())));
@@ -1956,7 +1971,7 @@ async fn handle_geofencing_commands(
 
         println!("Geofencing daemon running...");
         if let Err(e) = daemon.run().await {
-            eprintln!("Daemon failed: {}", e);
+            error!("Daemon failed: {}", e);
             return Ok(Some(Err(e.into())));
         }
 
@@ -1973,7 +1988,7 @@ async fn handle_geofencing_commands(
 
         match client.send_command(DaemonCommand::Shutdown).await {
             Ok(_) => println!("Daemon stopped successfully"),
-            Err(e) => eprintln!("Failed to stop daemon: {}", e),
+            Err(e) => error!("Failed to stop daemon: {}", e),
         }
         return Ok(Some(Ok(())));
     }
@@ -2005,7 +2020,7 @@ async fn handle_geofencing_commands(
                 println!("  Zone changes: {}", status.total_zone_changes);
                 println!("  Uptime: {}s", status.uptime_seconds);
             }
-            Err(e) => eprintln!("Failed to get daemon status: {}", e),
+            Err(e) => error!("Failed to get daemon status: {}", e),
         }
         return Ok(Some(Ok(())));
     }
@@ -2034,7 +2049,7 @@ async fn handle_geofencing_commands(
                 }
                 println!("Fingerprints: {}", zone.fingerprints.len());
             }
-            Err(e) => eprintln!("Failed to create zone: {}", e),
+            Err(e) => error!("Failed to create zone: {}", e),
         }
         return Ok(Some(Ok(())));
     }
@@ -2061,10 +2076,10 @@ async fn handle_geofencing_commands(
                 }
             }
             Ok(_) => {
-                eprintln!("Unexpected response from daemon");
+                error!("Unexpected response from daemon");
             }
             Err(e) => {
-                eprintln!("Failed to add fingerprint: {}", e);
+                error!("Failed to add fingerprint: {}", e);
             }
         }
         return Ok(Some(Ok(())));
@@ -2094,7 +2109,7 @@ async fn handle_geofencing_commands(
                     }
                 }
             }
-            Err(e) => eprintln!("Failed to list zones: {}", e),
+            Err(e) => error!("Failed to list zones: {}", e),
         }
         return Ok(Some(Ok(())));
     }

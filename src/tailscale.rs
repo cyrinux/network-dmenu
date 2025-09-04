@@ -40,7 +40,7 @@ fn extract_country_code_from_hostname(hostname: &str) -> &str {
 /// Extract a city/location identifier from a hostname.
 ///
 /// Attempts to extract a meaningful city/location identifier from hostnames like:
-/// - "us-nyc-01.example.com" -> "NYC"  
+/// - "us-nyc-01.example.com" -> "NYC"
 /// - "eu-amsterdam-02.ts.net" -> "Amsterdam"
 /// - "server-dallas.ts.net" -> "Dallas"
 /// - "random-hostname" -> "Various"
@@ -667,11 +667,24 @@ pub fn get_mullvad_actions(
 
 /// Parse the exit-node suggest output
 fn parse_exit_node_suggest(output: &str) -> Option<String> {
-    output
+    // Try the expected format first
+    if let Some(node) = output
         .lines()
         .find(|line| line.starts_with("Suggested exit node:"))
         .and_then(|line| line.split(':').nth(1))
         .map(|s| s.trim().trim_end_matches('.').to_string())
+    {
+        return Some(node);
+    }
+
+    // If that doesn't work, check if the output is just the node name
+    let trimmed = output.trim();
+    if !trimmed.is_empty() && !trimmed.contains('\n') && trimmed.contains('.') {
+        debug!("Parsing suggested node from plain output: {}", trimmed);
+        return Some(trimmed.trim_end_matches('.').to_string());
+    }
+
+    None
 }
 
 /// Helper function to extract node name from the action line.
@@ -727,6 +740,7 @@ fn extract_short_name(node_name: &str) -> &str {
 
 /// Get the suggested exit-node
 pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
+    debug!("Getting suggested exit node from tailscale");
     let output = match command_runner.run_command("tailscale", &["exit-node", "suggest"]) {
         Ok(out) => out,
         Err(e) => {
@@ -736,11 +750,135 @@ pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<Str
     };
 
     if !output.status.success() {
+        debug!(
+            "tailscale exit-node suggest command failed with status: {:?}",
+            output.status
+        );
         return None;
     }
 
     let exit_node = String::from_utf8_lossy(&output.stdout);
-    parse_exit_node_suggest(&exit_node)
+    debug!(
+        "Raw output from tailscale exit-node suggest: {:?}",
+        exit_node
+    );
+    let parsed = parse_exit_node_suggest(&exit_node);
+    debug!("Parsed suggested exit node: {:?}", parsed);
+    parsed
+}
+
+/// Sets the exit node by hostname (for suggested nodes)
+pub async fn set_exit_node_by_hostname(command_runner: &dyn CommandRunner, hostname: &str) -> bool {
+    debug!("Setting exit node by hostname: {}", hostname);
+
+    // Extract just the hostname part (before the first dot)
+    let node_name = hostname.split('.').next().unwrap_or(hostname);
+    debug!("Using node name: {}", node_name);
+
+    // Try to get the IP address from tailscale status
+    let node_ip = if let Ok(output) = command_runner.run_command("tailscale", &["status", "--json"])
+    {
+        if output.status.success() {
+            if let Ok(status) = serde_json::from_slice::<TailscaleStatus>(&output.stdout) {
+                // Look for the peer with matching hostname
+                status
+                    .peer
+                    .values()
+                    .find(|peer| {
+                        peer.dns_name.trim_end_matches('.') == hostname
+                            || peer.hostname == node_name
+                    })
+                    .and_then(|peer| peer.tailscale_ips.first())
+                    .map(|ip| ip.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    debug!("Resolved IP for {}: {:?}", hostname, node_ip);
+
+    // Run the "tailscale up" command
+    match command_runner.run_command("tailscale", &["up"]) {
+        Ok(output) if output.status.success() => {
+            debug!("Tailscale up command succeeded");
+        }
+        _ => return false,
+    }
+
+    // Try with IP address first if we have it
+    if let Some(ip) = &node_ip {
+        debug!("Trying to set exit node using IP: {}", ip);
+        match command_runner.run_command(
+            "tailscale",
+            &[
+                "set",
+                &format!("--exit-node={}", ip),
+                "--exit-node-allow-lan-access=true",
+            ],
+        ) {
+            Ok(output) => {
+                if output.status.success() {
+                    debug!("Successfully set exit node using IP: {}", ip);
+                    return true;
+                }
+            }
+            Err(e) => {
+                error!("Failed to set exit node using IP: {e}");
+            }
+        }
+    }
+
+    // Fall back to trying with just the node name
+    match command_runner.run_command(
+        "tailscale",
+        &[
+            "set",
+            &format!("--exit-node={}", node_name),
+            "--exit-node-allow-lan-access=true",
+        ],
+    ) {
+        Ok(output) => {
+            let success = output.status.success();
+            if success {
+                debug!("Successfully set exit node to: {}", node_name);
+            } else {
+                error!("Failed to set exit node to: {}", node_name);
+                // Try with the full hostname if the short name failed
+                if hostname != node_name {
+                    debug!("Retrying with full hostname: {}", hostname);
+                    match command_runner.run_command(
+                        "tailscale",
+                        &[
+                            "set",
+                            &format!("--exit-node={}", hostname),
+                            "--exit-node-allow-lan-access=true",
+                        ],
+                    ) {
+                        Ok(retry_output) => {
+                            let retry_success = retry_output.status.success();
+                            if retry_success {
+                                debug!("Successfully set exit node using full hostname");
+                            }
+                            return retry_success;
+                        }
+                        Err(e) => {
+                            error!("Retry with full hostname also failed: {e}");
+                        }
+                    }
+                }
+            }
+            success
+        }
+        Err(e) => {
+            error!("Failed to run tailscale set command: {e}");
+            false
+        }
+    }
 }
 
 /// Sets the exit node for Tailscale.
@@ -780,7 +918,7 @@ pub async fn set_exit_node(command_runner: &dyn CommandRunner, action: &str) -> 
             success
         }
         Err(e) => {
-            error!("Error setting exit node: {e}");
+            error!("Failed to run tailscale set command: {e}");
             false
         }
     }
@@ -1142,21 +1280,56 @@ pub async fn handle_tailscale_action(
             }
         },
         TailscaleAction::SetSuggestedExitNode => {
+            debug!("Handling SetSuggestedExitNode action");
             // Get the suggested exit node from state
             let suggested_node = &state_ref.suggested_exit_node;
+            debug!("Suggested node from state: '{}'", suggested_node);
 
             if suggested_node.is_empty() {
-                if let Some(sender) = notification_sender {
-                    if let Err(_e) = sender.send_notification(
-                        "Tailscale Error",
-                        "No suggested exit node available",
-                        5000,
-                    ) {
-                        #[cfg(debug_assertions)]
-                        error!("Failed to send 'no suggested node' notification: {_e}");
+                debug!("No suggested exit node available in state, trying to fetch it again");
+                // Try to get it directly in case the state is stale
+                let fresh_suggested = get_exit_node_suggested(command_runner);
+
+                if let Some(fresh_node) = fresh_suggested {
+                    debug!("Got fresh suggested node: {}", fresh_node);
+                    // Use the hostname-based function for suggested nodes
+                    let success = set_exit_node_by_hostname(command_runner, &fresh_node).await;
+
+                    if success {
+                        if let Some(sender) = notification_sender {
+                            if let Err(_e) = sender.send_notification(
+                                "Tailscale Exit Node",
+                                &format!("Connected to suggested exit node: {}", fresh_node),
+                                5000,
+                            ) {
+                                error!("Failed to send suggested node notification: {_e}");
+                            }
+                        }
+
+                        #[cfg(feature = "ml")]
+                        {
+                            // Record performance for ML learning
+                            crate::ml_integration::record_exit_node_performance(
+                                &fresh_node,
+                                0.0,
+                                0.0,
+                            );
+                        }
                     }
+
+                    return Ok(success);
+                } else {
+                    if let Some(sender) = notification_sender {
+                        if let Err(_e) = sender.send_notification(
+                            "Tailscale Error",
+                            "No suggested exit node available",
+                            5000,
+                        ) {
+                            error!("Failed to send 'no suggested node' notification: {_e}");
+                        }
+                    }
+                    return Ok(false);
                 }
-                return Ok(false);
             }
 
             // Record ML action for learning
@@ -1165,8 +1338,9 @@ pub async fn handle_tailscale_action(
                 crate::ml_integration::record_user_action("Use recommended exit node");
             }
 
-            // Use the existing set_exit_node function with the suggested node
-            let success = set_exit_node(command_runner, suggested_node).await;
+            debug!("Setting exit node to suggested node: {}", suggested_node);
+            // Use the hostname-based function for suggested nodes
+            let success = set_exit_node_by_hostname(command_runner, suggested_node).await;
 
             if success {
                 if let Some(sender) = notification_sender {
@@ -2644,6 +2818,49 @@ mod tests {
         );
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("high-priority"));
+    }
+
+    #[test]
+    fn test_parse_exit_node_suggest() {
+        // Test standard format
+        let output = "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("us-nyc-wg-301.mullvad.ts.net".to_string()));
+
+        // Test without trailing dot
+        let output = "Suggested exit node: ca-tor-wg-201.mullvad.ts.net";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("ca-tor-wg-201.mullvad.ts.net".to_string()));
+
+        // Test plain output (just the node name)
+        let output = "us-dal-wg-101.mullvad.ts.net";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("us-dal-wg-101.mullvad.ts.net".to_string()));
+
+        // Test plain output with trailing dot
+        let output = "eu-ams-wg-501.mullvad.ts.net.";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("eu-ams-wg-501.mullvad.ts.net".to_string()));
+
+        // Test empty output
+        let output = "";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test whitespace only
+        let output = "   \n  ";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test multiline output without expected format
+        let output = "Some error message\nAnother line";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test with extra whitespace
+        let output = "Suggested exit node:    uk-lon-wg-401.mullvad.ts.net  ";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("uk-lon-wg-401.mullvad.ts.net".to_string()));
     }
 
     #[test]

@@ -24,9 +24,13 @@ pub enum UserAction {
     DisconnectWifi,
     ConnectBluetooth(String),
     DisconnectBluetooth,
+    #[cfg(feature = "tailscale")]
     EnableTailscale,
+    #[cfg(feature = "tailscale")]
     DisableTailscale,
+    #[cfg(feature = "tailscale")]
     SelectExitNode(String),
+    #[cfg(feature = "tailscale")]
     DisableExitNode,
     RunDiagnostic(String),
     ToggleAirplaneMode,
@@ -806,26 +810,33 @@ impl UsagePatternLearner {
         }
         // Tailscale actions (handle format: "tailscale - ✅ Enable tailscale")
         else if action.contains("tailscale") {
-            if action.contains("disable") && !action.contains("exit") {
-                Some(UserAction::DisableTailscale)
-            } else if action.contains("enable") && !action.contains("exit") {
-                Some(UserAction::EnableTailscale)
-            } else if action.contains("exit") || action.contains("mullvad") {
-                if action.contains("disable") {
-                    Some(UserAction::DisableExitNode)
-                } else {
-                    // Extract node name from exit node selection
-                    let node_name = if action_str.contains(".mullvad.ts.net") {
-                        action_str
-                            .split_whitespace()
-                            .find(|s| s.contains(".mullvad.ts.net"))
-                            .unwrap_or("node")
+            #[cfg(feature = "tailscale")]
+            {
+                if action.contains("disable") && !action.contains("exit") {
+                    Some(UserAction::DisableTailscale)
+                } else if action.contains("enable") && !action.contains("exit") {
+                    Some(UserAction::EnableTailscale)
+                } else if action.contains("exit") || action.contains("mullvad") {
+                    if action.contains("disable") {
+                        Some(UserAction::DisableExitNode)
                     } else {
-                        "node"
-                    };
-                    Some(UserAction::SelectExitNode(node_name.to_string()))
+                        // Extract node name from exit node selection
+                        let node_name = if action_str.contains(".mullvad.ts.net") {
+                            action_str
+                                .split_whitespace()
+                                .find(|s| s.contains(".mullvad.ts.net"))
+                                .unwrap_or("node")
+                        } else {
+                            "node"
+                        };
+                        Some(UserAction::SelectExitNode(node_name.to_string()))
+                    }
+                } else {
+                    Some(UserAction::CustomAction(action_str.to_string()))
                 }
-            } else {
+            }
+            #[cfg(not(feature = "tailscale"))]
+            {
                 Some(UserAction::CustomAction(action_str.to_string()))
             }
         }
@@ -995,11 +1006,15 @@ fn user_action_to_safe_string(action: &UserAction) -> String {
             format!("ConnectBluetooth({})", name.replace(['\\', '"'], "_"))
         }
         UserAction::DisconnectBluetooth => "DisconnectBluetooth".to_string(),
+        #[cfg(feature = "tailscale")]
         UserAction::EnableTailscale => "EnableTailscale".to_string(),
+        #[cfg(feature = "tailscale")]
         UserAction::DisableTailscale => "DisableTailscale".to_string(),
+        #[cfg(feature = "tailscale")]
         UserAction::SelectExitNode(name) => {
             format!("SelectExitNode({})", name.replace(['\\', '"'], "_"))
         }
+        #[cfg(feature = "tailscale")]
         UserAction::DisableExitNode => "DisableExitNode".to_string(),
         UserAction::RunDiagnostic(name) => {
             format!("RunDiagnostic({})", name.replace(['\\', '"'], "_"))
@@ -1014,42 +1029,59 @@ fn user_action_to_safe_string(action: &UserAction) -> String {
 /// Parse a safe string back to UserAction
 fn safe_string_to_user_action(s: &str) -> Option<UserAction> {
     if s == "DisconnectWifi" {
-        Some(UserAction::DisconnectWifi)
+        return Some(UserAction::DisconnectWifi);
     } else if s == "DisconnectBluetooth" {
-        Some(UserAction::DisconnectBluetooth)
-    } else if s == "EnableTailscale" {
-        Some(UserAction::EnableTailscale)
-    } else if s == "DisableTailscale" {
-        Some(UserAction::DisableTailscale)
-    } else if s == "DisableExitNode" {
-        Some(UserAction::DisableExitNode)
+        return Some(UserAction::DisconnectBluetooth);
     } else if s == "ToggleAirplaneMode" {
-        Some(UserAction::ToggleAirplaneMode)
-    } else if let Some(name) = s
+        return Some(UserAction::ToggleAirplaneMode);
+    }
+
+    #[cfg(feature = "tailscale")]
+    if s == "EnableTailscale" {
+        return Some(UserAction::EnableTailscale);
+    }
+    #[cfg(feature = "tailscale")]
+    if s == "DisableTailscale" {
+        return Some(UserAction::DisableTailscale);
+    }
+    #[cfg(feature = "tailscale")]
+    if s == "DisableExitNode" {
+        return Some(UserAction::DisableExitNode);
+    }
+
+    if let Some(name) = s
         .strip_prefix("ConnectWifi(")
-        .and_then(|n| n.strip_suffix(')'))
+        .and_then(|s| s.strip_suffix(')'))
     {
-        Some(UserAction::ConnectWifi(name.to_string()))
+        return Some(UserAction::ConnectWifi(name.to_string()));
     } else if let Some(name) = s
         .strip_prefix("ConnectBluetooth(")
-        .and_then(|n| n.strip_suffix(')'))
+        .and_then(|s| s.strip_suffix(')'))
     {
-        Some(UserAction::ConnectBluetooth(name.to_string()))
-    } else if let Some(name) = s
+        return Some(UserAction::ConnectBluetooth(name.to_string()));
+    }
+
+    #[cfg(feature = "tailscale")]
+    if let Some(name) = s
         .strip_prefix("SelectExitNode(")
-        .and_then(|n| n.strip_suffix(')'))
+        .and_then(|s| s.strip_suffix(')'))
     {
-        Some(UserAction::SelectExitNode(name.to_string()))
-    } else if let Some(name) = s
+        return Some(UserAction::SelectExitNode(name.to_string()));
+    }
+
+    if let Some(name) = s
         .strip_prefix("RunDiagnostic(")
         .and_then(|n| n.strip_suffix(')'))
     {
-        Some(UserAction::RunDiagnostic(name.to_string()))
-    } else {
-        s.strip_prefix("CustomAction(")
-            .and_then(|n| n.strip_suffix(')'))
-            .map(|name| UserAction::CustomAction(name.to_string()))
+        return Some(UserAction::RunDiagnostic(name.to_string()));
+    } else if let Some(name) = s
+        .strip_prefix("CustomAction(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
+        return Some(UserAction::CustomAction(name.to_string()));
     }
+
+    None
 }
 
 fn serialize_action_stats<S>(
@@ -1176,14 +1208,25 @@ mod tests {
         let mut learner = UsagePatternLearner::new();
         let context = create_test_context();
 
-        learner.record_action(UserAction::EnableTailscale, context.clone());
-        learner.record_action(UserAction::SelectExitNode("us-node".to_string()), context);
+        #[cfg(feature = "tailscale")]
+        {
+            learner.record_action(UserAction::EnableTailscale, context.clone());
+            learner.record_action(UserAction::SelectExitNode("us-node".to_string()), context);
 
-        assert_eq!(learner.action_stats.len(), 2);
-        assert!(learner
-            .action_stats
-            .contains_key(&UserAction::EnableTailscale));
-        assert_eq!(learner.action_sequences.len(), 1);
+            assert_eq!(learner.action_stats.len(), 2);
+            assert!(learner
+                .action_stats
+                .contains_key(&UserAction::EnableTailscale));
+        }
+        #[cfg(not(feature = "tailscale"))]
+        {
+            learner.record_action(
+                UserAction::CustomAction("test".to_string()),
+                context.clone(),
+            );
+            assert_eq!(learner.action_stats.len(), 1);
+            assert_eq!(learner.action_sequences.len(), 1);
+        }
     }
 
     #[test]
@@ -1195,9 +1238,16 @@ mod tests {
         learner.config.workflow_threshold = 1;
 
         // Create sequence directly
+        // Test with workflow
+        #[cfg(feature = "tailscale")]
         let actions = vec![
             UserAction::EnableTailscale,
             UserAction::SelectExitNode("node".to_string()),
+        ];
+        #[cfg(not(feature = "tailscale"))]
+        let actions = vec![
+            UserAction::ConnectWifi("test".to_string()),
+            UserAction::CustomAction("action".to_string()),
         ];
 
         // Add to sequences directly
@@ -1226,9 +1276,12 @@ mod tests {
         tailscale_stats.daily_distribution[2] = 5; // Match test context day
 
         // Set stats directly
-        learner
-            .action_stats
-            .insert(UserAction::EnableTailscale, tailscale_stats);
+        #[cfg(feature = "tailscale")]
+        {
+            learner
+                .action_stats
+                .insert(UserAction::EnableTailscale, tailscale_stats);
+        }
 
         // Lower stats for other actions
         let mut wifi_stats = ActionStats::default();
@@ -1261,24 +1314,35 @@ mod tests {
         let context = create_test_context();
 
         // Train with a pattern
-        for _ in 0..5 {
-            learner.record_action(UserAction::EnableTailscale, context.clone());
-            learner.record_action(
-                UserAction::SelectExitNode("node".to_string()),
-                context.clone(),
-            );
+        #[cfg(feature = "tailscale")]
+        {
+            for _ in 0..5 {
+                learner.record_action(UserAction::EnableTailscale, context.clone());
+                learner.record_action(
+                    UserAction::SelectExitNode("node".to_string()),
+                    context.clone(),
+                );
+            }
+
+            let recent = vec![UserAction::EnableTailscale];
+            let prediction = learner.predict_next_action(&recent, &context);
+            assert!(matches!(prediction.value, UserAction::SelectExitNode(_)));
         }
-
-        let recent = vec![UserAction::EnableTailscale];
-        let prediction = learner.predict_next_action(&recent, &context);
-
-        assert!(matches!(prediction.value, UserAction::SelectExitNode(_)));
+        #[cfg(not(feature = "tailscale"))]
+        {
+            for _ in 0..5 {
+                learner.record_action(UserAction::ConnectWifi("test".to_string()), context.clone());
+            }
+            let recent = vec![UserAction::ConnectWifi("test".to_string())];
+            let prediction = learner.predict_next_action(&recent, &context);
+            assert!(matches!(prediction.value, UserAction::ConnectWifi(_)));
+        }
     }
 
     #[test]
     fn test_action_stats_update() {
         let mut learner = UsagePatternLearner::new();
-        let _context = create_test_context();
+        let context = create_test_context();
 
         // Create stats directly rather than trying to update them through record_action
         let mut stats = ActionStats::default();
@@ -1289,15 +1353,15 @@ mod tests {
         stats.daily_distribution[2] = 1; // Wednesday
 
         // Insert directly into learner
-        learner
-            .action_stats
-            .insert(UserAction::EnableTailscale, stats);
+        #[cfg(feature = "tailscale")]
+        let test_action = UserAction::EnableTailscale;
+        #[cfg(not(feature = "tailscale"))]
+        let test_action = UserAction::CustomAction("test".to_string());
 
-        // Now verify the stats are as expected
-        let stats = learner
-            .action_stats
-            .get(&UserAction::EnableTailscale)
-            .unwrap();
+        learner.action_stats.insert(test_action.clone(), stats);
+
+        learner.update_action_stats(&test_action, &context, 1400000000);
+        let stats = learner.action_stats.get(&test_action).unwrap();
         assert_eq!(stats.total_count, 1);
         assert_eq!(stats.recent_count, 1);
         assert!(stats.last_used.is_some());
@@ -1312,10 +1376,14 @@ mod tests {
         let mut context2 = context1.clone();
         context2.time_of_day = 15; // Slightly different time
 
-        learner.record_action(UserAction::EnableTailscale, context1.clone());
+        #[cfg(feature = "tailscale")]
+        let test_action = UserAction::EnableTailscale;
+        #[cfg(not(feature = "tailscale"))]
+        let test_action = UserAction::CustomAction("test".to_string());
 
-        let similarity =
-            learner.calculate_context_similarity(&UserAction::EnableTailscale, &context2);
+        learner.record_action(test_action.clone(), context1.clone());
+
+        let similarity = learner.calculate_context_similarity(&test_action, &context2);
 
         assert!(similarity > 0.8); // Should be similar
     }
@@ -1325,7 +1393,10 @@ mod tests {
         let mut learner = UsagePatternLearner::new();
         let context = create_test_context();
 
+        #[cfg(feature = "tailscale")]
         learner.record_action(UserAction::EnableTailscale, context);
+        #[cfg(not(feature = "tailscale"))]
+        learner.record_action(UserAction::CustomAction("test".to_string()), context);
 
         let temp_dir = tempfile::tempdir().unwrap();
         let model_path = temp_dir.path().join("usage_model.json");

@@ -22,7 +22,9 @@ pub mod nextdns;
 pub mod privilege;
 pub mod rfkill;
 pub mod ssh;
+#[cfg(feature = "tailscale")]
 pub mod tailscale;
+#[cfg(feature = "tailscale")]
 pub mod tailscale_prefs;
 pub mod tor;
 pub mod utils;
@@ -63,6 +65,7 @@ pub use privilege::{
 pub use ssh::{
     get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig,
 };
+#[cfg(feature = "tailscale")]
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
@@ -97,6 +100,7 @@ pub enum ActionType {
     NextDns(NextDnsAction),
     Ssh(SshAction),
     System(SystemAction),
+    #[cfg(feature = "tailscale")]
     Tailscale(TailscaleAction),
     Tor(TorAction),
     Vpn(VpnAction),
@@ -225,6 +229,7 @@ mod tests {
         let wifi_action = ActionType::Wifi(WifiAction::Connect);
         let bluetooth_action =
             ActionType::Bluetooth(BluetoothAction::ToggleConnect("device".to_string()));
+        #[cfg(feature = "tailscale")]
         let tailscale_action = ActionType::Tailscale(TailscaleAction::SetEnable(true));
 
         // Just ensure they can be created without panicking
@@ -238,6 +243,7 @@ mod tests {
             _ => panic!("Unexpected action type"),
         }
 
+        #[cfg(feature = "tailscale")]
         match tailscale_action {
             ActionType::Tailscale(_) => (),
             _ => panic!("Unexpected action type"),

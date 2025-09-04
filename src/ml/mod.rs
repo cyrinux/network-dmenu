@@ -10,7 +10,7 @@
 pub mod action_prioritizer;
 #[cfg(feature = "ml")]
 pub mod diagnostic_analyzer;
-#[cfg(feature = "ml")]
+#[cfg(all(feature = "ml", feature = "tailscale"))]
 pub mod exit_node_predictor;
 #[cfg(feature = "ml")]
 pub mod network_predictor;
