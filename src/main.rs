@@ -530,6 +530,11 @@ fn action_to_string(action: &ActionType) -> String {
         },
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
+            TailscaleAction::SetSuggestedExitNode => format_entry(
+                ACTION_TYPE_TAILSCALE,
+                "🎯",
+                "Use recommended exit node",
+            ),
             TailscaleAction::DisableExitNode => format_entry(
                 ACTION_TYPE_TAILSCALE,
                 ICON_CROSS,
@@ -688,6 +693,14 @@ fn find_selected_action<'a>(
             },
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
+                TailscaleAction::SetSuggestedExitNode => {
+                    action
+                        == format_entry(
+                            ACTION_TYPE_TAILSCALE,
+                            "🎯",
+                            "Use recommended exit node",
+                        )
+                },
                 TailscaleAction::DisableExitNode => {
                     action
                         == format_entry(

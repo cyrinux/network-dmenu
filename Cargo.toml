@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]

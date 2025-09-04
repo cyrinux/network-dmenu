@@ -22,20 +22,15 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 
 /// Privacy mode for location detection
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum PrivacyMode {
     /// Only WiFi networks, hashed identifiers, local processing only
+    #[default]
     High,
     /// WiFi + Bluetooth beacons, some caching allowed
     Medium,
     /// All methods including IP geolocation
     Low,
-}
-
-impl Default for PrivacyMode {
-    fn default() -> Self {
-        PrivacyMode::High
-    }
 }
 
 /// Coarse location information from IP geolocation

@@ -103,6 +103,12 @@ pub struct DaemonClient {
     socket_path: PathBuf,
 }
 
+impl Default for DaemonClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaemonClient {
     /// Create new daemon client
     pub fn new() -> Self {
@@ -153,7 +159,7 @@ impl DaemonClient {
             buffer.extend_from_slice(&temp_buffer[..n]);
             
             // Check if we have a complete message (ends with newline)
-            if buffer.ends_with(&[b'\n']) {
+            if buffer.ends_with(b"\n") {
                 break;
             }
         }
@@ -287,7 +293,7 @@ where
         buffer.extend_from_slice(&temp_buffer[..n]);
         
         // Check if we have a complete message
-        if buffer.ends_with(&[b'\n']) {
+        if buffer.ends_with(b"\n") {
             break;
         }
     }

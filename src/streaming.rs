@@ -581,6 +581,11 @@ async fn send_tailscale_actions_simple(
             )));
         }
 
+        // Add auto exit-node action if a suggested node is available
+        if !tailscale_state.suggested_exit_node.is_empty() {
+            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetSuggestedExitNode));
+        }
+
         if is_exit_node_active(&tailscale_state) {
             let _ = tx.send(ActionType::Tailscale(TailscaleAction::DisableExitNode));
         }

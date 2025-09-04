@@ -17,21 +17,12 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Persistent daemon state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct DaemonState {
     current_zone: Option<String>,
+    #[serde(default)]
     total_zone_changes: u32,
     last_scan: Option<DateTime<Utc>>,
-}
-
-impl Default for DaemonState {
-    fn default() -> Self {
-        Self {
-            current_zone: None,
-            total_zone_changes: 0,
-            last_scan: None,
-        }
-    }
 }
 
 /// Zone manager for geofencing operations
@@ -74,7 +65,7 @@ impl ZoneManager {
     /// Get zones storage file path
     fn get_zones_file_path(&self) -> PathBuf {
         let mut path = dirs::data_dir()
-            .or_else(|| dirs::home_dir())
+            .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
         path.push("network-dmenu");
         path.push("zones.json");
@@ -134,7 +125,7 @@ impl ZoneManager {
     /// Get daemon state storage file path
     fn get_daemon_state_path(&self) -> PathBuf {
         let mut path = dirs::data_dir()
-            .or_else(|| dirs::home_dir())
+            .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
         path.push("network-dmenu");
         path.push("daemon-state.json");
@@ -295,7 +286,7 @@ impl ZoneManager {
     pub fn remove_zone(&mut self, zone_id: &str) -> Result<()> {
         if self.zones.remove(zone_id).is_some() {
             // If this was the current zone, clear current zone
-            if self.current_zone.as_ref().map(|s| s.as_str()) == Some(zone_id) {
+            if self.current_zone.as_deref() == Some(zone_id) {
                 self.current_zone = None;
                 self.daemon_state.current_zone = None;
                 // Save daemon state
@@ -418,6 +409,12 @@ struct VisitPattern {
     visit_count: u32,
     total_duration_minutes: u32,
     typical_actions: Vec<String>,
+}
+
+impl Default for ZoneSuggestionEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ZoneSuggestionEngine {
