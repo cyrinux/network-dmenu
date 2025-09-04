@@ -1501,9 +1501,6 @@ impl MockNotificationSender {
         }
     }
 
-    // pub fn get_notifications(&self) -> Vec<(String, String, i32)> {
-    //     self.notifications.borrow().clone()
-    // }
 }
 
 #[cfg(test)]
