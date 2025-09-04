@@ -12,7 +12,7 @@ homepage = "https://github.com/cyrinux/network-dmenu"
 repository = "https://github.com/cyrinux/network-dmenu"
 
 [features]
-default = ["geofencing"]
+default = ["ml", "geofencing"]
 ml = ["smartcore", "ndarray", "linfa", "linfa-trees"]
 geofencing = ["sha2", "uuid", "thiserror"]
 
@@ -27,7 +27,13 @@ reqwest-middleware = "0.4.2"
 reqwest-retry = "0.7.0"
 notify-rust = { version = "4", default-features = false, features = ["dbus"] }
 which = "8.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "signal"], default-features = false }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "process",
+  "signal",
+], default-features = false }
 webbrowser = "1.0.3"
 country-emoji = "0.2.0"
 clap = { version = "4", features = [
