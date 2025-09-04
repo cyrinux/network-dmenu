@@ -155,7 +155,7 @@ impl UsagePatternLearner {
         let now_timestamp = now.timestamp();
 
         // Update action statistics
-        let stats = self.action_stats.entry(action.clone()).or_default();
+        let stats = self.action_stats.entry(action).or_default();
         stats.total_count += 1;
 
         // Update recent count (last 7 days)

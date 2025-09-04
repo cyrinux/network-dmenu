@@ -382,25 +382,25 @@ pub fn get_mullvad_actions(
         }
 
         // Get country and city from location data
-        let country = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+        let country = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.country.is_empty() {
-                "Unknown".to_string()
+                "Unknown"
             } else {
-                loc.country.clone()
+                &loc.country
             }
         });
 
-        let city = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+        let city = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.city.is_empty() {
-                "Unknown".to_string()
+                "Unknown"
             } else {
-                loc.city.clone()
+                &loc.city
             }
         });
 
-        // Add to the country and city groups
-        nodes_by_country.entry(country).or_default().push(peer);
-        nodes_by_city.entry(city).or_default().push(peer);
+        // Add to the country and city groups  
+        nodes_by_country.entry(country.to_string()).or_default().push(peer);
+        nodes_by_city.entry(city.to_string()).or_default().push(peer);
     }
 
     // Function to sort nodes by priority (highest first)
@@ -489,14 +489,14 @@ pub fn get_mullvad_actions(
             }
         });
 
-        let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+        let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
         let is_active = active_exit_node == &node_name;
         // Store all node information before formatting
         mullvad_actions.push((
             country.to_string(),
-            city.to_string(),
+            city.to_string(), 
             node_name.clone(),
-            node_ip,
+            node_ip.to_string(),
             is_active,
         ));
     }
@@ -537,7 +537,7 @@ pub fn get_mullvad_actions(
         .map(|(_, peer)| {
             let node_name = peer.dns_name.trim_end_matches('.').to_string();
             let is_active = active_exit_node == &node_name;
-            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+            let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
 
             // Get country and city information
             let (country, city) = peer.location.as_ref().map_or_else(
@@ -598,7 +598,7 @@ pub fn get_mullvad_actions(
                     .values()
                     .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
                 {
-                    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                    let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
                     let is_active = active_exit_node == &suggested_name;
                     
                     // Get country and city for consistent formatting

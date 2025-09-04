@@ -34,7 +34,7 @@ pub async fn select_action_from_menu_streaming(
     // Handle stdout mode - collect all actions first
     if use_stdout {
         #[allow(unused_mut)] // Needed for ML feature
-        let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
+        let mut actions = collect_all_actions(args, config).await?;
 
         // Apply ML personalization if enabled
         #[cfg(feature = "ml")]
@@ -65,7 +65,7 @@ pub async fn select_action_from_menu_streaming(
     // Handle stdin mode - collect all actions first
     if use_stdin {
         #[allow(unused_mut)] // Needed for ML feature
-        let mut actions = collect_all_actions(args.clone(), config.clone()).await?;
+        let mut actions = collect_all_actions(args, config).await?;
 
         // Apply ML personalization if enabled
         #[cfg(feature = "ml")]
@@ -98,27 +98,20 @@ pub async fn select_action_from_menu_streaming(
     // Normal mode - stream to dmenu
     let (tx, mut rx) = mpsc::unbounded_channel::<ActionType>();
 
-    // Spawn dmenu immediately using async process
-    let dmenu_args: Vec<String> = config
-        .dmenu_args
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    // Spawn dmenu immediately using async process  
     let mut child = tokio::process::Command::new(&config.dmenu_cmd)
-        .args(&dmenu_args)
+        .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
 
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
-    // Start producing actions in background
-    let args_clone = args.clone();
-    let config_clone = config.clone();
-
-    // Start producer task
+    // Start producer task - need to clone for 'static lifetime
+    let args_cloned = args.clone();
+    let config_cloned = config.clone();
     let producer_handle =
-        tokio::spawn(async move { stream_actions_simple(args_clone, config_clone, tx).await });
+        tokio::spawn(async move { stream_actions_simple(&args_cloned, &config_cloned, tx).await });
 
     // Collect all actions first for ML personalization
     let mut all_actions = Vec::new();
@@ -177,10 +170,10 @@ pub async fn select_action_from_menu_streaming(
 }
 
 /// Simple streaming function that avoids Send issues
-async fn stream_actions_simple(args: Args, config: Config, tx: mpsc::UnboundedSender<ActionType>) {
+async fn stream_actions_simple(args: &Args, config: &Config, tx: mpsc::UnboundedSender<ActionType>) {
     // Send custom actions first
-    for action in config.actions {
-        let _ = tx.send(ActionType::Custom(action));
+    for action in &config.actions {
+        let _ = tx.send(ActionType::Custom(action.clone()));
     }
 
     // Send system actions
@@ -215,7 +208,7 @@ async fn stream_actions_simple(args: Args, config: Config, tx: mpsc::UnboundedSe
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         handles.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, &wifi_interface).await;
+            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
         }));
     }
 
@@ -307,14 +300,14 @@ async fn stream_actions_simple(args: Args, config: Config, tx: mpsc::UnboundedSe
 
 /// Collect all actions without streaming (fallback)
 async fn collect_all_actions(
-    args: Args,
-    config: Config,
+    args: &Args,
+    config: &Config,
 ) -> Result<Vec<ActionType>, Box<dyn Error>> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let command_runner = RealCommandRunner;
 
     // Produce actions directly
-    let _ = produce_actions_streaming(&args, &config, &command_runner, tx).await;
+    let _ = produce_actions_streaming(args, config, &command_runner, tx).await;
 
     let mut actions = Vec::new();
     while let Some(action) = rx.recv().await {
@@ -366,7 +359,7 @@ async fn produce_actions_streaming(
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         tasks.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, &wifi_interface).await;
+            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
         }));
     }
 
@@ -513,7 +506,7 @@ async fn send_vpn_actions(tx: &mpsc::UnboundedSender<ActionType>) {
     }
 }
 
-async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interface: &str) {
+async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interface: Option<&str>) {
     let command_runner = RealCommandRunner;
 
     if is_command_installed("nmcli") {
@@ -530,7 +523,7 @@ async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interfac
             }
         }
     } else if is_command_installed("iwctl") {
-        if let Ok(actions) = get_iwd_networks(wifi_interface, &command_runner) {
+        if let Ok(actions) = get_iwd_networks(wifi_interface.unwrap_or("wlan0"), &command_runner) {
             for action in actions {
                 // Convert library WifiAction to main WifiAction
                 let main_action = match action {
