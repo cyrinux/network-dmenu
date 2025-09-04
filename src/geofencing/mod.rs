@@ -244,7 +244,7 @@ mod tests {
         let zone = GeofenceZone {
             id: "home".to_string(),
             name: "🏠 Home".to_string(),
-            fingerprint: LocationFingerprint::default(),
+            fingerprints: vec![LocationFingerprint::default()],
             confidence_threshold: 0.8,
             actions: ZoneActions {
                 wifi: Some("HomeWiFi-5G".to_string()),

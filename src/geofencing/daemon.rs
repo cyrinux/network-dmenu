@@ -910,7 +910,7 @@ mod tests {
         let daemon = GeofencingDaemon::new(config);
 
         // Basic creation test
-        assert!(!daemon.should_shutdown.try_read().unwrap());
+        assert!(!*daemon.should_shutdown.try_read().unwrap());
     }
 
     #[test]

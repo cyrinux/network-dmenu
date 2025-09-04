@@ -1833,6 +1833,8 @@ mod tests {
             torsocks_apps: std::collections::HashMap::new(),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
+            #[cfg(feature = "geofencing")]
+            geofencing: network_dmenu::geofencing::GeofencingConfig::default(),
         };
 
         // When args are None, config values should be used
@@ -1856,6 +1858,24 @@ mod tests {
             stdin: false,
             stdout: false,
             config: None,
+            #[cfg(feature = "geofencing")]
+            daemon: false,
+            #[cfg(feature = "geofencing")]
+            stop_daemon: false,
+            #[cfg(feature = "geofencing")]
+            daemon_status: false,
+            #[cfg(feature = "geofencing")]
+            create_zone: None,
+            #[cfg(feature = "geofencing")]
+            add_fingerprint: None,
+            #[cfg(feature = "geofencing")]
+            list_zones: false,
+            #[cfg(feature = "geofencing")]
+            activate_zone: None,
+            #[cfg(feature = "geofencing")]
+            where_am_i: false,
+            #[cfg(feature = "geofencing")]
+            geofence_daemon_internal: false,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);

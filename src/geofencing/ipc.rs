@@ -355,7 +355,6 @@ impl Drop for DaemonIpcServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
 
     #[tokio::test]
     async fn test_daemon_client_creation() {

@@ -548,13 +548,11 @@ fn suggest_zone_name(visit_count: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
-
     fn create_test_zone(id: &str, name: &str) -> GeofenceZone {
         GeofenceZone {
             id: id.to_string(),
             name: name.to_string(),
-            fingerprint: LocationFingerprint::default(),
+            fingerprints: vec![LocationFingerprint::default()],
             confidence_threshold: 0.8,
             actions: ZoneActions::default(),
             created_at: Utc::now(),
