@@ -37,6 +37,37 @@ fn extract_country_code_from_hostname(hostname: &str) -> &str {
     "unknown"
 }
 
+/// Extract a city/location identifier from a hostname.
+///
+/// Attempts to extract a meaningful city/location identifier from hostnames like:
+/// - "us-nyc-01.example.com" -> "NYC"  
+/// - "eu-amsterdam-02.ts.net" -> "Amsterdam"
+/// - "server-dallas.ts.net" -> "Dallas"
+/// - "random-hostname" -> "Various"
+///
+/// Returns a city name or "Various" if not found.
+fn extract_city_from_hostname(hostname: &str) -> String {
+    // Static regex for hostname city parsing
+    static CITY_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(?:^[a-z]{2}-([a-z]{3,})|([a-z]{3,})-\d|server-([a-z]{3,})|([a-z]{3,})-server)").unwrap()
+    });
+
+    if let Some(captures) = CITY_REGEX.captures(hostname) {
+        for i in 1..=4 {
+            if let Some(city_match) = captures.get(i) {
+                let city = city_match.as_str();
+                // Capitalize first letter
+                let mut chars = city.chars();
+                if let Some(first) = chars.next() {
+                    return format!("{}{}", first.to_uppercase(), chars.as_str());
+                }
+            }
+        }
+    }
+
+    "Various".to_string()
+}
+
 /// Structs to represent Tailscale JSON response
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleStatus {
@@ -505,28 +536,33 @@ pub fn get_mullvad_actions(
         })
         .map(|(_, peer)| {
             let node_name = peer.dns_name.trim_end_matches('.').to_string();
-            let node_short_name = extract_short_name(&node_name);
             let is_active = active_exit_node == &node_name;
             let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
 
-            // Get country code and flag
-            let country = peer.location.as_ref().map_or_else(
-                || extract_country_code_from_hostname(&node_name),
+            // Get country and city information
+            let (country, city) = peer.location.as_ref().map_or_else(
+                || {
+                    let country = extract_country_code_from_hostname(&node_name);
+                    let city = extract_city_from_hostname(&node_name);
+                    (country.to_string(), city)
+                },
                 |loc| {
-                    if loc.country.is_empty() {
-                        "unknown"
-                    } else {
-                        &loc.country
-                    }
+                    let country = if loc.country.is_empty() { "unknown" } else { &loc.country };
+                    let city = if loc.city.is_empty() { 
+                        extract_city_from_hostname(&node_name) 
+                    } else { 
+                        loc.city.clone() 
+                    };
+                    (country.to_string(), city)
                 },
             );
-            let flag = get_flag(country);
+            let flag = get_flag(&country);
 
             // Create display text with consistent formatting - include IP for extract_node_ip()
             let display_icon = if is_active { ICON_CHECK } else { &flag };
             let display_text = format!(
-                "{} - {} ({}) [{}]",
-                node_short_name, node_name, country, node_ip
+                "{} ({}) - {} [{}]",
+                country, city, node_name, node_ip
             );
 
             format_entry("exit-node", display_icon, &display_text)
@@ -562,14 +598,32 @@ pub fn get_mullvad_actions(
                     .values()
                     .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
                 {
-                    let node_short_name = extract_short_name(&suggested_name);
                     let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
                     let is_active = active_exit_node == &suggested_name;
+                    
+                    // Get country and city for consistent formatting
+                    let (country, city) = peer.location.as_ref().map_or_else(
+                        || {
+                            let country = extract_country_code_from_hostname(&suggested_name);
+                            let city = extract_city_from_hostname(&suggested_name);
+                            (country.to_string(), city)
+                        },
+                        |loc| {
+                            let country = if loc.country.is_empty() { "unknown" } else { &loc.country };
+                            let city = if loc.city.is_empty() { 
+                                extract_city_from_hostname(&suggested_name) 
+                            } else { 
+                                loc.city.clone() 
+                            };
+                            (country.to_string(), city)
+                        },
+                    );
+                    
                     let icon = if is_active { ICON_CHECK } else { ICON_STAR };
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!("{} - {} [{}] (suggested)", node_short_name, suggested_name, node_ip),
+                        &format!("{} ({}) - {} [{}] (suggested)", country, city, suggested_name, node_ip),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
@@ -648,6 +702,7 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
 }
 
 /// Extracts the short name from a node name.
+#[allow(dead_code)]
 fn extract_short_name(node_name: &str) -> &str {
     node_name.split('.').next().unwrap_or(node_name)
 }
