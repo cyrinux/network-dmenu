@@ -558,11 +558,11 @@ pub fn get_mullvad_actions(
             );
             let flag = get_flag(&country);
 
-            // Create display text with consistent formatting - include IP for extract_node_ip()
+            // Create display text with name first, then location in parentheses
             let display_icon = if is_active { ICON_CHECK } else { &flag };
             let display_text = format!(
-                "{} ({}) - {} [{}]",
-                country, city, node_name, node_ip
+                "{} ({}, {}) [{}]",
+                node_name, country, city, node_ip
             );
 
             format_entry("exit-node", display_icon, &display_text)
@@ -623,7 +623,7 @@ pub fn get_mullvad_actions(
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!("{} ({}) - {} [{}] (suggested)", country, city, suggested_name, node_ip),
+                        &format!("{} ({}, {}) [{}] (suggested)", suggested_name, country, city, node_ip),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
