@@ -10,7 +10,12 @@
       "Bash(cargo clippy:*)",
       "Bash(git commit:*)",
       "Bash(rga:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --where-am-i)",
+      "Bash(network-dmenu:*)",
+      "Bash(echo:*)",
+      "Read(//home/cyril/.local/share/network-dmenu/**)",
+      "Read(//home/cyril/.local/share/**)"
     ],
     "deny": [],
     "ask": []

@@ -8,6 +8,8 @@ pub mod command;
 pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
+#[cfg(feature = "geofencing")]
+pub mod geofencing;
 pub mod iwd;
 pub mod logger;
 #[cfg(feature = "ml")]

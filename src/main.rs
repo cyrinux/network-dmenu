@@ -98,10 +98,43 @@ struct Args {
     stdout: bool,
     #[arg(long, help = "Path to the config file")]
     config: Option<PathBuf>,
+    
+    // Geofencing options
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Start geofencing daemon")]
+    daemon: bool,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Stop geofencing daemon")]
+    stop_daemon: bool,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Show daemon status")]
+    daemon_status: bool,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Create geofence zone from current location")]
+    create_zone: Option<String>,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "List all geofence zones")]
+    list_zones: bool,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Manually activate a geofence zone")]
+    activate_zone: Option<String>,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Show current location fingerprint")]
+    where_am_i: bool,
+    
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Internal flag to run daemon directly (used by ensure_daemon_running)", hide = true)]
+    geofence_daemon_internal: bool,
 }
 
 /// Configuration structure for the application.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 struct Config {
     #[serde(default)]
     actions: Vec<CustomAction>,
@@ -125,6 +158,10 @@ struct Config {
     torsocks_apps: std::collections::HashMap<String, TorsocksConfig>,
     dmenu_cmd: String,
     dmenu_args: String,
+    
+    #[cfg(feature = "geofencing")]
+    #[serde(default)]
+    geofencing: network_dmenu::geofencing::GeofencingConfig,
 }
 
 /// Custom action structure for user-defined actions.
@@ -264,6 +301,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "ml")]
     {
         network_dmenu::initialize_ml_system();
+    }
+    
+    // Handle geofencing commands
+    #[cfg(feature = "geofencing")]
+    {
+        if let Some(result) = handle_geofencing_commands(&args).await? {
+            return result;
+        }
     }
 
     // Start profiling total execution time
@@ -1781,4 +1826,189 @@ mod tests {
             _ => panic!("Expected TestConnectivity action"),
         }
     }
+}
+
+/// Handle geofencing-specific commands
+#[cfg(feature = "geofencing")]
+async fn handle_geofencing_commands(args: &Args) -> Result<Option<Result<(), Box<dyn Error>>>, Box<dyn Error>> {
+    use network_dmenu::geofencing::{
+        ipc::{DaemonClient, DaemonCommand, DaemonResponse},
+        fingerprinting::create_wifi_fingerprint,
+        PrivacyMode, ZoneActions,
+    };
+    
+    // Load configuration - use default config for geofencing commands
+    let config = Config::default();
+    let mut geofencing_config = config.geofencing;
+    
+    // Enable geofencing for daemon commands
+    if args.daemon || args.geofence_daemon_internal {
+        geofencing_config.enabled = true;
+    }
+    
+    // Internal daemon flag - run daemon directly
+    if args.geofence_daemon_internal {
+        use network_dmenu::geofencing::daemon::GeofencingDaemon;
+        
+        let mut daemon = GeofencingDaemon::new(geofencing_config);
+        if let Err(e) = daemon.run().await {
+            eprintln!("Daemon failed: {}", e);
+            std::process::exit(1);
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Start daemon
+    if args.daemon {
+        println!("Starting geofencing daemon...");
+        
+        // Run daemon directly (this will block)
+        use network_dmenu::geofencing::daemon::GeofencingDaemon;
+        let mut daemon = GeofencingDaemon::new(geofencing_config);
+        
+        println!("Geofencing daemon running...");
+        if let Err(e) = daemon.run().await {
+            eprintln!("Daemon failed: {}", e);
+            return Ok(Some(Err(e.into())));
+        }
+        
+        return Ok(Some(Ok(())));
+    }
+    
+    // Stop daemon
+    if args.stop_daemon {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running");
+            return Ok(Some(Ok(())));
+        }
+        
+        match client.send_command(DaemonCommand::Shutdown).await {
+            Ok(_) => println!("Daemon stopped successfully"),
+            Err(e) => eprintln!("Failed to stop daemon: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Show daemon status
+    if args.daemon_status {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running");
+            return Ok(Some(Ok(())));
+        }
+        
+        match client.get_status().await {
+            Ok(status) => {
+                println!("Daemon Status:");
+                println!("  Monitoring: {}", status.monitoring);
+                println!("  Zone count: {}", status.zone_count);
+                println!("  Active zone: {}", status.active_zone_id.unwrap_or_else(|| "None".to_string()));
+                println!("  Last scan: {}", status.last_scan.map(|t| t.to_string()).unwrap_or_else(|| "Never".to_string()));
+                println!("  Zone changes: {}", status.total_zone_changes);
+                println!("  Uptime: {}s", status.uptime_seconds);
+            },
+            Err(e) => eprintln!("Failed to get daemon status: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Create zone
+    if let Some(ref zone_name) = args.create_zone {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+        
+        let actions = ZoneActions {
+            notifications: true,
+            ..Default::default()
+        };
+        
+        match client.create_zone(zone_name.clone(), actions).await {
+            Ok(zone) => {
+                println!("Created zone '{}' with ID: {}", zone.name, zone.id);
+                println!("Confidence score: {:.2}", zone.fingerprint.confidence_score);
+            },
+            Err(e) => eprintln!("Failed to create zone: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // List zones
+    if args.list_zones {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Zones are stored in config file.");
+            return Ok(Some(Ok(())));
+        }
+        
+        match client.list_zones().await {
+            Ok(zones) => {
+                if zones.is_empty() {
+                    println!("No zones configured");
+                } else {
+                    println!("Configured zones:");
+                    for zone in zones {
+                        println!("  {} ({})", zone.name, zone.id);
+                        println!("    Created: {}", zone.created_at);
+                        println!("    Matches: {}", zone.match_count);
+                        if let Some(last_matched) = zone.last_matched {
+                            println!("    Last matched: {}", last_matched);
+                        }
+                    }
+                }
+            },
+            Err(e) => eprintln!("Failed to list zones: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Activate zone
+    if let Some(ref zone_id) = args.activate_zone {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+        
+        match client.send_command(DaemonCommand::ActivateZone { zone_id: zone_id.clone() }).await {
+            Ok(DaemonResponse::ZoneChanged { to_zone, .. }) => {
+                println!("Activated zone: {}", to_zone.name);
+            },
+            Ok(DaemonResponse::Error { message }) => {
+                eprintln!("Failed to activate zone: {}", message);
+            },
+            Err(e) => eprintln!("Failed to activate zone: {}", e),
+            _ => eprintln!("Unexpected response"),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // Show current location
+    if args.where_am_i {
+        println!("Detecting current location...");
+        match create_wifi_fingerprint(PrivacyMode::High).await {
+            Ok(fingerprint) => {
+                println!("Location fingerprint:");
+                println!("  WiFi networks detected: {}", fingerprint.wifi_networks.len());
+                println!("  Confidence score: {:.2}", fingerprint.confidence_score);
+                println!("  Timestamp: {}", fingerprint.timestamp);
+                
+                // If daemon is running, check for zone match
+                let client = DaemonClient::new();
+                if client.is_daemon_running() {
+                    if let Ok(Some(active_zone)) = client.get_active_zone().await {
+                        println!("  Current zone: {} ({})", active_zone.name, active_zone.id);
+                    }
+                }
+            },
+            Err(e) => eprintln!("Failed to detect location: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+    
+    // No geofencing command was used
+    Ok(None)
 }
