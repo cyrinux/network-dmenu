@@ -482,10 +482,11 @@ pub fn get_mullvad_actions(
     // Now format the sorted nodes with proper icons
     let mut mullvad_results: Vec<String> = mullvad_actions
         .into_iter()
-        .map(|(country, city, node_name, _node_ip, is_active)| {
+        .map(|(country, city, node_name, node_ip, is_active)| {
             let flag = get_flag(&country);
             let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display = format!("{} ({})\t{}", country, city, node_name);
+            // Include IP address in display for extract_node_ip() to work
+            let display = format!("{} ({})\t{} [{}]", country, city, node_name, node_ip);
             format_entry("mullvad", display_icon, &display)
         })
         .collect();
@@ -506,7 +507,7 @@ pub fn get_mullvad_actions(
             let node_name = peer.dns_name.trim_end_matches('.').to_string();
             let node_short_name = extract_short_name(&node_name);
             let is_active = active_exit_node == &node_name;
-            let _node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
 
             // Get country code and flag
             let country = peer.location.as_ref().map_or_else(
@@ -521,11 +522,11 @@ pub fn get_mullvad_actions(
             );
             let flag = get_flag(country);
 
-            // Create display text with active check
+            // Create display text with active check - include IP for extract_node_ip()
             let active_mark = if is_active { ICON_CHECK } else { &flag };
             let display_text = format!(
-                "{} {} - {} [{}]",
-                active_mark, node_short_name, node_name, country
+                "{} {} - {} [{}] {}",
+                active_mark, node_short_name, node_name, country, node_ip
             );
 
             format_entry("exit-node", ICON_LEAF, &display_text)
@@ -562,13 +563,13 @@ pub fn get_mullvad_actions(
                     .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
                 {
                     let node_short_name = extract_short_name(&suggested_name);
-                    let _node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
                     let is_active = active_exit_node == &suggested_name;
                     let icon = if is_active { ICON_CHECK } else { ICON_STAR };
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!("{} - {} (suggested)", node_short_name, suggested_name),
+                        &format!("{} - {} (suggested) {}", node_short_name, suggested_name, node_ip),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
