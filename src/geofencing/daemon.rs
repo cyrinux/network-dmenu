@@ -41,7 +41,7 @@ impl GeofencingDaemon {
     pub fn new(config: GeofencingConfig) -> Self {
         debug!("Creating new geofencing daemon with config: enabled={}, privacy_mode={:?}, scan_interval={}s",
             config.enabled, config.privacy_mode, config.scan_interval_seconds);
-        
+
         let zone_manager = Arc::new(Mutex::new(ZoneManager::new(config.clone())));
 
         let status = Arc::new(RwLock::new(DaemonStatusData {
@@ -64,8 +64,12 @@ impl GeofencingDaemon {
     /// Start the daemon
     pub async fn run(&mut self) -> Result<()> {
         info!("Starting geofencing daemon");
-        debug!("Daemon configuration: scan_interval={}s, confidence_threshold={}, notifications={}",
-            self.config.scan_interval_seconds, self.config.confidence_threshold, self.config.notifications);
+        debug!(
+            "Daemon configuration: scan_interval={}s, confidence_threshold={}, notifications={}",
+            self.config.scan_interval_seconds,
+            self.config.confidence_threshold,
+            self.config.notifications
+        );
 
         // Update status
         {
@@ -151,7 +155,10 @@ impl GeofencingDaemon {
         should_shutdown: Arc<RwLock<bool>>,
         scan_interval: Duration,
     ) {
-        debug!("Starting location monitoring loop with interval {:?}", scan_interval);
+        debug!(
+            "Starting location monitoring loop with interval {:?}",
+            scan_interval
+        );
         let mut interval = interval(scan_interval);
         let mut scan_count = 0u64;
 
@@ -184,13 +191,17 @@ impl GeofencingDaemon {
                 match manager.detect_location_change().await {
                     Ok(change) => {
                         if let Some(ref change) = change {
-                            debug!("Location change detected: from {:?} to {} (confidence: {:.2})",
-                                change.from.as_ref().map(|z| &z.name), change.to.name, change.confidence);
+                            debug!(
+                                "Location change detected: from {:?} to {} (confidence: {:.2})",
+                                change.from.as_ref().map(|z| &z.name),
+                                change.to.name,
+                                change.confidence
+                            );
                         } else {
                             debug!("No location change detected in scan #{}", scan_count);
                         }
                         change
-                    },
+                    }
                     Err(e) => {
                         warn!("Location detection failed in scan #{}: {}", scan_count, e);
                         continue;
@@ -202,13 +213,18 @@ impl GeofencingDaemon {
             {
                 let mut status_data = status.write().await;
                 status_data.last_scan = Some(Utc::now());
-                debug!("Updated last scan time to {}", status_data.last_scan.unwrap());
+                debug!(
+                    "Updated last scan time to {}",
+                    status_data.last_scan.unwrap()
+                );
 
                 if let Some(ref change) = location_change {
                     status_data.total_zone_changes += 1;
                     status_data.current_zone_id = Some(change.to.id.clone());
-                    debug!("Total zone changes now: {}, current zone: {}", 
-                        status_data.total_zone_changes, change.to.id);
+                    debug!(
+                        "Total zone changes now: {}, current zone: {}",
+                        status_data.total_zone_changes, change.to.id
+                    );
                 }
             }
 
@@ -236,22 +252,37 @@ impl GeofencingDaemon {
                 // Execute zone actions
                 debug!("Executing zone actions for zone '{}'", change.to.name);
                 if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
-                    error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
+                    error!(
+                        "Failed to execute zone actions for zone '{}': {}",
+                        change.to.name, e
+                    );
                 } else {
-                    debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
+                    debug!(
+                        "Successfully executed all zone actions for zone '{}'",
+                        change.to.name
+                    );
                 }
 
                 // Send notification if enabled
                 if change.suggested_actions.notifications {
-                    debug!("Sending zone change notification for zone '{}'", change.to.name);
+                    debug!(
+                        "Sending zone change notification for zone '{}'",
+                        change.to.name
+                    );
                     Self::send_zone_change_notification(&change);
                 } else {
-                    debug!("Notifications disabled for zone '{}', skipping notification", change.to.name);
+                    debug!(
+                        "Notifications disabled for zone '{}', skipping notification",
+                        change.to.name
+                    );
                 }
             }
         }
 
-        info!("Location monitoring loop stopped after {} scans", scan_count);
+        info!(
+            "Location monitoring loop stopped after {} scans",
+            scan_count
+        );
     }
 
     /// Handle IPC commands from clients
@@ -272,13 +303,13 @@ impl GeofencingDaemon {
                         debug!("Successfully created location fingerprint with {} WiFi networks, confidence: {:.2}",
                             fingerprint.wifi_networks.len(), fingerprint.confidence_score);
                         DaemonResponse::LocationUpdate { fingerprint }
-                    },
+                    }
                     Err(e) => {
                         warn!("Failed to create location fingerprint: {}", e);
                         DaemonResponse::Error {
                             message: format!("Failed to get location: {}", e),
                         }
-                    },
+                    }
                 }
             }
 
@@ -300,7 +331,12 @@ impl GeofencingDaemon {
                 let zones = manager.list_zones();
                 debug!("Returning {} configured zones", zones.len());
                 for zone in &zones {
-                    debug!("  Zone: {} (ID: {}, {} fingerprints)", zone.name, zone.id, zone.fingerprints.len());
+                    debug!(
+                        "  Zone: {} (ID: {}, {} fingerprints)",
+                        zone.name,
+                        zone.id,
+                        zone.fingerprints.len()
+                    );
                 }
                 DaemonResponse::ZoneList { zones }
             }
@@ -333,16 +369,25 @@ impl GeofencingDaemon {
                 let mut manager = zone_manager.lock().await;
                 match manager.activate_zone(&zone_id) {
                     Ok(change) => {
-                        debug!("Zone '{}' activated successfully, executing actions", change.to.name);
+                        debug!(
+                            "Zone '{}' activated successfully, executing actions",
+                            change.to.name
+                        );
                         // Execute zone actions
                         if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await
                         {
-                            warn!("Zone '{}' activated but actions failed: {}", change.to.name, e);
+                            warn!(
+                                "Zone '{}' activated but actions failed: {}",
+                                change.to.name, e
+                            );
                             return DaemonResponse::Error {
                                 message: format!("Zone activated but actions failed: {}", e),
                             };
                         }
-                        debug!("Successfully executed all actions for zone '{}'", change.to.name);
+                        debug!(
+                            "Successfully executed all actions for zone '{}'",
+                            change.to.name
+                        );
 
                         DaemonResponse::ZoneChanged {
                             from_zone_id: change.from.map(|z| z.id),
@@ -355,7 +400,7 @@ impl GeofencingDaemon {
                         DaemonResponse::Error {
                             message: format!("Failed to activate zone: {}", e),
                         }
-                    },
+                    }
                 }
             }
 
@@ -369,39 +414,48 @@ impl GeofencingDaemon {
                             success: true,
                             message: format!("Added new fingerprint to zone '{}'", zone_name),
                         }
-                    },
+                    }
                     Ok(false) => {
-                        debug!("Fingerprint too similar to existing ones in zone '{}', not added", zone_name);
+                        debug!(
+                            "Fingerprint too similar to existing ones in zone '{}', not added",
+                            zone_name
+                        );
                         DaemonResponse::FingerprintAdded {
                             success: false,
-                            message: format!("Fingerprint too similar to existing ones in zone '{}'", zone_name),
+                            message: format!(
+                                "Fingerprint too similar to existing ones in zone '{}'",
+                                zone_name
+                            ),
                         }
-                    },
+                    }
                     Err(e) => {
                         warn!("Failed to add fingerprint to zone '{}': {}", zone_name, e);
                         DaemonResponse::FingerprintAdded {
                             success: false,
                             message: format!("Failed to add fingerprint: {}", e),
                         }
-                    },
+                    }
                 }
             }
 
             DaemonCommand::ExecuteActions { actions } => {
-                debug!("Processing ExecuteActions command with {} custom commands", actions.custom_commands.len());
+                debug!(
+                    "Processing ExecuteActions command with {} custom commands",
+                    actions.custom_commands.len()
+                );
                 debug!("Actions details: WiFi={:?}, VPN={:?}, Tailscale Exit={:?}, Shields={:?}, Bluetooth={:?}",
                     actions.wifi, actions.vpn, actions.tailscale_exit_node, actions.tailscale_shields, actions.bluetooth);
                 match Self::execute_zone_actions(&actions).await {
                     Ok(_) => {
                         debug!("Successfully executed all requested actions");
                         DaemonResponse::Success
-                    },
+                    }
                     Err(e) => {
                         warn!("Failed to execute requested actions: {}", e);
                         DaemonResponse::Error {
                             message: format!("Failed to execute actions: {}", e),
                         }
-                    },
+                    }
                 }
             }
 
@@ -428,9 +482,7 @@ impl GeofencingDaemon {
                     },
                     uptime_seconds: status_data.startup_time.elapsed().as_secs(),
                 };
-                debug!("Daemon status: monitoring={}, {} zones, active_zone={:?}, {} zone changes, uptime={}s",
-                    daemon_status.monitoring, daemon_status.zone_count, daemon_status.active_zone_id, 
-                    daemon_status.total_zone_changes, daemon_status.uptime_seconds);
+                debug!("Daemon status: monitoring={}, {} zones, active_zone={:?}, {} zone changes, uptime={}s", daemon_status.monitoring, daemon_status.zone_count, daemon_status.active_zone_id, daemon_status.total_zone_changes, daemon_status.uptime_seconds);
                 DaemonResponse::Status {
                     status: daemon_status,
                 }
@@ -456,7 +508,10 @@ impl GeofencingDaemon {
 
         // Connect to WiFi
         if let Some(ref wifi_ssid) = actions.wifi {
-            debug!("Processing WiFi connection action for SSID: '{}'", wifi_ssid);
+            debug!(
+                "Processing WiFi connection action for SSID: '{}'",
+                wifi_ssid
+            );
             info!("Connecting to WiFi: {}", wifi_ssid);
 
             let command_runner = RealCommandRunner;
@@ -476,19 +531,32 @@ impl GeofencingDaemon {
                         true
                     }
                     Ok(output) => {
-                        debug!("NetworkManager connection failed with status: {:?}, stderr: {:?}", output.status, String::from_utf8_lossy(&output.stderr));
-                        warn!("Failed to connect to WiFi {} (may need password)", wifi_ssid);
+                        debug!(
+                            "NetworkManager connection failed with status: {:?}, stderr: {:?}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                        warn!(
+                            "Failed to connect to WiFi {} (may need password)",
+                            wifi_ssid
+                        );
                         false
                     }
                     Err(e) => {
                         debug!("NetworkManager command execution error: {}", e);
-                        warn!("Failed to execute nmcli command for WiFi {}: {}", wifi_ssid, e);
+                        warn!(
+                            "Failed to execute nmcli command for WiFi {}: {}",
+                            wifi_ssid, e
+                        );
                         false
                     }
                 }
             } else if crate::command::is_command_installed("iwctl") {
                 debug!("Using IWD (iwctl) for WiFi connection as NetworkManager not available");
-                debug!("Executing iwctl command: station wlan0 connect {}", wifi_ssid);
+                debug!(
+                    "Executing iwctl command: station wlan0 connect {}",
+                    wifi_ssid
+                );
                 // Use IWD - attempt connection
                 let result = command_runner
                     .run_command("iwctl", &["station", "wlan0", "connect", wifi_ssid]);
@@ -500,13 +568,23 @@ impl GeofencingDaemon {
                         true
                     }
                     Ok(output) => {
-                        debug!("IWD connection failed with status: {:?}, stderr: {:?}", output.status, String::from_utf8_lossy(&output.stderr));
-                        warn!("Failed to connect to WiFi {} (may need password)", wifi_ssid);
+                        debug!(
+                            "IWD connection failed with status: {:?}, stderr: {:?}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                        warn!(
+                            "Failed to connect to WiFi {} (may need password)",
+                            wifi_ssid
+                        );
                         false
                     }
                     Err(e) => {
                         debug!("IWD command execution error: {}", e);
-                        warn!("Failed to execute iwctl command for WiFi {}: {}", wifi_ssid, e);
+                        warn!(
+                            "Failed to execute iwctl command for WiFi {}: {}",
+                            wifi_ssid, e
+                        );
                         false
                     }
                 }
@@ -517,7 +595,10 @@ impl GeofencingDaemon {
             };
 
             if !success {
-                debug!("WiFi connection attempt to '{}' was unsuccessful", wifi_ssid);
+                debug!(
+                    "WiFi connection attempt to '{}' was unsuccessful",
+                    wifi_ssid
+                );
                 error!(
                     "WiFi connection to {} failed - geofencing may not work as expected",
                     wifi_ssid
@@ -544,7 +625,10 @@ impl GeofencingDaemon {
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        debug!("VPN connection failed with status: {:?}, stderr: {}", output.status, stderr);
+                        debug!(
+                            "VPN connection failed with status: {:?}, stderr: {}",
+                            output.status, stderr
+                        );
                         error!("Failed to connect to VPN {}: {}", vpn_name, stderr);
                     }
                     Err(e) => {
@@ -569,8 +653,7 @@ impl GeofencingDaemon {
                 debug!("Using Tailscale CLI to set exit node");
                 let exit_node_arg = format!("--exit-node={}", exit_node);
                 debug!("Executing tailscale command: set {}", exit_node_arg);
-                let result = command_runner
-                    .run_command("tailscale", &["set", &exit_node_arg]);
+                let result = command_runner.run_command("tailscale", &["set", &exit_node_arg]);
 
                 match result {
                     Ok(output) if output.status.success() => {
@@ -579,7 +662,10 @@ impl GeofencingDaemon {
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        debug!("Tailscale exit node failed with status: {:?}, stderr: {}", output.status, stderr);
+                        debug!(
+                            "Tailscale exit node failed with status: {:?}, stderr: {}",
+                            output.status, stderr
+                        );
                         error!(
                             "Failed to set Tailscale exit node {}: {}",
                             exit_node, stderr
@@ -625,7 +711,10 @@ impl GeofencingDaemon {
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        debug!("Tailscale shields failed with status: {:?}, stderr: {}", output.status, stderr);
+                        debug!(
+                            "Tailscale shields failed with status: {:?}, stderr: {}",
+                            output.status, stderr
+                        );
                         error!("Failed to set Tailscale shields: {}", stderr);
                     }
                     Err(e) => {
@@ -641,7 +730,10 @@ impl GeofencingDaemon {
 
         // Connect Bluetooth devices
         for device_name in &actions.bluetooth {
-            debug!("Processing Bluetooth connection action for device: '{}'", device_name);
+            debug!(
+                "Processing Bluetooth connection action for device: '{}'",
+                device_name
+            );
             info!("Connecting Bluetooth device: {}", device_name);
 
             let command_runner = RealCommandRunner;
@@ -687,7 +779,10 @@ impl GeofencingDaemon {
                                 }
                                 Ok(output) => {
                                     let stderr = String::from_utf8_lossy(&output.stderr);
-                                    debug!("Bluetooth connection failed with status: {:?}, stderr: {}", output.status, stderr);
+                                    debug!(
+                                        "Bluetooth connection failed with status: {:?}, stderr: {}",
+                                        output.status, stderr
+                                    );
                                     warn!(
                                         "Failed to connect to Bluetooth device: {} ({}): {}",
                                         device_name, address, stderr
@@ -702,7 +797,10 @@ impl GeofencingDaemon {
                                 }
                             }
                         } else {
-                            debug!("Device '{}' not found in bluetoothctl devices output", device_name);
+                            debug!(
+                                "Device '{}' not found in bluetoothctl devices output",
+                                device_name
+                            );
                             warn!(
                                 "Bluetooth device '{}' not found in paired devices",
                                 device_name
@@ -711,12 +809,21 @@ impl GeofencingDaemon {
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        debug!("Bluetooth devices listing failed with status: {:?}, stderr: {}", output.status, stderr);
-                        error!("Failed to list Bluetooth devices for {}: {}", device_name, stderr);
+                        debug!(
+                            "Bluetooth devices listing failed with status: {:?}, stderr: {}",
+                            output.status, stderr
+                        );
+                        error!(
+                            "Failed to list Bluetooth devices for {}: {}",
+                            device_name, stderr
+                        );
                     }
                     Err(e) => {
                         debug!("Bluetooth devices command execution error: {}", e);
-                        error!("Failed to execute bluetoothctl devices command for {}: {}", device_name, e);
+                        error!(
+                            "Failed to execute bluetoothctl devices command for {}: {}",
+                            device_name, e
+                        );
                     }
                 }
             } else {
@@ -726,7 +833,10 @@ impl GeofencingDaemon {
         }
 
         // Execute custom commands
-        debug!("Processing {} custom commands", actions.custom_commands.len());
+        debug!(
+            "Processing {} custom commands",
+            actions.custom_commands.len()
+        );
         for (idx, command) in actions.custom_commands.iter().enumerate() {
             debug!("Processing custom command #{}: '{}'", idx + 1, command);
             info!("Executing custom command: {}", command);
@@ -751,7 +861,11 @@ impl GeofencingDaemon {
                             }
                         } else {
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            debug!("Custom command failed with status: {:?}, stderr: {}", output.status, stderr.trim());
+                            debug!(
+                                "Custom command failed with status: {:?}, stderr: {}",
+                                output.status,
+                                stderr.trim()
+                            );
                             error!(
                                 "Custom command failed: {} - Error: {}",
                                 command,
@@ -859,7 +973,10 @@ impl GeofencingDaemon {
         debug!("Preparing to send zone change notification");
         let title = "Network Zone Changed";
         let body = if let Some(ref from_zone) = change.from {
-            debug!("Zone change from '{}' to '{}' with confidence {:.2}", from_zone.name, change.to.name, change.confidence);
+            debug!(
+                "Zone change from '{}' to '{}' with confidence {:.2}",
+                from_zone.name, change.to.name, change.confidence
+            );
             format!(
                 "Switched from {} to {} zone\nConfidence: {:.0}%",
                 from_zone.name,
@@ -867,14 +984,21 @@ impl GeofencingDaemon {
                 change.confidence * 100.0
             )
         } else {
-            debug!("Initial zone entry to '{}' with confidence {:.2}", change.to.name, change.confidence);
+            debug!(
+                "Initial zone entry to '{}' with confidence {:.2}",
+                change.to.name, change.confidence
+            );
             format!(
                 "Entered {} zone\nConfidence: {:.0}%",
                 change.to.name,
                 change.confidence * 100.0
             )
         };
-        debug!("Notification content prepared: title='{}', body='{}'", title, body.replace("\n", " | "));
+        debug!(
+            "Notification content prepared: title='{}', body='{}'",
+            title,
+            body.replace("\n", " | ")
+        );
 
         // Send desktop notification
         debug!("Sending desktop notification via notify-rust");

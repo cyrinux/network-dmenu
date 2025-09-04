@@ -1,25 +1,25 @@
 //! Geofencing module for location-aware network management
-//! 
+//!
 //! Provides privacy-first location detection using WiFi fingerprinting
 //! and automatic network configuration based on detected zones.
 
 #[cfg(feature = "geofencing")]
-pub mod fingerprinting;
-#[cfg(feature = "geofencing")]
-pub mod zones;
-#[cfg(feature = "geofencing")]
 pub mod daemon;
 #[cfg(feature = "geofencing")]
+pub mod fingerprinting;
+#[cfg(feature = "geofencing")]
 pub mod ipc;
+#[cfg(feature = "geofencing")]
+pub mod zones;
 
 #[cfg(feature = "geofencing")]
 pub use fingerprinting::*;
 #[cfg(feature = "geofencing")]
 pub use zones::*;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use chrono::{DateTime, Utc};
 
 /// Privacy mode for location detection
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
@@ -194,22 +194,22 @@ pub struct ZoneSuggestion {
 pub enum GeofenceError {
     #[error("Location detection failed: {0}")]
     LocationDetection(String),
-    
+
     #[error("Zone matching failed: {0}")]
     ZoneMatching(String),
-    
+
     #[error("Zone not found: {0}")]
     ZoneNotFound(String),
-    
+
     #[error("Configuration error: {0}")]
     Config(String),
-    
+
     #[error("Action execution failed: {0}")]
     ActionExecution(String),
-    
+
     #[error("IPC communication error: {0}")]
     Ipc(String),
-    
+
     #[error("Daemon error: {0}")]
     Daemon(String),
 }
@@ -228,14 +228,14 @@ mod tests {
             signal_strength: -50,
             frequency: 2412,
         };
-        
+
         let sig2 = NetworkSignature {
             ssid_hash: "hash2".to_string(),
             bssid_prefix: "aa:bb:cc".to_string(),
             signal_strength: -60,
             frequency: 2412,
         };
-        
+
         assert!(sig1 < sig2); // Deterministic ordering for BTreeSet
     }
 
@@ -256,7 +256,7 @@ mod tests {
             last_matched: None,
             match_count: 0,
         };
-        
+
         assert_eq!(zone.id, "home");
         assert!(zone.actions.wifi.is_some());
     }

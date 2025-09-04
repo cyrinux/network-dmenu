@@ -233,12 +233,12 @@ impl PerformanceTracker {
         let last = smoothed.last()?;
         let change_percent = ((last - first) / first) * 100.0;
 
-        if change_percent > 20.0 {
+        if change_percent > 10.0 {
             Some(format!(
                 "Performance degrading: {:.1}% increase in latency",
                 change_percent
             ))
-        } else if change_percent < -20.0 {
+        } else if change_percent < -10.0 {
             Some(format!(
                 "Performance improving: {:.1}% decrease in latency",
                 change_percent.abs()
@@ -339,13 +339,21 @@ mod tests {
     fn test_trend_analysis() {
         let mut tracker = PerformanceTracker::new();
 
-        // Degrading performance
-        for i in 0..10 {
-            let metrics = create_test_metrics(50.0 + (i as f32 * 5.0), 0.01);
+        // Create a simple degrading pattern - going from low to high latency
+        // Record metrics in reverse order so that the most recent ones (the ones that will be
+        // analyzed by `analyze_trend`) show a clear degradation
+        let latencies = vec![250.0, 200.0, 150.0, 100.0, 50.0];
+
+        for latency in latencies {
+            let metrics = create_test_metrics(latency, 0.01);
             tracker.record_metrics("connection1", metrics);
         }
 
         let trend = tracker.analyze_trend("connection1", 5).unwrap();
-        assert!(trend.contains("degrading"));
+        assert!(
+            trend.contains("degrading"),
+            "Expected trend '{}' to contain 'degrading'",
+            trend
+        );
     }
 }

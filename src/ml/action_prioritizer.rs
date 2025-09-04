@@ -3,7 +3,7 @@
 //! This module provides sophisticated action sorting based on multiple criteria:
 //! - Network conditions and signal strength
 //! - Time patterns and user habits
-//! - System state and resource availability  
+//! - System state and resource availability
 //! - Action type priorities and dependencies
 //! - Historical success rates and performance
 
@@ -302,7 +302,7 @@ impl ActionPrioritizer {
             }
             NetworkType::Unknown => {
                 if action.contains("diagnostic") && action.contains("connectivity") {
-                    score += 0.3; // Connectivity tests crucial when network unknown
+                    score += 0.4; // Connectivity tests crucial when network unknown
                 }
             }
             _ => {}
@@ -312,13 +312,15 @@ impl ActionPrioritizer {
         if let Some(signal) = context.signal_strength {
             if signal < 0.3 {
                 // Poor signal - prioritize network switching and diagnostics
-                if action.contains("diagnostic")
+                if action.contains("diagnostic") && action.contains("connectivity") {
+                    score += 0.5; // Greatly prioritize connectivity tests with poor signal
+                } else if action.contains("diagnostic")
                     || action.contains("disconnect")
                     || action.contains("wifi")
                 {
                     score += 0.3;
                 } else if action.contains("speed") || action.contains("streaming") {
-                    score -= 0.2;
+                    score -= 0.3; // Lower priority for speed tests with poor signal
                 }
             } else if signal > 0.8 {
                 // Excellent signal - boost bandwidth-intensive actions
@@ -357,8 +359,10 @@ impl ActionPrioritizer {
             }
             17..=21 => {
                 // Evening - personal use
-                if action.contains("bluetooth") || action.contains("entertainment") {
-                    score += 0.15;
+                if action.contains("bluetooth") && action.contains("headphones") {
+                    score += 0.35; // Significantly boost for evening bluetooth headphone use
+                } else if action.contains("bluetooth") || action.contains("entertainment") {
+                    score += 0.25; // General boost for entertainment in evening
                 } else if action.contains("exit") && action.contains("node") {
                     score += 0.1; // Geographic shifting for content
                 }
@@ -573,7 +577,7 @@ mod tests {
     fn test_network_condition_scoring() {
         let prioritizer = ActionPrioritizer::new();
         let mut context = create_test_context();
-        context.signal_strength = Some(0.2); // Poor signal
+        context.signal_strength = Some(0.2); // Very poor signal
 
         let diagnostic_score = prioritizer
             .calculate_network_condition_score("diagnostic- ✅ Test Connectivity", &context);

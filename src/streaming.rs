@@ -101,7 +101,7 @@ pub async fn select_action_from_menu_streaming(
     // Normal mode - stream to dmenu
     let (tx, mut rx) = mpsc::unbounded_channel::<ActionType>();
 
-    // Spawn dmenu immediately using async process  
+    // Spawn dmenu immediately using async process
     let mut child = tokio::process::Command::new(&config.dmenu_cmd)
         .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
@@ -173,7 +173,11 @@ pub async fn select_action_from_menu_streaming(
 }
 
 /// Simple streaming function that avoids Send issues
-async fn stream_actions_simple(args: &Args, config: &Config, tx: mpsc::UnboundedSender<ActionType>) {
+async fn stream_actions_simple(
+    args: &Args,
+    config: &Config,
+    tx: mpsc::UnboundedSender<ActionType>,
+) {
     // Send custom actions first
     for action in &config.actions {
         let _ = tx.send(ActionType::Custom(action.clone()));

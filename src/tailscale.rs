@@ -49,7 +49,10 @@ fn extract_country_code_from_hostname(hostname: &str) -> &str {
 fn extract_city_from_hostname(hostname: &str) -> String {
     // Static regex for hostname city parsing
     static CITY_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(?:^[a-z]{2}-([a-z]{3,})|([a-z]{3,})-\d|server-([a-z]{3,})|([a-z]{3,})-server)").unwrap()
+        Regex::new(
+            r"(?i)(?:^[a-z]{2}-([a-z]{3,})|([a-z]{3,})-\d|server-([a-z]{3,})|([a-z]{3,})-server)",
+        )
+        .unwrap()
     });
 
     if let Some(captures) = CITY_REGEX.captures(hostname) {
@@ -399,9 +402,15 @@ pub fn get_mullvad_actions(
             }
         });
 
-        // Add to the country and city groups  
-        nodes_by_country.entry(country.to_string()).or_default().push(peer);
-        nodes_by_city.entry(city.to_string()).or_default().push(peer);
+        // Add to the country and city groups
+        nodes_by_country
+            .entry(country.to_string())
+            .or_default()
+            .push(peer);
+        nodes_by_city
+            .entry(city.to_string())
+            .or_default()
+            .push(peer);
     }
 
     // Function to sort nodes by priority (highest first)
@@ -495,7 +504,7 @@ pub fn get_mullvad_actions(
         // Store all node information before formatting
         mullvad_actions.push((
             country.to_string(),
-            city.to_string(), 
+            city.to_string(),
             node_name.clone(),
             node_ip.to_string(),
             is_active,
@@ -548,11 +557,15 @@ pub fn get_mullvad_actions(
                     (country.to_string(), city)
                 },
                 |loc| {
-                    let country = if loc.country.is_empty() { "unknown" } else { &loc.country };
-                    let city = if loc.city.is_empty() { 
-                        extract_city_from_hostname(&node_name) 
-                    } else { 
-                        loc.city.clone() 
+                    let country = if loc.country.is_empty() {
+                        "unknown"
+                    } else {
+                        &loc.country
+                    };
+                    let city = if loc.city.is_empty() {
+                        extract_city_from_hostname(&node_name)
+                    } else {
+                        loc.city.clone()
                     };
                     (country.to_string(), city)
                 },
@@ -561,10 +574,7 @@ pub fn get_mullvad_actions(
 
             // Create display text with name first, then location in parentheses
             let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display_text = format!(
-                "{} ({}, {}) [{}]",
-                node_name, country, city, node_ip
-            );
+            let display_text = format!("{} ({}, {}) [{}]", node_name, country, city, node_ip);
 
             format_entry("exit-node", display_icon, &display_text)
         })
@@ -601,7 +611,7 @@ pub fn get_mullvad_actions(
                 {
                     let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
                     let is_active = active_exit_node == &suggested_name;
-                    
+
                     // Get country and city for consistent formatting
                     let (country, city) = peer.location.as_ref().map_or_else(
                         || {
@@ -610,21 +620,28 @@ pub fn get_mullvad_actions(
                             (country.to_string(), city)
                         },
                         |loc| {
-                            let country = if loc.country.is_empty() { "unknown" } else { &loc.country };
-                            let city = if loc.city.is_empty() { 
-                                extract_city_from_hostname(&suggested_name) 
-                            } else { 
-                                loc.city.clone() 
+                            let country = if loc.country.is_empty() {
+                                "unknown"
+                            } else {
+                                &loc.country
+                            };
+                            let city = if loc.city.is_empty() {
+                                extract_city_from_hostname(&suggested_name)
+                            } else {
+                                loc.city.clone()
                             };
                             (country.to_string(), city)
                         },
                     );
-                    
+
                     let icon = if is_active { ICON_CHECK } else { ICON_STAR };
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
-                        &format!("{} ({}, {}) [{}] (suggested)", suggested_name, country, city, node_ip),
+                        &format!(
+                            "{} ({}, {}) [{}] (suggested)",
+                            suggested_name, country, city, node_ip
+                        ),
                     );
                     mullvad_results.insert(0, suggested_action);
                 }
@@ -1127,7 +1144,7 @@ pub async fn handle_tailscale_action(
         TailscaleAction::SetSuggestedExitNode => {
             // Get the suggested exit node from state
             let suggested_node = &state_ref.suggested_exit_node;
-            
+
             if suggested_node.is_empty() {
                 if let Some(sender) = notification_sender {
                     if let Err(_e) = sender.send_notification(
@@ -1155,7 +1172,10 @@ pub async fn handle_tailscale_action(
                 if let Some(sender) = notification_sender {
                     if let Err(_e) = sender.send_notification(
                         "Tailscale",
-                        &format!("Connected to recommended exit node: {}", extract_short_hostname(suggested_node)),
+                        &format!(
+                            "Connected to recommended exit node: {}",
+                            extract_short_hostname(suggested_node)
+                        ),
                         5000,
                     ) {
                         #[cfg(debug_assertions)]
@@ -1192,7 +1212,7 @@ pub async fn handle_tailscale_action(
             }
 
             Ok(success)
-        },
+        }
     }
 }
 
@@ -1571,7 +1591,6 @@ impl MockNotificationSender {
             notifications: RefCell::new(Vec::new()),
         }
     }
-
 }
 
 #[cfg(test)]

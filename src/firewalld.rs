@@ -39,7 +39,10 @@ impl FirewalldAction {
     pub fn to_display_string(&self) -> String {
         match self {
             FirewalldAction::SetZone(zone) => {
-                format!("firewalld  - {} Switch to zone: {}", ICON_FIREWALL_ALLOW, zone)
+                format!(
+                    "firewalld  - {} Switch to zone: {}",
+                    ICON_FIREWALL_ALLOW, zone
+                )
             }
             FirewalldAction::TogglePanicMode(enable) => {
                 if *enable {
@@ -77,7 +80,7 @@ pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<Firewall
     // Add zone switching actions
     if let Ok(zones) = get_available_zones(command_runner) {
         let current_zone = get_current_zone(command_runner).unwrap_or_default();
-        
+
         for zone in zones {
             // Don't show action for current zone
             if zone.name != current_zone {
@@ -152,21 +155,21 @@ fn is_firewalld_available() -> bool {
 /// Get the current active zone
 fn get_current_zone(command_runner: &dyn CommandRunner) -> Result<String, Box<dyn Error>> {
     let output = command_runner.run_command("firewall-cmd", &["--get-default-zone"])?;
-    
+
     if !output.status.success() {
         return Err("Failed to get current zone".into());
     }
 
-    let zone = String::from_utf8(output.stdout)?
-        .trim()
-        .to_string();
-    
+    let zone = String::from_utf8(output.stdout)?.trim().to_string();
+
     debug!("Current firewalld zone: {}", zone);
     Ok(zone)
 }
 
 /// Get available firewalld zones with information
-fn get_available_zones(command_runner: &dyn CommandRunner) -> Result<Vec<FirewalldZone>, Box<dyn Error>> {
+fn get_available_zones(
+    command_runner: &dyn CommandRunner,
+) -> Result<Vec<FirewalldZone>, Box<dyn Error>> {
     // Get list of zones
     let zones_output = command_runner.run_command("firewall-cmd", &["--get-zones"])?;
     if !zones_output.status.success() {
@@ -178,9 +181,10 @@ fn get_available_zones(command_runner: &dyn CommandRunner) -> Result<Vec<Firewal
 
     // Get current default zone
     let current_zone = get_current_zone(command_runner).unwrap_or_default();
-    
+
     // Get active zones
-    let active_zones_output = command_runner.run_command("firewall-cmd", &["--get-active-zones"])?;
+    let active_zones_output =
+        command_runner.run_command("firewall-cmd", &["--get-active-zones"])?;
     let active_zones_str = if active_zones_output.status.success() {
         String::from_utf8(active_zones_output.stdout).unwrap_or_default()
     } else {
@@ -188,14 +192,12 @@ fn get_available_zones(command_runner: &dyn CommandRunner) -> Result<Vec<Firewal
     };
 
     let mut zones = Vec::new();
-    
+
     for zone_name in zone_names {
         // Get zone description
-        let info_output = command_runner.run_command(
-            "firewall-cmd", 
-            &["--zone", zone_name, "--get-description"]
-        )?;
-        
+        let info_output = command_runner
+            .run_command("firewall-cmd", &["--zone", zone_name, "--get-description"])?;
+
         let description = if info_output.status.success() {
             String::from_utf8(info_output.stdout)
                 .unwrap_or_default()
@@ -223,11 +225,8 @@ fn get_available_zones(command_runner: &dyn CommandRunner) -> Result<Vec<Firewal
 /// Set the default firewalld zone
 fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
     debug!("Setting firewalld zone to: {}", zone);
-    
-    let output = command_runner.run_command(
-        "firewall-cmd", 
-        &["--set-default-zone", zone]
-    )?;
+
+    let output = command_runner.run_command("firewall-cmd", &["--set-default-zone", zone])?;
 
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
@@ -241,7 +240,7 @@ fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<()
 /// Check if panic mode is enabled
 fn is_panic_mode_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("firewall-cmd", &["--query-panic-on"])?;
-    
+
     // firewall-cmd returns 0 if panic mode is on, 1 if off
     Ok(output.status.success())
 }
@@ -249,19 +248,25 @@ fn is_panic_mode_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box
 /// Set panic mode on or off
 fn set_panic_mode(enable: bool, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
     let arg = if enable { "--panic-on" } else { "--panic-off" };
-    
+
     debug!("Setting firewalld panic mode: {}", enable);
-    
+
     let output = command_runner.run_command("firewall-cmd", &[arg])?;
 
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to {} panic mode: {}", 
-                          if enable { "enable" } else { "disable" }, 
-                          error_msg).into());
+        return Err(format!(
+            "Failed to {} panic mode: {}",
+            if enable { "enable" } else { "disable" },
+            error_msg
+        )
+        .into());
     }
 
-    debug!("Successfully {} panic mode", if enable { "enabled" } else { "disabled" });
+    debug!(
+        "Successfully {} panic mode",
+        if enable { "enabled" } else { "disabled" }
+    );
     Ok(())
 }
 
@@ -271,9 +276,9 @@ fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
 
     // Try different firewalld GUI tools in order of preference
     let gui_tools = [
-        "firewall-config",      // Official GNOME firewalld GUI
-        "firewall-applet",      // System tray applet with config option
-        "gufw",                 // UFW frontend that can work with firewalld
+        "firewall-config", // Official GNOME firewalld GUI
+        "firewall-applet", // System tray applet with config option
+        "gufw",            // UFW frontend that can work with firewalld
     ];
 
     for tool in &gui_tools {
@@ -285,7 +290,7 @@ fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
         {
             debug!("Found firewall GUI tool: {}", tool);
             let status = Command::new(tool).status()?;
-            
+
             if status.success() {
                 debug!("Successfully launched {}", tool);
                 return Ok(());
@@ -312,7 +317,7 @@ fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
         {
             debug!("Trying fallback: {} with args {:?}", command, args);
             let status = Command::new(command).args(args).status()?;
-            
+
             if status.success() {
                 debug!("Successfully launched {} with network settings", command);
                 return Ok(());
@@ -337,7 +342,7 @@ fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
         {
             debug!("Opening terminal with firewall-cmd help: {}", terminal);
             let status = Command::new(terminal).args(args).status()?;
-            
+
             if status.success() {
                 debug!("Successfully launched terminal with firewall-cmd help");
                 return Ok(());
@@ -371,7 +376,7 @@ mod tests {
     impl CommandRunner for MockCommandRunner {
         fn run_command(&self, _program: &str, _args: &[&str]) -> Result<Output, std::io::Error> {
             use std::os::unix::process::ExitStatusExt;
-            
+
             Ok(Output {
                 status: if self.should_succeed {
                     ExitStatus::from_raw(0)
@@ -387,7 +392,9 @@ mod tests {
     #[test]
     fn test_firewalld_action_display_strings() {
         let set_zone = FirewalldAction::SetZone("public".to_string());
-        assert!(set_zone.to_display_string().contains("Switch to zone: public"));
+        assert!(set_zone
+            .to_display_string()
+            .contains("Switch to zone: public"));
 
         let panic_on = FirewalldAction::TogglePanicMode(true);
         assert!(panic_on.to_display_string().contains("Enable panic mode"));
@@ -396,20 +403,24 @@ mod tests {
         assert!(panic_off.to_display_string().contains("Disable panic mode"));
 
         let current_zone = FirewalldAction::GetCurrentZone;
-        assert!(current_zone.to_display_string().contains("Show current zone"));
+        assert!(current_zone
+            .to_display_string()
+            .contains("Show current zone"));
 
         let list_zones = FirewalldAction::ListZones;
         assert!(list_zones.to_display_string().contains("List all zones"));
 
         let config_editor = FirewalldAction::OpenConfigEditor;
-        assert!(config_editor.to_display_string().contains("Open firewall configuration"));
+        assert!(config_editor
+            .to_display_string()
+            .contains("Open firewall configuration"));
     }
 
     #[test]
     fn test_get_current_zone() {
         let mock_runner = MockCommandRunner::new(true, "public\n");
         let result = get_current_zone(&mock_runner);
-        
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "public");
     }
@@ -418,7 +429,7 @@ mod tests {
     fn test_get_current_zone_failure() {
         let mock_runner = MockCommandRunner::new(false, "");
         let result = get_current_zone(&mock_runner);
-        
+
         assert!(result.is_err());
     }
 
