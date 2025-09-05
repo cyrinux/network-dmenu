@@ -214,6 +214,16 @@ impl LifecycleManager {
         self.network_monitor.check_changes().await
     }
 
+    /// Check suspend/resume events
+    pub async fn check_suspend_events(&mut self) -> Vec<SystemEvent> {
+        self.suspend_monitor.check_suspend_resume().await
+    }
+
+    /// Get suspend monitor statistics
+    pub fn get_suspend_stats(&self) -> (u32, DateTime<Utc>) {
+        self.suspend_monitor.get_stats()
+    }
+
     /// Graceful shutdown
     pub async fn shutdown(&mut self) -> Result<()> {
         info!("Initiating graceful daemon shutdown");
@@ -436,16 +446,45 @@ impl LifecycleManager {
         }
     }
 
-    /// Suspend monitoring loop using systemd-logind
+    /// Suspend monitoring loop using systemd-logind and system indicators
     async fn suspend_monitoring_loop(state: Arc<RwLock<DaemonState>>) {
         debug!("Starting suspend monitoring loop");
         
-        // This would integrate with systemd-logind D-Bus interface in a real implementation
-        // For now, we'll simulate basic monitoring
+        let mut suspend_monitor = SuspendMonitor::new();
         
         loop {
-            // Check if system has been suspended by monitoring log files or other indicators
-            // This is a simplified implementation
+            // Check for suspend/resume events
+            let events = suspend_monitor.check_suspend_resume().await;
+            
+            for event in events {
+                debug!("Suspend monitor detected event: {:?}", event);
+                
+                // Update daemon state based on detected event
+                let mut daemon_state = state.write().await;
+                
+                match event {
+                    SystemEvent::Resume => {
+                        daemon_state.is_suspended = false;
+                        daemon_state.suspend_resume_count += 1;
+                        daemon_state.last_active = Utc::now();
+                        info!("System resume detected (cycle #{}) - daemon reactivated", 
+                              daemon_state.suspend_resume_count);
+                    }
+                    SystemEvent::Suspend => {
+                        daemon_state.is_suspended = true;
+                        daemon_state.runtime_before_suspend = Utc::now()
+                            .signed_duration_since(daemon_state.last_active)
+                            .to_std()
+                            .unwrap_or(Duration::from_secs(0));
+                        info!("System suspend detected - daemon suspending");
+                    }
+                    _ => {}
+                }
+            }
+            
+            // Log suspend monitor stats periodically for debugging
+            let (suspend_count, last_check) = suspend_monitor.get_stats();
+            debug!("Suspend monitor stats: count={}, last_check={}", suspend_count, last_check);
             
             sleep(Duration::from_secs(30)).await;
         }
@@ -523,6 +562,91 @@ impl SuspendMonitor {
             last_check: Utc::now(),
             suspend_count: 0,
         }
+    }
+
+    /// Check if system has been suspended since last check
+    async fn check_suspend_resume(&mut self) -> Vec<SystemEvent> {
+        let mut events = Vec::new();
+        let now = Utc::now();
+        
+        // Check for large time gaps (> 5 minutes) indicating possible suspend
+        let time_since_check = now.signed_duration_since(self.last_check);
+        
+        if time_since_check.num_minutes() > 5 {
+            debug!("Detected {} minute gap since last check - possible suspend/resume", 
+                   time_since_check.num_minutes());
+            
+            // Check system logs or other indicators for suspend/resume
+            if let Ok(suspend_detected) = self.detect_suspend_from_system().await {
+                if suspend_detected {
+                    self.suspend_count += 1;
+                    debug!("Suspend/resume cycle detected (count: {})", self.suspend_count);
+                    events.push(SystemEvent::Resume);
+                }
+            }
+        }
+        
+        self.last_check = now;
+        events
+    }
+
+    /// Detect suspend events from system logs or other indicators
+    async fn detect_suspend_from_system(&self) -> Result<bool> {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        
+        let command_runner = RealCommandRunner;
+        
+        // Method 1: Check systemd journal for suspend/resume events
+        if crate::command::is_command_installed("journalctl") {
+            match command_runner.run_command("journalctl", &[
+                "--since", "5 minutes ago",
+                "--grep", "PM: suspend",
+                "--no-pager",
+                "-q"
+            ]) {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if !stdout.trim().is_empty() {
+                        debug!("Found suspend events in journal");
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Method 2: Check uptime for system reboot (less accurate but still useful)
+        match command_runner.run_command("uptime", &["-s"]) {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(boot_time) = chrono::DateTime::parse_from_str(
+                    stdout.trim(), 
+                    "%Y-%m-%d %H:%M:%S"
+                ) {
+                    let boot_duration = Utc::now().signed_duration_since(boot_time.with_timezone(&Utc));
+                    
+                    // If system booted recently, it might indicate resume from hibernation
+                    if boot_duration.num_minutes() < 10 {
+                        debug!("Recent boot detected - possible hibernate/resume");
+                        return Ok(true);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Method 3: Check /sys/power/state for suspend indicators (if available)
+        if let Ok(power_state) = tokio::fs::read_to_string("/sys/power/state").await {
+            debug!("Power state options: {}", power_state.trim());
+            // This doesn't directly indicate suspend, but confirms suspend capability
+        }
+
+        Ok(false)
+    }
+
+    /// Get suspend statistics
+    pub fn get_stats(&self) -> (u32, DateTime<Utc>) {
+        (self.suspend_count, self.last_check)
     }
 }
 

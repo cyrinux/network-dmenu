@@ -453,7 +453,11 @@ impl MovementDetector {
             MovementState::Stationary
         } else if similarity >= self.movement_threshold {
             MovementState::SlowMovement
+        } else if similarity >= self.fast_movement_threshold {
+            // Between movement_threshold and fast_movement_threshold = regular movement speed
+            MovementState::SlowMovement
         } else {
+            // Below fast_movement_threshold = very rapid location changes
             MovementState::FastMovement
         }
     }

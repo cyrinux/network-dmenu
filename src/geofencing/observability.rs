@@ -50,6 +50,19 @@ pub enum IssueSeverity {
     Critical,
 }
 
+/// Health summary combining all system health checks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthSummary {
+    /// Overall system status
+    pub overall_status: String,
+    /// Individual component statuses
+    pub component_statuses: HashMap<String, HealthStatus>,
+    /// Active issues
+    pub active_issues: Vec<HealthIssue>,
+    /// Last health check timestamp
+    pub last_check: DateTime<Utc>,
+}
+
 /// Comprehensive daemon metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonMetrics {
@@ -655,14 +668,224 @@ impl ObservabilityManager {
     }
 
     /// Start metrics export background task
-    async fn start_metrics_export(&self) -> Result<()> {
-        debug!("Starting metrics export");
+    async fn start_metrics_export(&mut self) -> Result<()> {
+        debug!("Starting metrics export scheduler");
 
-        // This would be implemented to periodically export metrics
-        // For now, just log that it's starting
-        info!("Metrics export scheduler would start here");
+        let export_config = self.config.export_config.clone();
+        let metrics_collector = Arc::clone(&self.metrics_collector);
+        let health_checker = Arc::clone(&self.health_checker);
+
+        // Start export scheduler background task
+        let export_task = tokio::spawn(async move {
+            Self::metrics_export_loop(export_config, metrics_collector, health_checker).await;
+        });
+
+        self.export_scheduler = Some(export_task);
+        info!("Metrics export scheduler started successfully");
 
         Ok(())
+    }
+
+    /// Background loop for exporting metrics
+    async fn metrics_export_loop(
+        config: MetricsExportConfig,
+        metrics_collector: Arc<Mutex<MetricsCollector>>,
+        health_checker: Arc<HealthChecker>,
+    ) {
+        debug!("Metrics export loop started with interval: {:?}", config.interval);
+
+        let mut interval = tokio::time::interval(config.interval);
+
+        loop {
+            interval.tick().await;
+
+            debug!("Exporting metrics (format: {})", config.format);
+
+            // Collect current metrics
+            let metrics = {
+                let collector = metrics_collector.lock().await;
+                collector.current_metrics.clone()
+            };
+
+            // Get health summary
+            let health_summary = health_checker.get_health_summary().await;
+
+            // Export metrics based on configured format
+            match config.format.as_str() {
+                "json" => {
+                    if let Err(e) = Self::export_metrics_json(&metrics, &health_summary, &config).await {
+                        warn!("Failed to export metrics as JSON: {}", e);
+                    }
+                }
+                "prometheus" => {
+                    if let Err(e) = Self::export_metrics_prometheus(&metrics, &health_summary, &config).await {
+                        warn!("Failed to export metrics as Prometheus: {}", e);
+                    }
+                }
+                "influxdb" => {
+                    if let Err(e) = Self::export_metrics_influxdb(&metrics, &health_summary, &config).await {
+                        warn!("Failed to export metrics to InfluxDB: {}", e);
+                    }
+                }
+                _ => {
+                    warn!("Unsupported export format: {}", config.format);
+                }
+            }
+        }
+    }
+
+    /// Export metrics in JSON format
+    async fn export_metrics_json(
+        metrics: &DaemonMetrics,
+        health: &HealthSummary,
+        config: &MetricsExportConfig,
+    ) -> Result<()> {
+        let export_data = serde_json::json!({
+            "timestamp": chrono::Utc::now(),
+            "metrics": metrics,
+            "health": health
+        });
+
+        // Export to file if configured
+        if config.export_to_file {
+            if let Some(ref file_path) = config.file_path {
+                let file_path = format!("{}/metrics-{}.json", 
+                                      file_path, 
+                                      chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+                
+                if let Some(parent) = std::path::Path::new(&file_path).parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        GeofenceError::Config(format!("Failed to create export directory: {}", e))
+                    })?;
+                }
+
+                let json_data = serde_json::to_string_pretty(&export_data)
+                    .map_err(|e| GeofenceError::Config(format!("Failed to serialize metrics: {}", e)))?;
+                
+                tokio::fs::write(&file_path, json_data)
+                    .await
+                    .map_err(|e| GeofenceError::Config(format!("Failed to write metrics file: {}", e)))?;
+                
+                debug!("Exported metrics to JSON file: {}", file_path);
+            }
+        }
+
+        // Export to endpoint if configured
+        if let Some(ref endpoint) = config.endpoint {
+            // This would implement HTTP POST to the endpoint
+            debug!("Would export JSON metrics to endpoint: {}", endpoint);
+        }
+
+        Ok(())
+    }
+
+    /// Export metrics in Prometheus format
+    async fn export_metrics_prometheus(
+        metrics: &DaemonMetrics,
+        health: &HealthSummary,
+        config: &MetricsExportConfig,
+    ) -> Result<()> {
+        let prometheus_data = Self::format_prometheus_metrics(metrics, health);
+
+        // Export to file if configured
+        if config.export_to_file {
+            if let Some(ref file_path) = config.file_path {
+                let file_path = format!("{}/metrics.prom", file_path);
+                
+                if let Some(parent) = std::path::Path::new(&file_path).parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        GeofenceError::Config(format!("Failed to create export directory: {}", e))
+                    })?;
+                }
+
+                tokio::fs::write(&file_path, prometheus_data)
+                    .await
+                    .map_err(|e| GeofenceError::Config(format!("Failed to write Prometheus file: {}", e)))?;
+                
+                debug!("Exported metrics to Prometheus file: {}", file_path);
+            }
+        }
+
+        // Export to endpoint if configured
+        if let Some(ref endpoint) = config.endpoint {
+            debug!("Would export Prometheus metrics to endpoint: {}", endpoint);
+        }
+
+        Ok(())
+    }
+
+    /// Export metrics to InfluxDB
+    async fn export_metrics_influxdb(
+        metrics: &DaemonMetrics,
+        health: &HealthSummary,
+        config: &MetricsExportConfig,
+    ) -> Result<()> {
+        let influx_data = Self::format_influxdb_metrics(metrics, health);
+
+        // Export to endpoint if configured
+        if let Some(ref endpoint) = config.endpoint {
+            debug!("Would export InfluxDB metrics to endpoint: {}", endpoint);
+            debug!("InfluxDB data: {}", influx_data);
+        }
+
+        Ok(())
+    }
+
+    /// Format metrics for Prometheus
+    fn format_prometheus_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
+        let mut output = String::new();
+        
+        // Performance metrics
+        output.push_str(&format!("geofence_daemon_memory_usage_mb {}\n", metrics.performance_metrics.memory_usage_mb));
+        output.push_str(&format!("geofence_daemon_cpu_usage_percent {}\n", metrics.performance_metrics.cpu_usage_percent));
+        
+        // Zone metrics
+        output.push_str(&format!("geofence_zone_changes_total {}\n", metrics.zone_metrics.total_zone_changes));
+        output.push_str(&format!("geofence_zone_changes_last_hour {}\n", metrics.zone_metrics.zone_changes_last_hour));
+        output.push_str(&format!("geofence_zone_average_confidence {}\n", metrics.zone_metrics.average_confidence));
+        
+        // Location metrics
+        output.push_str(&format!("geofence_location_scans_total {}\n", metrics.location_metrics.total_scans));
+        output.push_str(&format!("geofence_location_scans_successful {}\n", metrics.location_metrics.successful_scans));
+        output.push_str(&format!("geofence_location_scans_failed {}\n", metrics.location_metrics.failed_scans));
+        output.push_str(&format!("geofence_location_scan_duration_ms {}\n", metrics.location_metrics.average_scan_duration.as_millis()));
+        
+        // Action metrics
+        output.push_str(&format!("geofence_actions_total {}\n", metrics.action_metrics.total_actions));
+        output.push_str(&format!("geofence_action_successes_total {}\n", metrics.action_metrics.successful_actions));
+        output.push_str(&format!("geofence_action_failures_total {}\n", metrics.action_metrics.failed_actions));
+        
+        // Error metrics
+        output.push_str(&format!("geofence_errors_total {}\n", metrics.error_metrics.total_errors));
+        
+        // Network metrics
+        output.push_str(&format!("geofence_wifi_scan_success_rate {}\n", metrics.network_metrics.wifi_scan_success_rate));
+        output.push_str(&format!("geofence_vpn_connection_success_rate {}\n", metrics.network_metrics.vpn_connection_success_rate));
+        output.push_str(&format!("geofence_dns_resolution_time_ms {}\n", metrics.network_metrics.dns_resolution_time.as_millis()));
+        output.push_str(&format!("geofence_internet_connectivity {}\n", if metrics.network_metrics.internet_connectivity { 1 } else { 0 }));
+        
+        // Health status (1 for healthy, 0 for unhealthy)
+        let health_value = if health.overall_status == "Healthy" { 1 } else { 0 };
+        output.push_str(&format!("geofence_daemon_healthy {}\n", health_value));
+        
+        output
+    }
+
+    /// Format metrics for InfluxDB line protocol
+    fn format_influxdb_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
+        let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        
+        format!(
+            "geofence_daemon memory_mb={},cpu_percent={},zone_changes={},zone_confidence={},total_actions={},wifi_success_rate={},errors_total={} {}",
+            metrics.performance_metrics.memory_usage_mb,
+            metrics.performance_metrics.cpu_usage_percent,
+            metrics.zone_metrics.total_zone_changes,
+            metrics.zone_metrics.average_confidence,
+            metrics.action_metrics.total_actions,
+            metrics.network_metrics.wifi_scan_success_rate,
+            metrics.error_metrics.total_errors,
+            timestamp
+        )
     }
 }
 
@@ -923,6 +1146,53 @@ impl HealthChecker {
 
     async fn get_overall_health(&self) -> HashMap<String, HealthStatus> {
         self.component_health.read().await.clone()
+    }
+
+    /// Get comprehensive health summary
+    pub async fn get_health_summary(&self) -> HealthSummary {
+        let component_statuses = self.get_overall_health().await;
+        let mut active_issues = Vec::new();
+        
+        // Determine overall status and collect issues
+        let mut has_critical = false;
+        let mut has_degraded = false;
+        
+        for (component, status) in &component_statuses {
+            match status {
+                HealthStatus::Critical { error } => {
+                    has_critical = true;
+                    active_issues.push(HealthIssue {
+                        component: component.clone(),
+                        severity: IssueSeverity::Critical,
+                        description: error.clone(),
+                        detected_at: Utc::now(),
+                        remediation: Some(format!("Check {} configuration and connectivity", component)),
+                    });
+                }
+                HealthStatus::Degraded { issues } => {
+                    has_degraded = true;
+                    for issue in issues {
+                        active_issues.push(issue.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        let overall_status = if has_critical {
+            "Critical".to_string()
+        } else if has_degraded {
+            "Degraded".to_string()
+        } else {
+            "Healthy".to_string()
+        };
+        
+        HealthSummary {
+            overall_status,
+            component_statuses,
+            active_issues,
+            last_check: Utc::now(),
+        }
     }
 }
 

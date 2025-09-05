@@ -3,11 +3,12 @@
 //! Includes connection pooling, batch operations, intelligent caching,
 //! and asynchronous processing for improved daemon performance.
 
-use crate::geofencing::{GeofenceError, Result, LocationFingerprint, NetworkSignature};
+use crate::geofencing::{GeofenceError, Result, LocationFingerprint};
+use crate::command::CommandRunner;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, Semaphore};
@@ -230,7 +231,7 @@ impl Default for CacheConfig {
 /// Asynchronous task manager for background operations
 pub struct AsyncTaskManager {
     /// Task executor pool
-    executor_pool: Arc<tokio::task::JoinSet<TaskResult>>,
+    executor_pool: Arc<Mutex<tokio::task::JoinSet<TaskResult>>>,
     /// Active tasks tracking
     active_tasks: Arc<RwLock<HashMap<String, TaskMetadata>>>,
     /// Task completion notifications
@@ -303,6 +304,20 @@ impl NetworkStateCache {
         self.cache_time = Utc::now();
     }
 
+    /// Update network interface state
+    pub fn update_interface_state(&mut self, interface: String, state: NetworkInterfaceState) {
+        debug!("Updating network interface '{}' state: {:?}", interface, state);
+        self.interface_states.insert(interface, state);
+        self.cache_time = Utc::now();
+    }
+
+    /// Update multiple interface states at once
+    pub fn update_interface_states(&mut self, states: HashMap<String, NetworkInterfaceState>) {
+        debug!("Updating {} network interface states", states.len());
+        self.interface_states.extend(states);
+        self.cache_time = Utc::now();
+    }
+
     /// Get current WiFi SSID if cached
     pub fn get_current_ssid(&self) -> Option<&String> {
         if self.is_valid() {
@@ -328,6 +343,37 @@ impl NetworkStateCache {
         } else {
             None
         }
+    }
+
+    /// Get network interface state if cached
+    pub fn get_interface_state(&self, interface: &str) -> Option<&NetworkInterfaceState> {
+        if self.is_valid() {
+            self.interface_states.get(interface)
+        } else {
+            None
+        }
+    }
+
+    /// Get all interface states if cached
+    pub fn get_all_interface_states(&self) -> Option<&HashMap<String, NetworkInterfaceState>> {
+        if self.is_valid() {
+            Some(&self.interface_states)
+        } else {
+            None
+        }
+    }
+
+    /// Get active network interfaces (up and with IP addresses)
+    pub fn get_active_interfaces(&self) -> Vec<String> {
+        if !self.is_valid() {
+            return Vec::new();
+        }
+
+        self.interface_states
+            .iter()
+            .filter(|(_, state)| state.is_up && !state.ip_addresses.is_empty())
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Clear cache (force refresh)
@@ -783,6 +829,132 @@ impl CacheManager {
         update_fn(&mut cache);
     }
 
+    /// Refresh network interface states in cache
+    pub async fn refresh_interface_states(&self) -> Result<()> {
+        debug!("Refreshing network interface states");
+        
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        let mut interface_states = HashMap::new();
+        
+        // Get interface list using ip command
+        if crate::command::is_command_installed("ip") {
+            match command_runner.run_command("ip", &["addr", "show"]) {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    
+                    for line in stdout.lines() {
+                        if let Some(interface_name) = self.parse_interface_name(&line) {
+                            if let Some(state) = self.get_interface_details(&interface_name, &command_runner).await {
+                                interface_states.insert(interface_name, state);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to get interface list: {}", e);
+                }
+                _ => {}
+            }
+        }
+        
+        // Update cache with new interface states
+        {
+            let mut cache = self.network_state_cache.write().await;
+            cache.update_interface_states(interface_states);
+        }
+        
+        debug!("Network interface states refreshed successfully");
+        Ok(())
+    }
+
+    /// Parse interface name from ip addr output line
+    fn parse_interface_name(&self, line: &str) -> Option<String> {
+        if line.starts_with(char::is_numeric) {
+            if let Some(colon_pos) = line.find(':') {
+                if let Some(interface_part) = line.get(colon_pos + 1..) {
+                    let interface_name = interface_part.trim().split(':').next()?.trim();
+                    if !interface_name.is_empty() && interface_name != "lo" {
+                        return Some(interface_name.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get detailed state for specific interface
+    async fn get_interface_details(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<NetworkInterfaceState> {
+        // Check if interface is up
+        let is_up = match command_runner.run_command("ip", &["link", "show", interface]) {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains("state UP")
+            }
+            _ => false,
+        };
+
+        // Get IP addresses
+        let ip_addresses = match command_runner.run_command("ip", &["addr", "show", interface]) {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                self.extract_ip_addresses(&stdout)
+            }
+            _ => Vec::new(),
+        };
+
+        // Determine interface type
+        let interface_type = if interface.starts_with("wlan") || interface.starts_with("wlp") {
+            "wifi".to_string()
+        } else if interface.starts_with("eth") || interface.starts_with("enp") {
+            "ethernet".to_string()
+        } else if interface.starts_with("tun") || interface.starts_with("vpn") {
+            "vpn".to_string()
+        } else {
+            "other".to_string()
+        };
+
+        // Try to get link speed (best effort)
+        let link_speed = self.get_interface_speed(interface, command_runner).await;
+
+        Some(NetworkInterfaceState {
+            is_up,
+            ip_addresses,
+            interface_type,
+            link_speed,
+        })
+    }
+
+    /// Extract IP addresses from ip addr output
+    fn extract_ip_addresses(&self, output: &str) -> Vec<String> {
+        let mut addresses = Vec::new();
+        
+        for line in output.lines() {
+            if line.trim().starts_with("inet ") || line.trim().starts_with("inet6 ") {
+                if let Some(addr_part) = line.trim().split_whitespace().nth(1) {
+                    if let Some(addr) = addr_part.split('/').next() {
+                        addresses.push(addr.to_string());
+                    }
+                }
+            }
+        }
+        
+        addresses
+    }
+
+    /// Get interface link speed if available
+    async fn get_interface_speed(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
+        let speed_path = format!("/sys/class/net/{}/speed", interface);
+        
+        match tokio::fs::read_to_string(speed_path).await {
+            Ok(content) => {
+                content.trim().parse::<u64>().ok()
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Invalidate all caches
     pub async fn invalidate_all(&self) {
         debug!("Invalidating all caches");
@@ -885,7 +1057,7 @@ impl AsyncTaskManager {
         let (tx, _) = tokio::sync::broadcast::channel(100);
         
         Self {
-            executor_pool: Arc::new(tokio::task::JoinSet::new()),
+            executor_pool: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
             active_tasks: Arc::new(RwLock::new(HashMap::new())),
             task_notifications: Arc::new(tx),
             max_concurrent_tasks,
@@ -922,12 +1094,13 @@ impl AsyncTaskManager {
             active_tasks.insert(task_id.clone(), task_metadata);
         }
 
-        // Submit task
+        // Submit task to executor pool
         let active_tasks_clone = Arc::clone(&self.active_tasks);
         let notifications_clone = Arc::clone(&self.task_notifications);
         let task_id_clone = task_id.clone();
 
-        tokio::spawn(async move {
+        // Create task future that returns TaskResult
+        let task_future = async move {
             let result = task.await;
             
             // Remove from active tasks
@@ -948,11 +1121,18 @@ impl AsyncTaskManager {
 
             let _ = notifications_clone.send(notification);
 
+            // Convert to TaskResult
             match result {
                 Ok(msg) => TaskResult::Success(msg),
                 Err(e) => TaskResult::Failed(task_id_clone, e.to_string()),
             }
-        });
+        };
+
+        // Submit to the executor pool
+        {
+            let mut executor_pool = self.executor_pool.lock().await;
+            executor_pool.spawn(task_future);
+        }
 
         Ok(())
     }
@@ -971,6 +1151,104 @@ impl AsyncTaskManager {
     pub async fn get_active_tasks(&self) -> HashMap<String, TaskMetadata> {
         self.active_tasks.read().await.clone()
     }
+
+    /// Process completed tasks in executor pool
+    pub async fn process_completed_tasks(&self) -> Vec<TaskResult> {
+        let mut completed_results = Vec::new();
+        
+        {
+            let mut executor_pool = self.executor_pool.lock().await;
+            
+            // Poll for completed tasks without blocking
+            while let Some(result) = executor_pool.try_join_next() {
+                match result {
+                    Ok(task_result) => {
+                        debug!("Task completed: {:?}", task_result);
+                        completed_results.push(task_result);
+                    }
+                    Err(e) => {
+                        warn!("Task join error: {}", e);
+                        completed_results.push(TaskResult::Failed(
+                            "unknown".to_string(), 
+                            format!("Join error: {}", e)
+                        ));
+                    }
+                }
+            }
+        }
+        
+        completed_results
+    }
+
+    /// Start background task processor to handle executor pool
+    pub async fn start_background_processor(&self) {
+        debug!("Starting async task manager background processor");
+        
+        let executor_pool_clone = Arc::clone(&self.executor_pool);
+        let active_tasks_clone = Arc::clone(&self.active_tasks);
+        
+        tokio::spawn(async move {
+            loop {
+                // Process completed tasks every 5 seconds
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                
+                let mut completed_count = 0;
+                {
+                    let mut executor_pool = executor_pool_clone.lock().await;
+                    
+                    // Process all completed tasks
+                    while let Some(result) = executor_pool.try_join_next() {
+                        completed_count += 1;
+                        match result {
+                            Ok(task_result) => {
+                                debug!("Background processed task: {:?}", task_result);
+                            }
+                            Err(e) => {
+                                warn!("Background task join error: {}", e);
+                            }
+                        }
+                    }
+                }
+                
+                if completed_count > 0 {
+                    debug!("Processed {} completed tasks", completed_count);
+                }
+            }
+        });
+    }
+
+    /// Get executor pool metrics
+    pub async fn get_executor_pool_metrics(&self) -> ExecutorPoolMetrics {
+        let executor_pool = self.executor_pool.lock().await;
+        let active_tasks = self.active_tasks.read().await;
+        
+        ExecutorPoolMetrics {
+            active_task_count: active_tasks.len(),
+            executor_pool_size: executor_pool.len(),
+            max_concurrent_tasks: self.max_concurrent_tasks,
+        }
+    }
+
+    /// Cancel all running tasks and shutdown executor pool
+    pub async fn shutdown(&self) {
+        info!("Shutting down async task manager");
+        
+        let mut executor_pool = self.executor_pool.lock().await;
+        executor_pool.shutdown().await;
+        
+        let mut active_tasks = self.active_tasks.write().await;
+        active_tasks.clear();
+        
+        debug!("Async task manager shutdown completed");
+    }
+}
+
+/// Executor pool metrics
+#[derive(Debug, Clone)]
+pub struct ExecutorPoolMetrics {
+    pub active_task_count: usize,
+    pub executor_pool_size: usize,
+    pub max_concurrent_tasks: usize,
 }
 
 /// Performance optimizer that combines all optimization strategies
