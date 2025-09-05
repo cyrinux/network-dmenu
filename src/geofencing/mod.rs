@@ -1,6 +1,7 @@
-//! Geofencing module for location-aware network management
+//! Advanced geofencing module for intelligent location-aware network management
 //!
-//! Provides privacy-first location detection using WiFi fingerprinting
+//! Provides privacy-first location detection using WiFi fingerprinting,
+//! ML-powered zone suggestions, adaptive scanning, comprehensive security,
 //! and automatic network configuration based on detected zones.
 
 #[cfg(feature = "geofencing")]
@@ -12,10 +13,46 @@ pub mod ipc;
 #[cfg(feature = "geofencing")]
 pub mod zones;
 
+// Advanced components
+#[cfg(feature = "geofencing")]
+pub mod retry;
+#[cfg(feature = "geofencing")]
+pub mod adaptive;
+#[cfg(feature = "geofencing")]
+pub mod lifecycle;
+#[cfg(feature = "geofencing")]
+pub mod security;
+#[cfg(feature = "geofencing")]
+pub mod performance;
+#[cfg(feature = "geofencing")]
+pub mod observability;
+#[cfg(feature = "geofencing")]
+pub mod config;
+#[cfg(feature = "geofencing")]
+pub mod advanced_zones;
+
 #[cfg(feature = "geofencing")]
 pub use fingerprinting::*;
 #[cfg(feature = "geofencing")]
 pub use zones::*;
+
+// Re-export key types from advanced components
+#[cfg(feature = "geofencing")]
+pub use retry::{RetryManager, RetryConfig, RetryableAction};
+#[cfg(feature = "geofencing")]
+pub use adaptive::{AdaptiveScanner, ScanFrequency, MovementState, PowerState};
+#[cfg(feature = "geofencing")]
+pub use lifecycle::{LifecycleManager, SystemEvent, DaemonState};
+#[cfg(feature = "geofencing")]
+pub use security::{SecureCommandExecutor, SecurityPolicy};
+#[cfg(feature = "geofencing")]
+pub use performance::{PerformanceOptimizer, CacheManager, ConnectionPool, BatchProcessor};
+#[cfg(feature = "geofencing")]
+pub use observability::{ObservabilityManager, HealthStatus, DaemonMetrics};
+#[cfg(feature = "geofencing")]
+pub use config::{ConfigManager, EnhancedConfig, ValidationResult};
+#[cfg(feature = "geofencing")]
+pub use advanced_zones::{AdvancedZoneManager, ZoneSuggestion, ZoneHierarchy};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -42,7 +79,7 @@ pub struct CoarseLocation {
 }
 
 /// WiFi network signature for location fingerprinting
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NetworkSignature {
     /// SHA-256 hash of SSID for privacy
     pub ssid_hash: String,
@@ -178,9 +215,9 @@ pub struct LocationChange {
     pub suggested_actions: ZoneActions,
 }
 
-/// Zone creation suggestion from ML analysis
+/// Zone creation suggestion from ML analysis (deprecated - use advanced_zones::ZoneSuggestion)
 #[derive(Debug, Clone)]
-pub struct ZoneSuggestion {
+pub struct LegacyZoneSuggestion {
     /// Suggested name for the zone
     pub suggested_name: String,
     /// Confidence that this should be a zone

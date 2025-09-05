@@ -1,6 +1,6 @@
 [package]
 name = "network-dmenu"
-version = "2.6.0"
+version = "2.7.0"
 edition = "2021"
 authors = ["Cyril Levis"]
 categories = ["gui"]
@@ -14,7 +14,7 @@ repository = "https://github.com/cyrinux/network-dmenu"
 [features]
 default = ["ml", "geofencing", "firewalld", "tailscale"]
 ml = ["smartcore", "ndarray", "linfa", "linfa-trees"]
-geofencing = ["sha2", "uuid", "thiserror"]
+geofencing = ["sha2", "uuid", "thiserror", "async-trait", "fastrand", "libc", "tracing", "tracing-subscriber", "sysinfo"]
 firewalld = []
 tailscale = []
 
@@ -35,6 +35,8 @@ tokio = { version = "1", features = [
   "time",
   "process",
   "signal",
+  "fs",
+  "io-util",
 ], default-features = false }
 webbrowser = "1.0.3"
 country-emoji = "0.2.0"
@@ -61,6 +63,12 @@ linfa-trees = { version = "0.7", optional = true }
 sha2 = { version = "0.10", optional = true }
 uuid = { version = "1.0", optional = true, features = ["v4"] }
 thiserror = { version = "2.0", optional = true }
+async-trait = { version = "0.1", optional = true }
+fastrand = { version = "2.0", optional = true }
+libc = { version = "0.2", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+sysinfo = { version = "0.30", optional = true }
 
 [dev-dependencies]
 mockall = "0.12"

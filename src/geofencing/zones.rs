@@ -5,6 +5,7 @@
 
 use super::{
     fingerprinting::{calculate_weighted_similarity, create_wifi_fingerprint},
+    advanced_zones::{SuggestionEvidence, SuggestionType, SuggestionPriority},
     GeofenceError, GeofenceZone, GeofencingConfig, LocationChange, LocationFingerprint,
     PrivacyMode, Result, ZoneActions,
 };
@@ -13,6 +14,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[cfg(feature = "geofencing")]
 use uuid::Uuid;
@@ -537,7 +539,7 @@ impl ZoneSuggestionEngine {
     pub async fn analyze_location_for_zone_suggestion(
         &mut self,
         privacy_mode: PrivacyMode,
-    ) -> Result<Option<super::ZoneSuggestion>> {
+    ) -> Result<Option<super::advanced_zones::ZoneSuggestion>> {
         let fingerprint = create_wifi_fingerprint(privacy_mode).await?;
 
         if fingerprint.confidence_score < 0.5 {
@@ -565,13 +567,26 @@ impl ZoneSuggestionEngine {
 
         // Suggest zone creation if visited frequently
         if pattern.visit_count >= 3 && pattern.total_duration_minutes > 30 {
-            Ok(Some(super::ZoneSuggestion {
+            Ok(Some(super::advanced_zones::ZoneSuggestion {
                 suggested_name: suggest_zone_name(pattern.visit_count),
                 confidence: (pattern.visit_count as f64 / 10.0).min(0.9),
+                suggested_fingerprint: fingerprint.clone(),
                 suggested_actions: ZoneActions {
                     notifications: true,
                     ..Default::default()
                 },
+                reasoning: format!("Visited {} times, suggesting zone creation", pattern.visit_count),
+                evidence: SuggestionEvidence {
+                    visit_count: pattern.visit_count,
+                    total_time: Duration::from_secs(pattern.total_duration_minutes as u64 * 60),
+                    average_visit_duration: Duration::from_secs(pattern.total_duration_minutes as u64 * 60 / pattern.visit_count.max(1) as u64),
+                    common_visit_times: vec![],
+                    common_actions: vec![],
+                    similar_zones: vec![],
+                },
+                suggestion_type: SuggestionType::CreateZone,
+                created_at: Utc::now(),
+                priority: SuggestionPriority::Medium,
             }))
         } else {
             Ok(None)
