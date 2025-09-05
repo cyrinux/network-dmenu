@@ -5,6 +5,28 @@
 //! - Predict likely next actions
 //! - Suggest workflow automations
 //! - Adapt to usage patterns over time
+//!
+//! ## Learning Algorithm
+//!
+//! The usage pattern learner uses a multi-factor scoring system:
+//! - **Recency (40%)**: Exponential decay favoring recently used actions
+//! - **Frequency (35%)**: Logarithmic scaling of total usage count
+//! - **Context (25%)**: Similarity to historical usage contexts
+//!
+//! ## WiFi Network Intelligence
+//!
+//! WiFi networks are prioritized using:
+//! - **Temporal Patterns (40%)**: Time-of-day and day-of-week usage
+//! - **Frequency (30%)**: Total connection count with normalization
+//! - **Recency (20%)**: Exponential decay over weeks
+//! - **Success Rate (10%)**: Historical connection reliability
+//!
+//! ## Workflow Detection
+//!
+//! Frequent action sequences are detected and can be used for:
+//! - Predicting next likely actions
+//! - Suggesting automation workflows
+//! - Context-aware action recommendations
 
 use super::{
     cosine_similarity, normalize_features, MlError, ModelPersistence, NetworkContext, NetworkType,
@@ -16,6 +38,149 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+
+// === USAGE PATTERN LEARNING CONSTANTS ===
+
+/// Time-based constants for pattern analysis
+pub mod time_constants {
+    /// Hours in a day for temporal analysis
+    pub const HOURS_PER_DAY: usize = 24;
+    /// Days in a week for weekly pattern analysis
+    pub const DAYS_PER_WEEK: usize = 7;
+    /// Seconds in a day for timestamp calculations
+    pub const SECONDS_PER_DAY: i64 = 86400;
+    /// Seconds in an hour for time conversion
+    pub const SECONDS_PER_HOUR: f32 = 3600.0;
+    /// Seconds in a week for decay calculations
+    pub const SECONDS_PER_WEEK: f32 = 604800.0;
+    /// Hours in a week for exponential decay
+    pub const HOURS_PER_WEEK: f32 = 168.0;
+    /// Action sequence timeout in seconds (5 minutes)
+    pub const SEQUENCE_TIMEOUT: i64 = 300;
+    /// Recent usage window in days (7 days)
+    pub const RECENT_WINDOW_DAYS: i64 = 7;
+    /// Hours for recency bonus calculation (24 hours)
+    pub const RECENCY_BONUS_HOURS: f32 = 24.0;
+}
+
+/// Default configuration values
+pub mod config_defaults {
+    /// Maximum actions in a sequence for pattern detection
+    pub const MAX_SEQUENCE_LENGTH: usize = 5;
+    /// Maximum history size to prevent memory bloat
+    pub const MAX_HISTORY_SIZE: usize = 1000;
+    /// Minimum workflow occurrences to be considered frequent
+    pub const WORKFLOW_THRESHOLD: u32 = 3;
+    /// Action context history limit per action
+    pub const CONTEXT_HISTORY_LIMIT: usize = 100;
+    /// WiFi network context history limit
+    pub const WIFI_CONTEXT_LIMIT: usize = 50;
+}
+
+/// Scoring weights for usage pattern calculation
+pub mod scoring_weights {
+    /// Recency weight in action scoring (40%)
+    pub const RECENCY: f32 = 0.4;
+    /// Frequency weight in action scoring (35%)
+    pub const FREQUENCY: f32 = 0.35;
+    /// Context similarity weight in action scoring (25%)
+    pub const CONTEXT: f32 = 0.25;
+    /// Time-based bonus weight (15%)
+    pub const TIME_BONUS: f32 = 0.15;
+}
+
+/// WiFi network preference scoring weights
+pub mod wifi_scoring {
+    /// Temporal pattern weight (40%) - time-of-day and day-of-week
+    pub const TEMPORAL_WEIGHT: f32 = 0.4;
+    /// Frequency weight (30%) - total connection count
+    pub const FREQUENCY_WEIGHT: f32 = 0.3;
+    /// Recency weight (20%) - when last connected
+    pub const RECENCY_WEIGHT: f32 = 0.2;
+    /// Success rate weight (10%) - connection reliability
+    pub const SUCCESS_RATE_WEIGHT: f32 = 0.1;
+    /// Context similarity bonus weight
+    pub const CONTEXT_BONUS_WEIGHT: f32 = 0.1;
+}
+
+/// Default scores and thresholds
+pub mod defaults {
+    /// Base score for unknown networks
+    pub const UNKNOWN_NETWORK_SCORE: f32 = 0.1;
+    /// Neutral score for new actions
+    pub const NEUTRAL_SCORE: f32 = 0.5;
+    /// Optimistic initial success rate for new WiFi networks
+    pub const INITIAL_SUCCESS_RATE: f32 = 0.9;
+    /// Base score for unseen actions
+    pub const UNSEEN_ACTION_SCORE: f32 = 0.1;
+    /// Minimal score for unrecognized actions
+    pub const UNRECOGNIZED_ACTION_SCORE: f32 = 0.05;
+    /// Maximum score cap
+    pub const MAX_SCORE: f32 = 1.0;
+    /// Frequency normalization factor (per 100 uses)
+    pub const FREQUENCY_NORMALIZATION: f32 = 100.0;
+    /// Recent count normalization factor (per 10 recent uses)
+    pub const RECENT_NORMALIZATION: f32 = 10.0;
+    /// Time between uses normalization (per week)
+    pub const TIME_NORMALIZATION: f32 = 168.0;
+}
+
+/// Smart criteria bonus values for different scenarios
+pub mod smart_bonuses {
+    /// WiFi action bonus when on WiFi network
+    pub const WIFI_MATCH: f32 = 0.1;
+    /// Mobile data action penalty when on WiFi
+    pub const MOBILE_ON_WIFI_PENALTY: f32 = -0.05;
+    /// VPN bonus on stable ethernet connection
+    pub const VPN_ON_ETHERNET: f32 = 0.15;
+    /// Data-saving action bonus on mobile network
+    pub const DATA_SAVING_ON_MOBILE: f32 = 0.1;
+    /// Diagnostic action bonus with poor signal
+    pub const DIAGNOSTIC_POOR_SIGNAL: f32 = 0.2;
+    /// Speed test bonus with excellent signal
+    pub const SPEED_TEST_EXCELLENT_SIGNAL: f32 = 0.1;
+    /// Morning VPN/work connection bonus
+    pub const MORNING_VPN_BONUS: f32 = 0.1;
+    /// Lunch personal connection bonus
+    pub const LUNCH_PERSONAL_BONUS: f32 = 0.05;
+    /// Evening entertainment connection bonus
+    pub const EVENING_ENTERTAINMENT_BONUS: f32 = 0.1;
+    /// Weekday work connection bonus
+    pub const WEEKDAY_WORK_BONUS: f32 = 0.05;
+    /// Weekend personal action bonus
+    pub const WEEKEND_PERSONAL_BONUS: f32 = 0.05;
+    /// Connectivity diagnostic priority bonus
+    pub const CONNECTIVITY_PRIORITY: f32 = 0.15;
+    /// Disconnect action quick access bonus
+    pub const DISCONNECT_QUICK_ACCESS: f32 = 0.05;
+}
+
+/// Signal strength thresholds for adaptive behavior
+pub mod signal_thresholds {
+    /// Poor signal threshold (30%)
+    pub const POOR_SIGNAL: f32 = 0.3;
+    /// Excellent signal threshold (80%)
+    pub const EXCELLENT_SIGNAL: f32 = 0.8;
+}
+
+/// Time ranges for different activity periods
+pub mod activity_periods {
+    /// Morning hours (6-9)
+    pub const MORNING_START: u8 = 6;
+    pub const MORNING_END: u8 = 9;
+    /// Lunch hours (12-14)
+    pub const LUNCH_START: u8 = 12;
+    pub const LUNCH_END: u8 = 14;
+    /// Evening hours (18-22)
+    pub const EVENING_START: u8 = 18;
+    pub const EVENING_END: u8 = 22;
+    /// Weekday range (0-4)
+    pub const WEEKDAY_START: u8 = 0;
+    pub const WEEKDAY_END: u8 = 4;
+    /// Weekend range (5-6)
+    pub const WEEKEND_START: u8 = 5;
+    pub const WEEKEND_END: u8 = 6;
+}
 
 /// User action types that can be tracked
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -58,16 +223,16 @@ pub struct ActionSequence {
     pub timestamp: i64, // Unix timestamp
 }
 
-/// Usage statistics for an action
+/// Usage statistics for an action with comprehensive tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionStats {
     pub total_count: u32,
-    pub recent_count: u32, // Last 7 days
-    pub hourly_distribution: [u32; 24],
-    pub daily_distribution: [u32; 7],
-    pub last_used: Option<i64>,         // Unix timestamp
-    pub average_time_between_uses: f32, // In hours
-    pub contexts: Vec<NetworkContext>,
+    pub recent_count: u32, // Last 7 days within RECENT_WINDOW_DAYS
+    pub hourly_distribution: [u32; time_constants::HOURS_PER_DAY], // 24-hour usage pattern
+    pub daily_distribution: [u32; time_constants::DAYS_PER_WEEK],  // 7-day weekly pattern
+    pub last_used: Option<i64>,         // Unix timestamp for recency calculation
+    pub average_time_between_uses: f32, // In hours for frequency analysis
+    pub contexts: Vec<NetworkContext>,  // Historical contexts for similarity matching
 }
 
 impl Default for ActionStats {
@@ -75,8 +240,8 @@ impl Default for ActionStats {
         Self {
             total_count: 0,
             recent_count: 0,
-            hourly_distribution: [0; 24],
-            daily_distribution: [0; 7],
+            hourly_distribution: [0; time_constants::HOURS_PER_DAY],
+            daily_distribution: [0; time_constants::DAYS_PER_WEEK],
             last_used: None,
             average_time_between_uses: 0.0,
             contexts: Vec::new(),
@@ -104,25 +269,32 @@ pub struct UsagePatternLearner {
     config: UsageConfig,
 }
 
+/// Configuration for usage pattern learning with intelligent defaults
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageConfig {
+    /// Maximum actions in a sequence for workflow detection
     pub max_sequence_length: usize,
+    /// Maximum history entries to maintain (memory management)
     pub max_history_size: usize,
-    pub workflow_threshold: u32, // Min occurrences to consider a workflow
+    /// Minimum occurrences to consider a workflow pattern
+    pub workflow_threshold: u32,
+    /// Weight for recency in action scoring (how much recent usage matters)
     pub recency_weight: f32,
+    /// Weight for frequency in action scoring (how much total usage matters)
     pub frequency_weight: f32,
+    /// Weight for context similarity in action scoring
     pub context_weight: f32,
 }
 
 impl Default for UsageConfig {
     fn default() -> Self {
         Self {
-            max_sequence_length: 5,
-            max_history_size: 1000,
-            workflow_threshold: 3,
-            recency_weight: 0.4,
-            frequency_weight: 0.35,
-            context_weight: 0.25,
+            max_sequence_length: config_defaults::MAX_SEQUENCE_LENGTH,
+            max_history_size: config_defaults::MAX_HISTORY_SIZE,
+            workflow_threshold: config_defaults::WORKFLOW_THRESHOLD,
+            recency_weight: scoring_weights::RECENCY,
+            frequency_weight: scoring_weights::FREQUENCY,
+            context_weight: scoring_weights::CONTEXT,
         }
     }
 }
@@ -165,17 +337,17 @@ impl UsagePatternLearner {
             .or_default();
         stats.total_count += 1;
 
-        // Update recent count (last 7 days)
+        // Update recent count within the rolling window
         if let Some(last_used_ts) = stats.last_used {
-            let days_since = (now_timestamp - last_used_ts) / 86400; // seconds in a day
-            if days_since <= 7 {
+            let days_since = (now_timestamp - last_used_ts) / time_constants::SECONDS_PER_DAY;
+            if days_since <= time_constants::RECENT_WINDOW_DAYS {
                 stats.recent_count += 1;
             } else {
-                stats.recent_count = 1; // Reset if it's been more than 7 days
+                stats.recent_count = 1; // Reset if outside recent window
             }
 
-            // Update average time between uses
-            let hours_since = ((now_timestamp - last_used_ts) as f32) / 3600.0; // seconds in an hour
+            // Update average time between uses using incremental calculation
+            let hours_since = ((now_timestamp - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
             stats.average_time_between_uses =
                 (stats.average_time_between_uses * (stats.total_count - 1) as f32 + hours_since)
                     / stats.total_count as f32;
@@ -186,8 +358,8 @@ impl UsagePatternLearner {
         stats.daily_distribution[now.weekday().num_days_from_monday() as usize] += 1;
         stats.contexts.push(context.clone());
 
-        // Limit context history
-        if stats.contexts.len() > 100 {
+        // Limit context history to prevent unbounded memory growth
+        if stats.contexts.len() > config_defaults::CONTEXT_HISTORY_LIMIT {
             stats.contexts.remove(0);
         }
 
@@ -197,13 +369,12 @@ impl UsagePatternLearner {
             .or_default()
             .push(action.clone());
 
-        // Add to sequences
+        // Add to action sequences for workflow detection
         if let Some(last_seq) = self.action_sequences.back_mut() {
             if last_seq.actions.len() < self.config.max_sequence_length
-                && (now_timestamp - last_seq.timestamp) < 300
+                && (now_timestamp - last_seq.timestamp) < time_constants::SEQUENCE_TIMEOUT
             {
-                // 5 minutes in seconds
-                // Add to current sequence if recent enough
+                // Add to current sequence if within timeout window
                 last_seq.actions.push(action.clone());
             } else {
                 // Start new sequence
@@ -214,7 +385,7 @@ impl UsagePatternLearner {
                 });
             }
         } else {
-            // First sequence
+            // Initialize first sequence
             self.action_sequences.push_back(ActionSequence {
                 actions: vec![action.clone()],
                 context: context.clone(),
@@ -252,10 +423,10 @@ impl UsagePatternLearner {
             .or_insert_with(|| {
                 WiFiNetworkPattern {
                     network_name: network_name.clone(),
-                    hourly_usage: [0; 24],
-                    daily_usage: [0; 7],
+                    hourly_usage: [0; time_constants::HOURS_PER_DAY],
+                    daily_usage: [0; time_constants::DAYS_PER_WEEK],
                     total_connections: 0,
-                    success_rate: 0.9, // Start with optimistic assumption
+                    success_rate: defaults::INITIAL_SUCCESS_RATE, // Start with optimistic assumption
                     last_connected: None,
                     average_connection_time: 0.0,
                     preferred_contexts: Vec::new(),
@@ -280,8 +451,8 @@ impl UsagePatternLearner {
         // Store context for this connection
         pattern.preferred_contexts.push(context);
 
-        // Limit context history to prevent unbounded growth
-        if pattern.preferred_contexts.len() > 50 {
+        // Limit context history to prevent unbounded memory growth
+        if pattern.preferred_contexts.len() > config_defaults::WIFI_CONTEXT_LIMIT {
             pattern.preferred_contexts.remove(0);
         }
 
@@ -293,16 +464,16 @@ impl UsagePatternLearner {
         );
     }
 
-    /// Get WiFi network preference score for current context
+    /// Get WiFi network preference score for current context using learned patterns
     pub fn get_wifi_network_score(&self, network_name: &str, context: &NetworkContext) -> f32 {
         if let Some(pattern) = self.wifi_patterns.get(network_name) {
             self.calculate_wifi_preference_score(pattern, context)
         } else {
-            0.1 // Base score for unknown networks
+            defaults::UNKNOWN_NETWORK_SCORE // Base score for unknown networks
         }
     }
 
-    /// Calculate preference score for a WiFi network in given context
+    /// Calculate preference score for a WiFi network using multi-factor analysis
     fn calculate_wifi_preference_score(
         &self,
         pattern: &WiFiNetworkPattern,
@@ -310,51 +481,51 @@ impl UsagePatternLearner {
     ) -> f32 {
         let mut score = 0.0;
 
-        // Time-based preference (40% weight)
+        // Time-based preference using learned temporal patterns
         let hour_weight = pattern.hourly_usage[context.time_of_day as usize] as f32
             / pattern.total_connections.max(1) as f32;
         let day_weight = pattern.daily_usage[context.day_of_week as usize] as f32
             / pattern.total_connections.max(1) as f32;
         let time_score = (hour_weight + day_weight) / 2.0;
-        score += time_score * 0.4;
+        score += time_score * wifi_scoring::TEMPORAL_WEIGHT;
 
-        // Frequency-based preference (30% weight)
-        let frequency_score = (pattern.total_connections as f32 / 100.0).min(1.0);
-        score += frequency_score * 0.3;
+        // Frequency-based preference with normalization
+        let frequency_score = (pattern.total_connections as f32 / defaults::FREQUENCY_NORMALIZATION).min(defaults::MAX_SCORE);
+        score += frequency_score * wifi_scoring::FREQUENCY_WEIGHT;
 
-        // Recency bonus (20% weight)
+        // Recency bonus with exponential decay over weeks
         let recency_score = if let Some(last_connected_ts) = pattern.last_connected {
             let hours_since =
-                ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / 3600.0;
-            (-hours_since / 168.0).exp() // Exponential decay over weeks
+                ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+            (-hours_since / time_constants::HOURS_PER_WEEK).exp() // Exponential decay over weeks
         } else {
             0.0
         };
-        score += recency_score * 0.2;
+        score += recency_score * wifi_scoring::RECENCY_WEIGHT;
 
-        // Success rate (10% weight)
-        score += pattern.success_rate * 0.1;
+        // Success rate factor for reliability
+        score += pattern.success_rate * wifi_scoring::SUCCESS_RATE_WEIGHT;
 
-        // Contextual similarity bonus
+        // Contextual similarity bonus for matching usage patterns
         let context_bonus = self.calculate_wifi_context_similarity(pattern, context);
-        score += context_bonus * 0.1;
+        score += context_bonus * wifi_scoring::CONTEXT_BONUS_WEIGHT;
 
         debug!(
             "WiFi score for '{}': {:.3} (time: {:.2}, freq: {:.2}, recency: {:.2}, context: {:.2})",
             pattern.network_name, score, time_score, frequency_score, recency_score, context_bonus
         );
 
-        score.min(1.0)
+        score.min(defaults::MAX_SCORE)
     }
 
-    /// Calculate how similar current context is to historical WiFi usage contexts
+    /// Calculate contextual similarity using cosine similarity of feature vectors
     fn calculate_wifi_context_similarity(
         &self,
         pattern: &WiFiNetworkPattern,
         context: &NetworkContext,
     ) -> f32 {
         if pattern.preferred_contexts.is_empty() {
-            return 0.5;
+            return defaults::NEUTRAL_SCORE;
         }
 
         // Find most similar context from history
@@ -523,17 +694,17 @@ impl UsagePatternLearner {
         // Base score calculation
         let mut base_score = if let Some(action) = action {
             if let Some(stats) = self.action_stats.get(&action) {
-                // Recency score with exponential decay
+                // Recency score with exponential decay favoring recent usage
                 let recency_score = if let Some(last_used_ts) = stats.last_used {
                     let hours_since =
-                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
-                    (-hours_since / 168.0).exp() // Exponential decay over weeks
+                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+                    (-hours_since / time_constants::HOURS_PER_WEEK).exp() // Exponential decay over weeks
                 } else {
                     0.0
                 };
 
-                // Frequency score with logarithmic scaling
-                let frequency_score = (1.0 + stats.total_count as f32).ln() / 10.0;
+                // Frequency score with logarithmic scaling to prevent dominance
+                let frequency_score = (1.0 + stats.total_count as f32).ln() / defaults::RECENT_NORMALIZATION;
 
                 // Context score
                 let context_score = self.calculate_context_similarity(&action, context);
@@ -555,11 +726,11 @@ impl UsagePatternLearner {
                     (hour_weight + day_weight) / 2.0 + (hour_consistency + day_consistency) * 0.1
                 };
 
-                // Recent usage boost (actions used in last 24 hours get priority)
+                // Recent usage boost for actions used within recency window
                 let recent_boost = if let Some(last_used_ts) = stats.last_used {
                     let hours_since =
-                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / 3600.0;
-                    if hours_since <= 24.0 {
+                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+                    if hours_since <= time_constants::RECENCY_BONUS_HOURS {
                         0.2
                     } else {
                         0.0
@@ -568,122 +739,122 @@ impl UsagePatternLearner {
                     0.0
                 };
 
-                // Weighted combination
+                // Weighted combination using learned preferences
                 recency_score * self.config.recency_weight +
                 frequency_score * self.config.frequency_weight +
                 context_score * self.config.context_weight +
-                time_score * 0.15 +  // Increased time bonus
+                time_score * scoring_weights::TIME_BONUS +  // Time-based scoring bonus
                 recent_boost
             } else {
-                0.1 // Base score for unseen actions
+                defaults::UNSEEN_ACTION_SCORE // Base score for unseen actions
             }
         } else {
-            0.05 // Minimal score for unrecognized actions
+            defaults::UNRECOGNIZED_ACTION_SCORE // Minimal score for unrecognized actions
         };
 
         // Apply smart criteria bonuses
         base_score += self.calculate_smart_criteria_bonus(action_str, context);
 
-        base_score.min(1.0) // Cap at 1.0
+        base_score.min(defaults::MAX_SCORE) // Cap at maximum score
     }
 
-    /// Calculate smart criteria bonuses based on network conditions and action types
+    /// Calculate smart criteria bonuses using context-aware intelligence
     fn calculate_smart_criteria_bonus(&self, action_str: &str, context: &NetworkContext) -> f32 {
         let action = action_str.to_lowercase();
         let mut bonus = 0.0;
 
-        // Network-specific bonuses
+        // Network-specific intelligent bonuses
         match context.network_type {
             NetworkType::WiFi => {
-                // Boost WiFi-related actions when on WiFi
+                // Boost WiFi-related actions when on WiFi network
                 if action.contains("wifi") || action.contains("disconnect") {
-                    bonus += 0.1;
+                    bonus += smart_bonuses::WIFI_MATCH;
                 }
-                // Lower priority for mobile data actions
+                // Lower priority for mobile data actions when on WiFi
                 if action.contains("mobile") {
-                    bonus -= 0.05;
+                    bonus += smart_bonuses::MOBILE_ON_WIFI_PENALTY;
                 }
             }
             NetworkType::Ethernet => {
-                // Boost VPN and Tailscale when on stable connection
+                // Boost VPN and Tailscale when on stable ethernet connection
                 if action.contains("tailscale") || action.contains("vpn") {
-                    bonus += 0.15;
+                    bonus += smart_bonuses::VPN_ON_ETHERNET;
                 }
             }
             NetworkType::Mobile => {
-                // Boost data-saving actions on mobile
+                // Boost data-saving actions on mobile network
                 if action.contains("disconnect") || action.contains("airplane") {
-                    bonus += 0.1;
+                    bonus += smart_bonuses::DATA_SAVING_ON_MOBILE;
                 }
             }
             _ => {}
         }
 
-        // Signal strength bonuses
+        // Signal strength adaptive bonuses
         if let Some(signal) = context.signal_strength {
-            if signal < 0.3 {
+            if signal < signal_thresholds::POOR_SIGNAL {
                 // Poor signal - boost diagnostic and network switching actions
                 if action.contains("diagnostic")
                     || action.contains("wifi")
                     || action.contains("disconnect")
                 {
-                    bonus += 0.2;
+                    bonus += smart_bonuses::DIAGNOSTIC_POOR_SIGNAL;
                 }
-            } else if signal > 0.8 {
-                // Good signal - boost bandwidth-intensive actions
+            } else if signal > signal_thresholds::EXCELLENT_SIGNAL {
+                // Excellent signal - boost bandwidth-intensive actions
                 if action.contains("speed") || action.contains("update") {
-                    bonus += 0.1;
+                    bonus += smart_bonuses::SPEED_TEST_EXCELLENT_SIGNAL;
                 }
             }
         }
 
-        // Time-based bonuses
+        // Time-based intelligent bonuses
         match context.time_of_day {
-            6..=9 => {
+            activity_periods::MORNING_START..=activity_periods::MORNING_END => {
                 // Morning - boost work-related connections
                 if action.contains("vpn") || action.contains("tailscale") {
-                    bonus += 0.1;
+                    bonus += smart_bonuses::MORNING_VPN_BONUS;
                 }
             }
-            12..=14 => {
+            activity_periods::LUNCH_START..=activity_periods::LUNCH_END => {
                 // Lunch - boost personal connections
                 if action.contains("bluetooth") || action.contains("personal") {
-                    bonus += 0.05;
+                    bonus += smart_bonuses::LUNCH_PERSONAL_BONUS;
                 }
             }
-            18..=22 => {
+            activity_periods::EVENING_START..=activity_periods::EVENING_END => {
                 // Evening - boost entertainment connections
                 if action.contains("streaming") || action.contains("exit") {
-                    bonus += 0.1;
+                    bonus += smart_bonuses::EVENING_ENTERTAINMENT_BONUS;
                 }
             }
             _ => {}
         }
 
-        // Day-based bonuses
+        // Day-based work-life balance bonuses
         match context.day_of_week {
-            0..=4 => {
+            activity_periods::WEEKDAY_START..=activity_periods::WEEKDAY_END => {
                 // Weekdays - boost work connections
                 if action.contains("vpn") || action.contains("work") {
-                    bonus += 0.05;
+                    bonus += smart_bonuses::WEEKDAY_WORK_BONUS;
                 }
             }
-            5..=6 => {
+            activity_periods::WEEKEND_START..=activity_periods::WEEKEND_END => {
                 // Weekends - boost personal actions
                 if action.contains("bluetooth") || action.contains("entertainment") {
-                    bonus += 0.05;
+                    bonus += smart_bonuses::WEEKEND_PERSONAL_BONUS;
                 }
             }
             _ => {}
         }
 
-        // Priority action types
+        // Priority action types for essential functions
         if action.contains("diagnostic") && action.contains("connectivity") {
-            bonus += 0.15; // Always prioritize basic connectivity tests
+            bonus += smart_bonuses::CONNECTIVITY_PRIORITY; // Always prioritize basic connectivity tests
         }
 
         if action.contains("disconnect") || action.contains("disable") {
-            bonus += 0.05; // Slightly boost disconnect actions for quick access
+            bonus += smart_bonuses::DISCONNECT_QUICK_ACCESS; // Boost disconnect actions for quick access
         }
 
         bonus
