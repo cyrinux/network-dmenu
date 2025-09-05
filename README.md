@@ -138,7 +138,9 @@ network-dmenu --daemon-status
 network-dmenu --stop-daemon
 ```
 
-#### **Zone Configuration Example**
+#### **Zone Configuration Examples**
+
+**Basic Home/Work Setup**
 ```toml
 [geofencing]
 enabled = true
@@ -147,15 +149,108 @@ scan_interval_seconds = 30      # Check location every 30 seconds
 confidence_threshold = 0.8      # 80% confidence required
 notifications = true            # Desktop notifications on zone changes
 
+# Home zone - automatically connect to home network and devices
 [[geofencing.zones]]
 name = "Home"
 [geofencing.zones.actions]
 wifi = "HomeWiFi"
-vpn = "HomeVPN"  
-tailscale_exit_node = "home-server"
-bluetooth = ["Headphones", "Mouse"]
-custom_commands = ["systemctl --user start syncthing"]
+# vpn = null                    # No VPN connection at home
+tailscale_exit_node = "none"    # Direct connection at home
+bluetooth = ["Sony Headphones", "Logitech Mouse"]
+custom_commands = [
+    "systemctl --user start syncthing",
+    "notify-send 'Welcome Home' 'Network configured for home'"
+]
+
+# Work zone - secure corporate setup
+[[geofencing.zones]]
+name = "Office"
+[geofencing.zones.actions]
+wifi = "CorpWiFi"
+vpn = "WorkVPN"                 # Auto-connect to company VPN
+tailscale_exit_node = "office-gateway"
+bluetooth = ["Work Headset"]
+custom_commands = [
+    "systemctl --user stop syncthing",
+    "notify-send 'Work Mode' 'Secure network profile activated'"
+]
 ```
+
+**Advanced Multi-Location Setup**
+```toml
+[geofencing]
+enabled = true
+privacy_mode = "Medium"         # WiFi + Bluetooth for better accuracy
+scan_interval_seconds = 15      # More frequent checks
+confidence_threshold = 0.75     # Slightly more sensitive
+notifications = true
+zone_history_size = 50         # Remember more location data
+
+# Coffee shop zone - privacy focused
+[[geofencing.zones]]
+name = "CoffeeShop"
+[geofencing.zones.actions]
+wifi = "CafeWiFi"
+vpn = "PrivateVPN"             # Always use VPN on public WiFi
+tailscale_exit_node = "home-server"  # Route through home
+bluetooth = []                  # Disable Bluetooth for privacy
+custom_commands = [
+    "notify-send 'Public Network' 'VPN activated for security'",
+    "firefox --private-window"
+]
+
+# Mobile/traveling zone - conserve data
+[[geofencing.zones]]
+name = "Mobile"
+[geofencing.zones.actions]
+# wifi = null                   # Use mobile data instead
+# vpn = null                    # No VPN to save mobile data
+tailscale_exit_node = "nearest" # Use nearest exit node
+bluetooth = ["Phone Headphones"]
+custom_commands = [
+    "notify-send 'Mobile Mode' 'Data conservation enabled'"
+]
+
+# Hotel/temporary zone - secure but flexible
+[[geofencing.zones]]
+name = "Hotel"
+[geofencing.zones.actions]
+wifi = "auto"                   # Connect to strongest signal
+vpn = "TravelVPN"              # Secure connection
+tailscale_exit_node = "home-server"
+bluetooth = ["Travel Headphones"]
+custom_commands = [
+    "notify-send 'Travel Mode' 'Secure hotel network setup'"
+]
+```
+
+**Privacy Mode Options**
+```toml
+[geofencing]
+# High privacy: WiFi networks only, all identifiers hashed
+privacy_mode = "High"
+
+# Medium privacy: WiFi + Bluetooth, hashed identifiers  
+privacy_mode = "Medium"
+
+# Low privacy: All available signals, better accuracy
+privacy_mode = "Low"
+
+# Custom privacy settings
+privacy_mode = "Custom"
+[geofencing.privacy]
+use_wifi = true
+use_bluetooth = false
+use_cellular_towers = false    # Requires special permissions
+hash_identifiers = true        # SHA-256 hash all network IDs
+hash_salt = "your-unique-salt" # Optional custom salt
+```
+
+**Important Notes**
+- **VPN actions** must specify actual NetworkManager VPN profile names (e.g., `vpn = "WorkVPN"`), not keywords like "disconnect"
+- **WiFi actions** use SSID names (e.g., `wifi = "MyNetwork"`)  
+- **Tailscale exit nodes** support special values: `"none"` (direct), `"auto"` (automatic), or specific hostnames
+- To disable an action, omit the field or comment it out - don't set it to "disconnect" or "off"
 
 ### 🎛️ System Controls
 
