@@ -19,6 +19,7 @@ pub mod ml;
 pub mod ml_integration;
 pub mod networkmanager;
 pub mod nextdns;
+pub mod port_utils;
 pub mod privilege;
 pub mod rfkill;
 pub mod ssh;
@@ -58,6 +59,7 @@ pub use networkmanager::{
     get_nm_vpn_networks, get_nm_wifi_networks, is_known_network as is_known_nm_network,
 };
 pub use nextdns::{get_nextdns_actions, handle_nextdns_action, NextDnsAction};
+pub use port_utils::{is_any_port_listening, is_port_listening};
 pub use privilege::{
     get_privilege_command, has_privilege_escalation, wrap_privileged_command,
     wrap_privileged_commands,

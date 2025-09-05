@@ -178,6 +178,24 @@ custom_commands = ["systemctl --user start syncthing"]
 - 🎯 Per-profile configuration
 - 🌐 No CLI dependency required
 
+### 🔌 SSH SOCKS Proxy Management
+- **Start/Stop SSH SOCKS proxies** from dmenu interface
+- **Toggle functionality** - shows "Start" when stopped, "Stop" when running
+- **Multiple proxy configurations** support
+- **Automatic status detection** using socket files and port checking
+- **Customizable SSH options** per proxy
+- **Desktop notifications** for status changes
+
+### 🧅 Tor Proxy Management
+- **Start/Stop/Restart Tor daemon** from dmenu interface (requires `tor` command)
+- **Launch applications via torsocks** for Tor routing (requires `torsocks` command)
+- **Automatic Tor status detection** using port monitoring
+- **Multiple torsocks configurations** for different applications
+- **Smart menu ordering** - Tor daemon management appears first, apps when Tor is running
+- **Desktop notifications** for all operations
+- **Secure defaults** with proper data directory isolation
+- **Command availability checking** - only shows relevant actions when commands are installed
+
 ## 📦 Installation
 
 ### Prerequisites
@@ -199,6 +217,9 @@ Optional dependencies based on features you want:
 - `ss` or `netstat` - Connection monitoring
 - `speedtest-go`, `speedtest-cli`, or `fast` - Speed testing
 - [`dns-bench`](https://github.com/qwerty541/dns-bench) - DNS benchmark testing (optional)
+- `ssh` - SSH SOCKS proxy support
+- `tor` - Tor daemon support (optional)
+- `torsocks` - Tor application routing (optional)
 
 ### From Crates.io (Recommended)
 
@@ -327,6 +348,48 @@ cmd = "alacritty -e nethogs"
 
 # Advanced dmenu with keybindings (example for rofi)
 # dmenu_args = "-dmenu -i -matching fuzzy -kb-custom-1 'Alt+w' -kb-custom-2 'Alt+b' -kb-custom-3 'Alt+t'"
+
+# SSH SOCKS Proxy configurations
+[ssh_proxies]
+
+[ssh_proxies.server1]
+name = "server1"
+server = "example.com"
+port = 1081
+socket_path = "/tmp/server1.sock"
+ssh_options = ["-f", "-q", "-N"]
+
+[ssh_proxies.work-vpn]
+name = "work-vpn"
+server = "vpn.company.com"
+port = 1082
+socket_path = "/tmp/work-vpn.sock"
+ssh_options = ["-f", "-q", "-N", "-C"]
+
+# Tor proxy configurations
+# Disable Tor integration entirely (optional)
+# no_tor = true
+
+# Torsocks application configurations
+[torsocks_apps]
+
+[torsocks_apps.firefox]
+name = "firefox"
+command = "firefox"
+args = ["--private-window", "--new-instance", "-P", "tor"]
+description = "Firefox via Tor"
+
+[torsocks_apps.curl-test]
+name = "curl-test"
+command = "curl"
+args = ["-s", "https://httpbin.org/ip"]
+description = "Test Tor Connection"
+
+[torsocks_apps.telegram]
+name = "telegram"
+command = "telegram-desktop"
+args = []
+description = "Telegram Desktop"
 ```
 
 ### Advanced Keybinding Configuration

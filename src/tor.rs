@@ -1,6 +1,7 @@
 use crate::command::{is_command_installed, CommandRunner};
 use crate::constants::{ICON_CHECK, ICON_CROSS};
 use crate::format_entry;
+use crate::port_utils::is_any_port_listening;
 use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -52,10 +53,8 @@ impl TorManager {
 
     /// Check if Tor daemon is running (async version)
     pub async fn is_tor_running_async(&self) -> bool {
-        // Check if Tor is listening on the control port
-        self.is_port_listening_async(self.control_port).await ||
-        // Also check SOCKS port as fallback
-        self.is_port_listening_async(self.socks_port).await
+        // Check if Tor is listening on the control port or SOCKS port using pure Rust
+        is_any_port_listening(&[self.control_port, self.socks_port])
     }
 
     /// Check if Tor daemon is running (sync version for backward compatibility)
@@ -105,48 +104,6 @@ impl TorManager {
         result
     }
 
-    async fn is_port_listening_async(&self, port: u16) -> bool {
-        // Check if a process is listening on the specified port
-        // Try ss first (modern and widely available)
-        match tokio::process::Command::new("ss")
-            .args(["-tln"])
-            .output()
-            .await
-        {
-            Ok(output) => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                output_str
-                    .lines()
-                    .any(|line| line.contains(&format!(":{}", port)) && line.contains("LISTEN"))
-            }
-            Err(_) => {
-                // Fallback: try lsof
-                match tokio::process::Command::new("lsof")
-                    .args(["-i", &format!("tcp:{}", port)])
-                    .output()
-                    .await
-                {
-                    Ok(output) => !output.stdout.is_empty(),
-                    Err(_) => {
-                        // Last fallback: try netstat
-                        match tokio::process::Command::new("netstat")
-                            .args(["-tln"])
-                            .output()
-                            .await
-                        {
-                            Ok(output) => {
-                                let output_str = String::from_utf8_lossy(&output.stdout);
-                                output_str.lines().any(|line| {
-                                    line.contains(&format!(":{}", port)) && line.contains("LISTEN")
-                                })
-                            }
-                            Err(_) => false,
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     /// Start Tor daemon
     pub fn start_tor(&self, command_runner: &dyn CommandRunner) -> Result<(), String> {

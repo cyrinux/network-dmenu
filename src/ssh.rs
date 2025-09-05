@@ -1,6 +1,7 @@
 use crate::command::CommandRunner;
 use crate::constants::ICON_CHECK;
 use crate::format_entry;
+use crate::port_utils::is_port_listening;
 use log::{debug, error};
 use std::collections::HashMap;
 use std::fs;
@@ -47,28 +48,8 @@ impl SshProxyConfig {
     }
 
     fn is_port_listening(&self) -> bool {
-        // Check if a process is listening on the SOCKS port
-        match std::process::Command::new("lsof")
-            .args(["-i", &format!("tcp:{}", self.port)])
-            .output()
-        {
-            Ok(output) => !output.stdout.is_empty(),
-            Err(_) => {
-                // Fallback: check with netstat if lsof is not available
-                match std::process::Command::new("netstat")
-                    .args(["-tln"])
-                    .output()
-                {
-                    Ok(output) => {
-                        let output_str = String::from_utf8_lossy(&output.stdout);
-                        output_str.lines().any(|line| {
-                            line.contains(&format!(":{}", self.port)) && line.contains("LISTEN")
-                        })
-                    }
-                    Err(_) => false,
-                }
-            }
-        }
+        // Check if a process is listening on the SOCKS port using pure Rust
+        is_port_listening(self.port)
     }
 
     /// Start the SSH SOCKS proxy
