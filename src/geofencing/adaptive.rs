@@ -37,6 +37,8 @@ pub enum PowerState {
     BatteryLow,
     /// Critical battery level
     BatteryCritical,
+    /// Battery charging (more optimistic than just battery level)
+    BatteryCharging { level: u8 },
 }
 
 /// Zone stability assessment
@@ -200,6 +202,16 @@ impl AdaptiveScanner {
             PowerState::BatteryMedium => self.config.power_multipliers.battery_medium,
             PowerState::BatteryLow => self.config.power_multipliers.battery_low,
             PowerState::BatteryCritical => self.config.power_multipliers.battery_critical,
+            PowerState::BatteryCharging { level } => {
+                // When charging, use more optimistic multiplier based on level
+                if *level >= 50 {
+                    self.config.power_multipliers.battery_high * 0.8  // 20% more frequent when charging
+                } else if *level >= 20 {
+                    self.config.power_multipliers.battery_medium * 0.9  // 10% more frequent when charging
+                } else {
+                    self.config.power_multipliers.battery_low * 0.95  // Slightly more frequent when charging
+                }
+            }
         };
 
         // Calculate stability multiplier
@@ -545,6 +557,9 @@ impl PowerMonitor {
     fn classify_power_state(&self, info: BatteryInfo) -> PowerState {
         if info.ac_connected {
             PowerState::Plugged
+        } else if info.charging {
+            // When charging, be more optimistic about scanning frequency
+            PowerState::BatteryCharging { level: info.battery_level }
         } else if info.battery_level >= 80 {
             PowerState::BatteryHigh
         } else if info.battery_level >= 50 {

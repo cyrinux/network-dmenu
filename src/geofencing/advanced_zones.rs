@@ -6,7 +6,7 @@
 use crate::geofencing::{
     GeofenceError, GeofenceZone, LocationFingerprint, NetworkSignature, PrivacyMode, Result, ZoneActions
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc, Timelike, Datelike};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -729,27 +729,55 @@ impl ZoneSuggestionEngine {
     }
 
     async fn generate_suggestions(&mut self) -> Result<Vec<ZoneSuggestion>> {
+        let cache_key = format!("suggestions_{}", Utc::now().format("%Y-%m-%d-%H"));
+        
+        // Check if we have cached suggestions for this hour
+        if let Some(cached_suggestion) = self.suggestion_cache.get(&cache_key) {
+            debug!("Returning cached zone suggestions for {}", cache_key);
+            return Ok(vec![cached_suggestion.clone()]);
+        }
+        
         let mut suggestions = Vec::new();
 
-        // Cluster-based suggestions
-        let clusters = self.clusterer.get_significant_clusters(
-            self.config.min_visits_for_suggestion as usize
-        );
+        // Cluster-based suggestions using mature clusters
+        let mature_clusters = self.clusterer.get_mature_clusters();
 
-        for cluster in clusters {
-            if !cluster.suggested_as_zone {
-                let suggestion = self.create_zone_suggestion_from_cluster(&cluster)?;
-                suggestions.push(suggestion);
-            }
+        for cluster in mature_clusters {
+            let suggestion = self.create_zone_suggestion_from_cluster(&cluster)?;
+            
+            // Cache the suggestion
+            self.suggestion_cache.insert(
+                format!("cluster_{}", cluster.cluster_id), 
+                suggestion.clone()
+            );
+            
+            suggestions.push(suggestion);
         }
-
-        // Pattern-based suggestions
-        let pattern_suggestions = self.pattern_recognizer.suggest_zones(
-            &self.config
-        );
-        suggestions.extend(pattern_suggestions);
+        
+        // Cleanup old cache entries (keep only last 24 hours)
+        self.cleanup_suggestion_cache();
 
         Ok(suggestions)
+    }
+    
+    /// Clean up old cached suggestions
+    fn cleanup_suggestion_cache(&mut self) {
+        let now = Utc::now();
+        let cutoff = now - chrono::Duration::hours(24);
+        
+        let initial_count = self.suggestion_cache.len();
+        self.suggestion_cache.retain(|key, suggestion| {
+            let is_recent = suggestion.created_at > cutoff;
+            if !is_recent {
+                debug!("Removing stale cached suggestion: {}", key);
+            }
+            is_recent
+        });
+        
+        let removed_count = initial_count - self.suggestion_cache.len();
+        if removed_count > 0 {
+            debug!("Cleaned up {} stale cached suggestions", removed_count);
+        }
     }
 
     fn create_zone_suggestion_from_cluster(&self, cluster: &LocationCluster) -> Result<ZoneSuggestion> {
@@ -836,6 +864,34 @@ impl LocationClusterer {
             };
             self.clusters.push(cluster);
         }
+        
+        // Cleanup clusters that don't meet minimum size requirement
+        self.cleanup_small_clusters();
+    }
+    
+    /// Remove clusters that are too small to be meaningful
+    fn cleanup_small_clusters(&mut self) {
+        let initial_count = self.clusters.len();
+        self.clusters.retain(|cluster| {
+            let meets_size_requirement = cluster.visit_count >= self.min_cluster_size.try_into().unwrap();
+            if !meets_size_requirement {
+                debug!("Removing small cluster {} with {} visits (min required: {})", 
+                       cluster.cluster_id, cluster.visit_count, self.min_cluster_size);
+            }
+            meets_size_requirement
+        });
+        
+        let removed_count = initial_count - self.clusters.len();
+        if removed_count > 0 {
+            debug!("Cleaned up {} small clusters", removed_count);
+        }
+    }
+    
+    /// Get clusters that meet minimum size for zone suggestions  
+    fn get_mature_clusters(&self) -> Vec<&LocationCluster> {
+        self.clusters.iter()
+            .filter(|cluster| cluster.visit_count >= self.min_cluster_size.try_into().unwrap() && !cluster.suggested_as_zone)
+            .collect()
     }
 
     fn calculate_fingerprint_similarity(&self, fp1: &LocationFingerprint, fp2: &LocationFingerprint) -> f64 {
@@ -879,10 +935,84 @@ impl PatternRecognizer {
         }
     }
 
-    fn analyze_visit(&mut self, _visit: &ZoneVisit) {
-        // Analyze temporal patterns, action patterns, etc.
-        // This is a placeholder implementation
-        debug!("Analyzing visit patterns");
+    fn analyze_visit(&mut self, visit: &ZoneVisit) {
+        debug!("Analyzing visit patterns for zone: {:?}", visit.matched_zone);
+        
+        // Extract location key for pattern tracking
+        let location_key = if let Some(zone) = &visit.matched_zone {
+            zone.clone()
+        } else {
+            // Create a key based on dominant networks
+            visit.fingerprint.wifi_networks.iter()
+                .take(3)
+                .map(|n| n.ssid_hash.chars().take(8).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("_")
+        };
+        
+        // Analyze temporal patterns
+        let hour = visit.start_time.hour() as u8;
+        let day_of_week = visit.start_time.weekday().num_days_from_monday() as u8;
+        
+        let temporal_pattern = TimePattern {
+            hour,
+            day_of_week,
+            frequency: 1.0,
+        };
+        
+        self.temporal_patterns
+            .entry(location_key.clone())
+            .or_insert_with(Vec::new)
+            .push(temporal_pattern);
+        
+        // Analyze action patterns
+        for action in &visit.actions_performed {
+            let action_pattern = ActionPattern {
+                action_type: "generic".to_string(),
+                action_value: action.clone(),
+                frequency: 1.0,
+                success_rate: 1.0, // Assume success for now
+            };
+            
+            self.action_patterns
+                .entry(location_key.clone())
+                .or_insert_with(Vec::new)
+                .push(action_pattern);
+        }
+        
+        // Analyze sequence patterns (if we have previous actions)
+        if visit.actions_performed.len() > 1 {
+            let sequence_key = format!("{}_sequence", location_key);
+            self.sequence_patterns
+                .entry(sequence_key)
+                .or_insert_with(Vec::new)
+                .extend(visit.actions_performed.clone());
+        }
+        
+        // Cleanup old patterns to avoid memory bloat
+        self.cleanup_old_patterns();
+    }
+    
+    /// Remove old pattern data to prevent memory growth
+    fn cleanup_old_patterns(&mut self) {
+        // Keep only the most recent 100 patterns per location
+        for patterns in self.temporal_patterns.values_mut() {
+            if patterns.len() > 100 {
+                patterns.drain(0..patterns.len() - 100);
+            }
+        }
+        
+        for patterns in self.action_patterns.values_mut() {
+            if patterns.len() > 50 {
+                patterns.drain(0..patterns.len() - 50);
+            }
+        }
+        
+        for sequence in self.sequence_patterns.values_mut() {
+            if sequence.len() > 200 {
+                sequence.drain(0..sequence.len() - 200);
+            }
+        }
     }
 
     fn suggest_zones(&self, _config: &AdvancedZoneConfig) -> Vec<ZoneSuggestion> {

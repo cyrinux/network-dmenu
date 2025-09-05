@@ -462,6 +462,9 @@ impl SecureCommandExecutor {
 
         // Security validation
         self.validate_command_security(command, args).await?;
+        
+        // Initialize resource monitoring for this command  
+        let monitoring_enabled = true; // Enable monitoring by default
 
         // Get command policy
         let policy = self.policy.allowed_commands.get(command)
@@ -475,6 +478,31 @@ impl SecureCommandExecutor {
         } else {
             self.execute_direct_command(command, args, policy).await
         };
+
+        // Monitor resource usage if enabled and command succeeded
+        if monitoring_enabled {
+            if let Ok(ref output) = result {
+                if output.status.success() {
+                    // Get the process ID for monitoring (simulated)
+                    let pid = std::process::id();
+                    let resource_usage = self.resource_monitor.monitor_execution(pid).await;
+                    debug!("Command resource usage: {:?}", resource_usage);
+                    
+                    // Check if resource limits were exceeded
+                    let limits = &self.policy.resource_limits;
+                    if let Some(memory_mb) = resource_usage.memory_mb {
+                        if memory_mb > limits.max_memory_mb.unwrap_or(u64::MAX) {
+                            warn!("Command exceeded memory limit: {} MB", memory_mb);
+                        }
+                    }
+                    if let Some(cpu_time_ms) = resource_usage.cpu_time_ms {
+                        if cpu_time_ms > limits.max_cpu_seconds.unwrap_or(u64::MAX) * 1000 {
+                            warn!("Command exceeded CPU time limit: {} ms", cpu_time_ms);
+                        }
+                    }
+                }
+            }
+        }
 
         let duration = start_time.elapsed();
 

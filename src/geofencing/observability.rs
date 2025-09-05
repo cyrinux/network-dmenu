@@ -810,9 +810,57 @@ impl Default for NetworkMetrics {
 
 impl HealthChecker {
     fn new() -> Self {
+        let mut health_checks: HashMap<String, Box<dyn Fn() -> HealthStatus + Send + Sync>> = HashMap::new();
+        
+        // Add critical health checks for geofencing system
+        health_checks.insert("wifi_interface".to_string(), Box::new(|| {
+            // Check if WiFi interface is available
+            if std::path::Path::new("/sys/class/net/wlan0/operstate").exists() {
+                HealthStatus::Healthy
+            } else if std::path::Path::new("/sys/class/net/wlp0s20f3/operstate").exists() {
+                HealthStatus::Healthy
+            } else {
+                HealthStatus::Critical { error: "No WiFi interface found".to_string() }
+            }
+        }));
+        
+        health_checks.insert("network_manager".to_string(), Box::new(|| {
+            // Check if NetworkManager is running
+            match std::process::Command::new("systemctl")
+                .args(["is-active", "NetworkManager"])
+                .output() 
+            {
+                Ok(output) if output.status.success() => HealthStatus::Healthy,
+                _ => HealthStatus::Degraded { issues: vec![] }
+            }
+        }));
+        
+        health_checks.insert("memory_usage".to_string(), Box::new(|| {
+            // Check system memory usage
+            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+                if let (Some(total_line), Some(available_line)) = (
+                    content.lines().find(|l| l.starts_with("MemTotal:")),
+                    content.lines().find(|l| l.starts_with("MemAvailable:"))
+                ) {
+                    if let (Ok(total), Ok(available)) = (
+                        total_line.split_whitespace().nth(1).unwrap_or("0").parse::<u64>(),
+                        available_line.split_whitespace().nth(1).unwrap_or("0").parse::<u64>()
+                    ) {
+                        let usage_percent = ((total - available) as f64 / total as f64) * 100.0;
+                        if usage_percent > 90.0 {
+                            return HealthStatus::Critical { error: format!("High memory usage: {:.1}%", usage_percent) };
+                        } else if usage_percent > 75.0 {
+                            return HealthStatus::Degraded { issues: vec![] };
+                        }
+                    }
+                }
+            }
+            HealthStatus::Healthy
+        }));
+
         Self {
             component_health: Arc::new(RwLock::new(HashMap::new())),
-            health_checks: HashMap::new(),
+            health_checks,
             health_history: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
@@ -827,6 +875,13 @@ impl HealthChecker {
         results.insert("location_detection".to_string(), self.check_location_detection_health().await);
         results.insert("network_connectivity".to_string(), self.check_network_health().await);
         results.insert("storage".to_string(), self.check_storage_health().await);
+        
+        // Execute registered health checks
+        for (name, check_fn) in &self.health_checks {
+            let status = check_fn();
+            results.insert(name.clone(), status);
+            debug!("Health check '{}': {:?}", name, results.get(name));
+        }
 
         // Update component health
         {

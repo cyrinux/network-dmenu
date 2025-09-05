@@ -16,7 +16,8 @@
       "Bash(echo:*)",
       "Read(//home/cyril/.local/share/network-dmenu/**)",
       "Read(//home/cyril/.local/share/**)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(cargo clean:*)"
     ],
     "deny": [],
     "ask": []

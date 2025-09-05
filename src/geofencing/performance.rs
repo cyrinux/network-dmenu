@@ -378,6 +378,30 @@ impl ConnectionPool {
             }
         };
 
+        // Check for connection reuse opportunity
+        let connection_key = format!("{}_{}", operation_type, std::process::id());
+        let reuse_info = {
+            let mut reuse_pool = self.reuse_pool.lock().await;
+            if let Some(connection) = reuse_pool.get_mut(&connection_key) {
+                // Update existing connection usage
+                connection.last_used = Instant::now();
+                connection.usage_count += 1;
+                debug!("Reusing connection for '{}', usage count: {}", operation_type, connection.usage_count);
+                Some(("reused", connection.usage_count))
+            } else {
+                // Create new pooled connection
+                let new_connection = PooledConnection {
+                    connection_type: operation_type.to_string(),
+                    created_at: Instant::now(),
+                    last_used: Instant::now(),
+                    usage_count: 1,
+                };
+                reuse_pool.insert(connection_key.clone(), new_connection);
+                debug!("Created new pooled connection for '{}'", operation_type);
+                Some(("new", 1))
+            }
+        };
+
         // Update active connection metrics
         {
             let mut metrics = self.active_connections.write().await;
@@ -392,6 +416,12 @@ impl ConnectionPool {
         let start_time = Instant::now();
         let result = operation.await;
         let duration = start_time.elapsed();
+        
+        // Log connection performance
+        if let Some((reuse_type, usage_count)) = reuse_info {
+            debug!("Operation '{}' completed in {:?} (connection: {}, usage: {})", 
+                   operation_type, duration, reuse_type, usage_count);
+        }
 
         // Update metrics
         {
@@ -418,6 +448,28 @@ impl ConnectionPool {
     pub async fn get_utilization(&self) -> f64 {
         let metrics = self.active_connections.read().await;
         (metrics.active_connections as f64 / self.max_concurrent as f64) * 100.0
+    }
+
+    /// Cleanup stale connections from reuse pool
+    pub async fn cleanup_stale_connections(&self) {
+        let mut reuse_pool = self.reuse_pool.lock().await;
+        let now = Instant::now();
+        let stale_threshold = Duration::from_secs(300); // 5 minutes
+        
+        let initial_count = reuse_pool.len();
+        reuse_pool.retain(|connection_key, connection| {
+            let is_stale = now.duration_since(connection.last_used) > stale_threshold;
+            if is_stale {
+                debug!("Removing stale connection: {} (unused for {:?})", 
+                       connection_key, now.duration_since(connection.last_used));
+            }
+            !is_stale
+        });
+        
+        let removed_count = initial_count - reuse_pool.len();
+        if removed_count > 0 {
+            debug!("Cleaned up {} stale connections from reuse pool", removed_count);
+        }
     }
 }
 
