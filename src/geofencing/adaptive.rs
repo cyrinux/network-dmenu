@@ -496,12 +496,14 @@ impl PowerMonitor {
 
     async fn read_battery_info(&self) -> Result<BatteryInfo> {
         // Try to read AC adapter status first
-        let ac_connected = match fs::read_to_string("/sys/class/power_supply/ADP1/online").await
-            .or_else(|_| fs::read_to_string("/sys/class/power_supply/AC/online")).await
-            .or_else(|_| fs::read_to_string("/sys/class/power_supply/ACAD/online")).await
-        {
-            Ok(content) => content.trim() == "1",
-            Err(_) => false,
+        let ac_connected = if let Ok(content) = fs::read_to_string("/sys/class/power_supply/ADP1/online").await {
+            content.trim() == "1"
+        } else if let Ok(content) = fs::read_to_string("/sys/class/power_supply/AC/online").await {
+            content.trim() == "1"
+        } else if let Ok(content) = fs::read_to_string("/sys/class/power_supply/ACAD/online").await {
+            content.trim() == "1"
+        } else {
+            false
         };
 
         if ac_connected {

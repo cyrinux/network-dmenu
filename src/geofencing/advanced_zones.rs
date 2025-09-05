@@ -431,7 +431,7 @@ impl AdvancedZoneManager {
         {
             let mut analytics = self.analytics.lock().await;
             if matched_zone.is_none() {
-                analytics.unmatched_visits.push_back(visit);
+                analytics.unmatched_visits.push_back(visit.clone());
                 
                 // Keep only recent unmatched visits
                 while analytics.unmatched_visits.len() > 1000 {

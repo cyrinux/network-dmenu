@@ -579,33 +579,40 @@ impl SecureCommandExecutor {
         let mut systemd_run_args = vec!["--user", "--scope"];
 
         // Add systemd properties for sandboxing
+        let mut property_strings = Vec::new();
         for (key, value) in &self.policy.sandbox_config.systemd_properties {
+            property_strings.push(format!("{}={}", key, value));
+        }
+        for property_string in &property_strings {
             systemd_run_args.push("--property");
-            systemd_run_args.push(&format!("{}={}", key, value));
+            systemd_run_args.push(property_string);
         }
 
         // Add resource limits
+        let mut limit_strings = Vec::new();
         if let Some(limits) = &policy.resource_limits {
             if let Some(memory_mb) = limits.max_memory_mb {
-                systemd_run_args.push("--property");
-                systemd_run_args.push(&format!("MemoryMax={}M", memory_mb));
+                limit_strings.push(format!("MemoryMax={}M", memory_mb));
             }
 
             if let Some(cpu_seconds) = limits.max_cpu_seconds {
                 let cpu_quota = (cpu_seconds * 100 / 60).min(100); // Convert to percentage
-                systemd_run_args.push("--property");
-                systemd_run_args.push(&format!("CPUQuota={}%", cpu_quota));
+                limit_strings.push(format!("CPUQuota={}%", cpu_quota));
             }
 
             if let Some(max_processes) = limits.max_processes {
-                systemd_run_args.push("--property");
-                systemd_run_args.push(&format!("TasksMax={}", max_processes));
+                limit_strings.push(format!("TasksMax={}", max_processes));
             }
         }
 
         // Add timeout
-        systemd_run_args.push("--property");
-        systemd_run_args.push(&format!("TimeoutStopSec={}s", policy.max_execution_time.as_secs()));
+        limit_strings.push(format!("TimeoutStopSec={}s", policy.max_execution_time.as_secs()));
+        
+        // Add all limit strings to args
+        for limit_string in &limit_strings {
+            systemd_run_args.push("--property");
+            systemd_run_args.push(limit_string);
+        }
 
         // Add the actual command and arguments
         systemd_run_args.push(command);

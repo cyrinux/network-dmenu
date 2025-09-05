@@ -65,7 +65,7 @@ pub struct ConnectionPool {
 }
 
 /// Metrics for connection pool monitoring
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ConnectionMetrics {
     total_connections: u64,
     active_connections: u32,
@@ -166,7 +166,7 @@ struct CachedZoneMatch {
 }
 
 /// Cache statistics for monitoring
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CacheStatistics {
     fingerprint_hits: u64,
     fingerprint_misses: u64,
@@ -805,15 +805,17 @@ impl CacheManager {
 
         // Remove oldest entries (simple cleanup strategy)
         let target_size = (self.config.max_entries as f64 * 0.8) as usize;
-        let mut entries: Vec<_> = cache.iter().collect();
+        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.last_accessed)).collect();
         
         // Sort by last accessed time
-        entries.sort_by_key(|(_, cached)| cached.last_accessed);
+        entries.sort_by_key(|(_, last_accessed)| *last_accessed);
         
         // Remove oldest entries
         let to_remove = cache.len().saturating_sub(target_size);
-        for (key, _) in entries.iter().take(to_remove) {
-            cache.remove(*key);
+        let keys_to_remove: Vec<_> = entries.iter().take(to_remove).map(|(k, _)| k.clone()).collect();
+        
+        for key in keys_to_remove {
+            cache.remove(&key);
         }
 
         debug!("Cleaned up fingerprint cache, removed {} entries", to_remove);

@@ -471,10 +471,10 @@ impl NetworkMonitor {
                 if previous_state != Some(&current_state) {
                     debug!("Interface {} state changed to {:?}", interface, current_state);
                     
-                    let event = match current_state {
+                    let event = match &current_state {
                         InterfaceState::Up => SystemEvent::NetworkUp(interface.clone()),
                         InterfaceState::Down => SystemEvent::NetworkDown(interface.clone()),
-                        InterfaceState::Connected(ssid) => SystemEvent::WiFiConnected(ssid),
+                        InterfaceState::Connected(ssid) => SystemEvent::WiFiConnected(ssid.clone()),
                         InterfaceState::Disconnected => SystemEvent::WiFiDisconnected,
                     };
                     

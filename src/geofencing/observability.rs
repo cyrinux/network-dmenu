@@ -468,12 +468,12 @@ impl ObservabilityManager {
             "info",
             "Zone change detected",
             [
-                ("event_type", serde_json::Value::String("zone_change".to_string())),
-                ("from_zone", serde_json::Value::String(
+                ("event_type".to_string(), serde_json::Value::String("zone_change".to_string())),
+                ("from_zone".to_string(), serde_json::Value::String(
                     change.from.as_ref().map(|z| z.name.clone()).unwrap_or("none".to_string())
                 )),
-                ("to_zone", serde_json::Value::String(change.to.name.clone())),
-                ("confidence", serde_json::Value::Number(
+                ("to_zone".to_string(), serde_json::Value::String(change.to.name.clone())),
+                ("confidence".to_string(), serde_json::Value::Number(
                     serde_json::Number::from_f64(change.confidence).unwrap()
                 )),
             ].into_iter().collect()
