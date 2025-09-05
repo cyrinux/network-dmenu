@@ -887,6 +887,18 @@ impl ObservabilityManager {
             timestamp
         )
     }
+
+    /// Export all buffered traces for external tracing systems
+    pub async fn export_traces(&self) -> Vec<TraceSpan> {
+        let mut tracer = self.tracer.lock().await;
+        tracer.export_traces()
+    }
+
+    /// Get the number of traces waiting for export
+    pub async fn pending_trace_export_count(&self) -> usize {
+        let tracer = self.tracer.lock().await;
+        tracer.pending_export_count()
+    }
 }
 
 impl MetricsCollector {
@@ -1250,11 +1262,18 @@ impl DistributedTracer {
 
             debug!("Ended trace span: {} (duration: {:?})", span.operation_name, span.duration);
 
-            self.completed_traces.push_back(span);
+            // Store in both completed traces and export buffer
+            self.completed_traces.push_back(span.clone());
+            self.export_buffer.push_back(span);
             
             // Keep only recent traces
             while self.completed_traces.len() > 1000 {
                 self.completed_traces.pop_front();
+            }
+            
+            // Keep export buffer size reasonable
+            while self.export_buffer.len() > 500 {
+                self.export_buffer.pop_front();
             }
         }
     }
@@ -1266,6 +1285,18 @@ impl DistributedTracer {
             .take(limit)
             .cloned()
             .collect()
+    }
+
+    /// Export buffered traces for external systems (Jaeger, Zipkin, etc.)
+    fn export_traces(&mut self) -> Vec<TraceSpan> {
+        let traces: Vec<TraceSpan> = self.export_buffer.drain(..).collect();
+        debug!("Exported {} buffered traces", traces.len());
+        traces
+    }
+
+    /// Get number of traces waiting for export
+    fn pending_export_count(&self) -> usize {
+        self.export_buffer.len()
     }
 }
 
