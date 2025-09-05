@@ -33,7 +33,7 @@
           meta.mainProgram = "network-dmenu";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = libs;
-          cargoBuildOptions = attrs: attrs ++ [ "--features" "gtk-ui" ];
+          # cargoBuildOptions = attrs: attrs ++ [ "--features" "gtk-ui" ];
         };
         devShell = with pkgs; mkShell {
           buildInputs = [
