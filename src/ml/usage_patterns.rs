@@ -162,7 +162,7 @@ impl UsagePatternLearner {
         let stats = self
             .action_stats
             .entry(action.clone())
-            .or_insert_with(|| ActionStats::default());
+            .or_default();
         stats.total_count += 1;
 
         // Update recent count (last 7 days)
