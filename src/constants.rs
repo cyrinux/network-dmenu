@@ -3,6 +3,7 @@
 // Action types
 pub const ACTION_TYPE_ACTION: &str = "action";
 pub const ACTION_TYPE_DIAGNOSTIC: &str = "diagnostic";
+pub const ACTION_TYPE_FIREWALLD: &str = "firewalld";
 pub const ACTION_TYPE_NEXTDNS: &str = "nextdns";
 pub const ACTION_TYPE_SYSTEM: &str = "system";
 pub const ACTION_TYPE_TAILSCALE: &str = "tailscale";
@@ -21,7 +22,6 @@ pub const ICON_FIREWALL_ALLOW: &str = "🔓";
 pub const ICON_STAR: &str = "🌟";
 pub const ICON_BLUETOOTH: &str = "";
 pub const ICON_KEY: &str = "🔑";
-pub const ICON_LEAF: &str = "🌿";
 
 // Security types
 pub const SECURITY_OPEN: &str = "OPEN";

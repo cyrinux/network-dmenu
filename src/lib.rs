@@ -8,14 +8,26 @@ pub mod command;
 pub mod constants;
 pub mod diagnostics;
 pub mod dns_cache;
+#[cfg(feature = "firewalld")]
+pub mod firewalld;
+#[cfg(feature = "geofencing")]
+pub mod geofencing;
 pub mod iwd;
 pub mod logger;
+#[cfg(feature = "ml")]
+pub mod ml;
+pub mod ml_integration;
 pub mod networkmanager;
 pub mod nextdns;
+pub mod port_utils;
 pub mod privilege;
 pub mod rfkill;
+pub mod ssh;
+#[cfg(feature = "tailscale")]
 pub mod tailscale;
+#[cfg(feature = "tailscale")]
 pub mod tailscale_prefs;
+pub mod tor;
 pub mod utils;
 
 use constants::{ICON_CHECK, ICON_CROSS, ICON_SIGNAL};
@@ -30,23 +42,40 @@ pub use dns_cache::{
     generate_dns_actions_from_cache, get_current_network_id, CachedDnsServer, DnsBenchmarkCache,
     DnsCacheStorage,
 };
+#[cfg(feature = "firewalld")]
+pub use firewalld::{get_firewalld_actions, handle_firewalld_action, FirewalldAction};
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
+};
+pub use ml_integration::{
+    analyze_network_issues, force_save_ml_models, get_performance_summary,
+    get_personalized_menu_order, initialize_ml_system, predict_best_exit_nodes,
+    predict_best_wifi_network, record_exit_node_performance, record_user_action,
+    record_wifi_performance,
 };
 pub use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,
     get_nm_vpn_networks, get_nm_wifi_networks, is_known_network as is_known_nm_network,
 };
 pub use nextdns::{get_nextdns_actions, handle_nextdns_action, NextDnsAction};
+pub use port_utils::{is_any_port_listening, is_port_listening};
 pub use privilege::{
     get_privilege_command, has_privilege_escalation, wrap_privileged_command,
     wrap_privileged_commands,
 };
+pub use ssh::{
+    get_ssh_proxy_actions, handle_ssh_action, ssh_action_to_string, SshAction, SshProxyConfig,
+};
+#[cfg(feature = "tailscale")]
 pub use tailscale::{
     extract_short_hostname, get_locked_nodes, get_mullvad_actions, get_signing_key,
     handle_tailscale_action, is_exit_node_active, is_tailscale_lock_enabled, TailscaleAction,
     TailscaleState,
+};
+pub use tor::{
+    get_default_torsocks_configs, get_tor_actions, handle_tor_action, tor_action_to_string,
+    TorAction, TorsocksConfig,
 };
 
 // Re-export async functions
@@ -68,9 +97,14 @@ pub enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    #[cfg(feature = "firewalld")]
+    Firewalld(FirewalldAction),
     NextDns(NextDnsAction),
+    Ssh(SshAction),
     System(SystemAction),
+    #[cfg(feature = "tailscale")]
     Tailscale(TailscaleAction),
+    Tor(TorAction),
     Vpn(VpnAction),
     Wifi(WifiAction),
 }
@@ -197,6 +231,7 @@ mod tests {
         let wifi_action = ActionType::Wifi(WifiAction::Connect);
         let bluetooth_action =
             ActionType::Bluetooth(BluetoothAction::ToggleConnect("device".to_string()));
+        #[cfg(feature = "tailscale")]
         let tailscale_action = ActionType::Tailscale(TailscaleAction::SetEnable(true));
 
         // Just ensure they can be created without panicking
@@ -210,6 +245,7 @@ mod tests {
             _ => panic!("Unexpected action type"),
         }
 
+        #[cfg(feature = "tailscale")]
         match tailscale_action {
             ActionType::Tailscale(_) => (),
             _ => panic!("Unexpected action type"),

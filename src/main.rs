@@ -1,21 +1,17 @@
-mod bluetooth;
-mod command;
-mod constants;
-mod diagnostics;
-mod dns_cache;
-mod iwd;
-mod logger;
-mod networkmanager;
-mod nextdns;
-mod privilege;
-mod rfkill;
 mod streaming;
-mod tailscale;
-mod tailscale_prefs;
-mod utils;
+
+// Import modules from the library crate
+use network_dmenu::{
+    bluetooth, command, constants, diagnostics, iwd, logger, networkmanager, nextdns, rfkill, ssh,
+    utils, SshProxyConfig, TorsocksConfig,
+};
+
+#[cfg(feature = "firewalld")]
+use network_dmenu::firewalld;
 
 #[macro_use]
 extern crate log;
+#[cfg(feature = "tailscale")]
 use crate::utils::get_flag;
 use bluetooth::{get_connected_devices, handle_bluetooth_action, BluetoothAction};
 use clap::Parser;
@@ -23,6 +19,8 @@ use command::{is_command_installed, CommandRunner, RealCommandRunner};
 use constants::*;
 use diagnostics::{diagnostic_action_to_string, handle_diagnostic_action, DiagnosticAction};
 use dirs::config_dir;
+#[cfg(feature = "firewalld")]
+use firewalld::{handle_firewalld_action, FirewalldAction};
 use iwd::{connect_to_iwd_wifi, disconnect_iwd_wifi};
 use log::error;
 use networkmanager::{
@@ -37,10 +35,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use tailscale::{
+#[cfg(feature = "tailscale")]
+use network_dmenu::tailscale::{
     check_mullvad, extract_short_hostname, get_locked_nodes, handle_tailscale_action,
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
+use network_dmenu::tor::{handle_tor_action, tor_action_to_string, TorAction};
 use utils::check_captive_portal;
 
 /// Command-line arguments structure for the application.
@@ -55,10 +55,13 @@ struct Args {
     no_vpn: bool,
     #[arg(long)]
     no_bluetooth: bool,
+    #[cfg(feature = "tailscale")]
     #[arg(long)]
     no_tailscale: bool,
     #[arg(long)]
     no_nextdns: bool,
+    #[arg(long)]
+    no_tor: bool,
     #[arg(
         long,
         default_value = "",
@@ -79,16 +82,19 @@ struct Args {
         default_value = "warn"
     )]
     log_level: String,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Limit the number of exit nodes shown per country (sorted by priority)"
     )]
     max_nodes_per_country: Option<i32>,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Limit the number of exit nodes shown per city (sorted by priority)"
     )]
     max_nodes_per_city: Option<i32>,
+    #[cfg(feature = "tailscale")]
     #[arg(
         long,
         help = "Filter Mullvad exit nodes by country name (e.g. 'USA', 'Japan')"
@@ -101,10 +107,56 @@ struct Args {
         help = "Output actions to stdout instead of using dmenu (for debugging)"
     )]
     stdout: bool,
+    #[arg(long, help = "Path to the config file")]
+    config: Option<PathBuf>,
+
+    // Geofencing options
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Start geofencing daemon")]
+    daemon: bool,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Stop geofencing daemon")]
+    stop_daemon: bool,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Show daemon status")]
+    daemon_status: bool,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Create geofence zone from current location (or add fingerprint if zone exists)")]
+    create_zone: Option<String>,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Add fingerprint to existing zone (for large areas with multiple rooms)")]
+    add_fingerprint: Option<String>,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "List all geofence zones")]
+    list_zones: bool,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Manually activate a geofence zone")]
+    activate_zone: Option<String>,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(long, help = "Show current location fingerprint")]
+    where_am_i: bool,
+
+    #[cfg(feature = "geofencing")]
+    #[arg(
+        long,
+        help = "Internal flag to run daemon directly (used by ensure_daemon_running)",
+        hide = true
+    )]
+    geofence_daemon_internal: bool,
+
+    #[arg(long, help = "Validate configuration file and exit")]
+    validate_config: bool,
 }
 
 /// Configuration structure for the application.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 struct Config {
     #[serde(default)]
     actions: Vec<CustomAction>,
@@ -122,8 +174,16 @@ struct Config {
     nextdns_api_key: Option<String>,
     #[serde(default)]
     nextdns_toggle_profiles: Option<(String, String)>,
+    #[serde(default)]
+    ssh_proxies: std::collections::HashMap<String, SshProxyConfig>,
+    #[serde(default)]
+    torsocks_apps: std::collections::HashMap<String, TorsocksConfig>,
     dmenu_cmd: String,
     dmenu_args: String,
+
+    #[cfg(feature = "geofencing")]
+    #[serde(default)]
+    geofencing: network_dmenu::geofencing::GeofencingConfig,
 }
 
 /// Custom action structure for user-defined actions.
@@ -139,9 +199,14 @@ enum ActionType {
     Bluetooth(BluetoothAction),
     Custom(CustomAction),
     Diagnostic(DiagnosticAction),
+    #[cfg(feature = "firewalld")]
+    Firewalld(FirewalldAction),
     NextDns(nextdns::NextDnsAction),
+    Ssh(network_dmenu::SshAction),
     System(SystemAction),
+    #[cfg(feature = "tailscale")]
     Tailscale(TailscaleAction),
+    Tor(TorAction),
     Vpn(VpnAction),
     Wifi(WifiAction),
 }
@@ -157,7 +222,6 @@ enum SystemAction {
 
 /// Enum representing Wi-Fi-related actions.
 #[derive(Debug)]
-#[allow(dead_code)]
 enum WifiAction {
     Connect,
     ConnectHidden,
@@ -221,6 +285,22 @@ use_dns_cache = true
 # Filter by country name (e.g., "USA", "Japan")
 # country_filter = "USA"
 
+# Tor proxy configurations (requires tor and torsocks packages)
+# Disable with --no-tor flag
+[torsocks_apps]
+
+# [torsocks_apps.firefox]
+# name = "firefox"
+# command = "firefox"
+# args = ["--private-window", "--new-instance", "-P", "tor"]
+# description = "Firefox via Tor"
+
+# [torsocks_apps.curl-test]
+# name = "curl-test"
+# command = "curl"
+# args = ["-s", "https://httpbin.org/ip"]
+# description = "Test Tor Connection"
+
 [[actions]]
 display = "🛡️ Example"
 cmd = "notify-send 'hello' 'world'"
@@ -241,6 +321,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::env::set_var("RUST_LOG", &args.log_level);
     }
     logger::init();
+
+    // Initialize ML system if enabled
+    #[cfg(feature = "ml")]
+    {
+        network_dmenu::initialize_ml_system();
+    }
+
+    // Handle validate-config flag
+    if args.validate_config {
+        let config_path = args
+            .config
+            .clone()
+            .or_else(|| {
+                config_dir().map(|dir| dir.join("config.toml"))
+            })
+            .unwrap_or_else(|| dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("config.toml"));
+
+        debug!("📋 Validating configuration file: {}", config_path.display());
+
+        match validate_config_file(&config_path).await {
+            Ok(()) => {
+                println!("✅ Configuration file is valid");
+                return Ok(());
+            }
+            Err(e) => {
+                error!("❌ Configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Handle geofencing commands
+    #[cfg(feature = "geofencing")]
+    {
+        if let Some(result) = handle_geofencing_commands(&args).await? {
+            return result;
+        }
+    }
 
     // Start profiling total execution time
     let list_generation_profiler = logger::Profiler::new("Generated list");
@@ -275,8 +395,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let profiles_json: serde_json::Value = match serde_json::from_str(&body) {
                 Ok(json) => json,
                 Err(e) => {
-                    eprintln!("WARNING: Could not parse API response as JSON: {}", e);
-                    eprintln!("Raw response: {}", body);
+                    warn!("Could not parse API response as JSON: {}", e);
+                    warn!("Raw response: {}", body);
                     println!("NextDNS API key is valid, but response could not be parsed!");
                     return Ok(());
                 }
@@ -319,7 +439,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await
                 .unwrap_or_else(|_| "Could not read error response".to_string());
             debug!("API error response: {}", error_body);
-            eprintln!("Invalid NextDNS API key: {}", status);
+            error!("Invalid NextDNS API key: {}", status);
             return Err("Invalid NextDNS API key".into());
         }
     }
@@ -330,7 +450,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let api_key = if !args.nextdns_api_key.is_empty() {
             args.nextdns_api_key.clone()
         } else {
-            get_config()
+            get_config(args.config.as_ref())
                 .ok()
                 .and_then(|c| c.nextdns_api_key.clone())
                 .map(|k| k.trim().to_string())
@@ -363,9 +483,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    create_default_config_if_missing()?;
+    create_default_config_if_missing(args.config.as_ref())?;
 
-    let config = get_config()?; // Load the configuration once
+    let config = get_config(args.config.as_ref())?; // Load the configuration once
 
     check_required_commands(&config)?;
 
@@ -398,6 +518,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if !action.is_empty() {
+        // Record user action for ML learning
+        #[cfg(feature = "ml")]
+        {
+            network_dmenu::record_user_action(&action);
+        }
+
         let selected_action = find_selected_action(&action, &actions)?;
         let connected_devices = get_connected_devices(&command_runner)?;
 
@@ -407,10 +533,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &connected_devices,
             &command_runner,
             args.profile,
+            args.config.as_ref(),
         )
         .await?;
     }
     // When action is empty (user pressed Escape or closed window), just exit silently
+
+    // Save ML models before exit
+    #[cfg(feature = "ml")]
+    {
+        if let Err(e) = network_dmenu::force_save_ml_models() {
+            debug!("Failed to save ML models on exit: {}", e);
+        }
+    }
 
     Ok(())
 }
@@ -418,7 +553,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 /// Checks if required commands are installed.
 fn check_required_commands(_config: &Config) -> Result<(), Box<dyn Error>> {
     if !is_command_installed("pinentry-gnome3") {
-        eprintln!("Warning: pinentry-gnome3 command missing");
+        warn!("pinentry-gnome3 command missing");
     }
 
     Ok(())
@@ -444,8 +579,12 @@ fn action_to_string(action: &ActionType) -> String {
                 }
             }
         },
+        #[cfg(feature = "tailscale")]
         ActionType::Tailscale(mullvad_action) => match mullvad_action {
             TailscaleAction::SetExitNode(node) => node.to_string(),
+            TailscaleAction::SetSuggestedExitNode => {
+                format_entry(ACTION_TYPE_TAILSCALE, "🎯", "Use recommended exit node")
+            }
             TailscaleAction::DisableExitNode => format_entry(
                 ACTION_TYPE_TAILSCALE,
                 ICON_CROSS,
@@ -563,9 +702,13 @@ fn action_to_string(action: &ActionType) -> String {
             BluetoothAction::ToggleConnect(device) => device.to_string(),
         },
         ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
+        #[cfg(feature = "firewalld")]
+        ActionType::Firewalld(firewalld_action) => firewalld_action.to_display_string(),
         ActionType::NextDns(nextdns_action) => {
             format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
         }
+        ActionType::Ssh(ssh_action) => ssh::ssh_action_to_string(ssh_action),
+        ActionType::Tor(tor_action) => tor_action_to_string(tor_action),
     }
 }
 
@@ -600,8 +743,12 @@ fn find_selected_action<'a>(
                     }
                 }
             },
+            #[cfg(feature = "tailscale")]
             ActionType::Tailscale(mullvad_action) => match mullvad_action {
                 TailscaleAction::SetExitNode(node) => action == node,
+                TailscaleAction::SetSuggestedExitNode => {
+                    action == format_entry(ACTION_TYPE_TAILSCALE, "🎯", "Use recommended exit node")
+                }
                 TailscaleAction::DisableExitNode => {
                     action
                         == format_entry(
@@ -740,22 +887,32 @@ fn find_selected_action<'a>(
             ActionType::Diagnostic(diagnostic_action) => {
                 action == diagnostic_action_to_string(diagnostic_action)
             }
+            #[cfg(feature = "firewalld")]
+            ActionType::Firewalld(firewalld_action) => {
+                action == firewalld_action.to_display_string()
+            }
             ActionType::NextDns(nextdns_action) => {
                 action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
             }
+            ActionType::Ssh(ssh_action) => action == ssh::ssh_action_to_string(ssh_action),
+            ActionType::Tor(tor_action) => action == tor_action_to_string(tor_action),
         })
         .ok_or(format!("Action not found: {action}").into())
 }
 
 /// Gets the configuration file path.
-fn get_config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
-    Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
+fn get_config_path(custom_path: Option<&PathBuf>) -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = custom_path {
+        Ok(path.clone())
+    } else {
+        let config_dir = config_dir().ok_or(ERROR_CONFIG_READ)?;
+        Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILENAME))
+    }
 }
 
 /// Creates a default configuration file if it doesn't exist.
-fn create_default_config_if_missing() -> Result<(), Box<dyn Error>> {
-    let config_path = get_config_path()?;
+fn create_default_config_if_missing(custom_path: Option<&PathBuf>) -> Result<(), Box<dyn Error>> {
+    let config_path = get_config_path(custom_path)?;
 
     if !config_path.exists() {
         if let Some(parent) = config_path.parent() {
@@ -768,8 +925,8 @@ fn create_default_config_if_missing() -> Result<(), Box<dyn Error>> {
 }
 
 /// Reads and returns the configuration.
-fn get_config() -> Result<Config, Box<dyn Error>> {
-    let config_path = get_config_path()?;
+fn get_config(custom_path: Option<&PathBuf>) -> Result<Config, Box<dyn Error>> {
+    let config_path = get_config_path(custom_path)?;
     let config_content = fs::read_to_string(config_path)?;
     let config = toml::from_str(&config_content)?;
     Ok(config)
@@ -814,8 +971,8 @@ async fn handle_system_action(
         if let Some(start) = rfkill_start {
             let operation = if block { "block" } else { "unblock" };
             let elapsed = start.elapsed();
-            eprintln!(
-                ">>> PROFILE: Rfkill {} {} took: {:.2?}",
+            debug!(
+                "PROFILE: Rfkill {} {} took: {:.2?}",
                 operation, device, elapsed
             );
             if profile {
@@ -881,7 +1038,7 @@ async fn handle_system_action(
             }
         };
         let elapsed = start.elapsed();
-        eprintln!(
+        debug!(
             ">>> PROFILE: System action '{}' took: {:.2?}",
             action_name, elapsed
         );
@@ -955,10 +1112,12 @@ async fn handle_vpn_action(
 
             // Check mullvad status, assert errors in debug mode
             // Ignore errors from mullvad check, but log in debug mode
-            let _e = check_mullvad().await;
-            #[cfg(debug_assertions)]
-            if let Err(ref e) = _e {
-                eprintln!("Failed to check mullvad status: {}", e);
+            #[cfg(feature = "tailscale")]
+            {
+                let _e = check_mullvad().await;
+                if let Err(ref e) = _e {
+                    error!("Failed to check mullvad status: {}", e);
+                }
             }
 
             Ok(true)
@@ -1000,9 +1159,8 @@ async fn handle_wifi_action(
             if status.success() {
                 // Check for captive portal, log errors in debug mode
                 let _e = check_captive_portal().await;
-                #[cfg(debug_assertions)]
                 if let Err(ref e) = _e {
-                    eprintln!("Failed to check captive portal: {}", e);
+                    error!("Failed to check captive portal: {}", e);
                 }
             }
 
@@ -1018,9 +1176,8 @@ async fn handle_wifi_action(
                 if result {
                     // Check for captive portal, log errors in debug mode
                     let _e = check_captive_portal().await;
-                    #[cfg(debug_assertions)]
                     if let Err(ref e) = _e {
-                        eprintln!("Failed to check captive portal: {}", e);
+                        error!("Failed to check captive portal: {}", e);
                     }
                 }
                 result
@@ -1038,9 +1195,8 @@ async fn handle_wifi_action(
                 if result {
                     // Check for captive portal, log errors in debug mode
                     let _e = check_captive_portal().await;
-                    #[cfg(debug_assertions)]
                     if let Err(ref e) = _e {
-                        eprintln!("Failed to check captive portal: {}", e);
+                        error!("Failed to check captive portal: {}", e);
                     }
                 }
                 result
@@ -1048,9 +1204,8 @@ async fn handle_wifi_action(
                 let result = connect_to_iwd_wifi(wifi_interface, network, false, command_runner)?;
                 // For IWD, we check after connection attempt
                 let _e = check_captive_portal().await;
-                #[cfg(debug_assertions)]
                 if let Err(ref e) = _e {
-                    eprintln!("Failed to check captive portal: {}", e);
+                    error!("Failed to check captive portal: {}", e);
                 }
                 result
             } else {
@@ -1058,10 +1213,12 @@ async fn handle_wifi_action(
             };
 
             // Check mullvad status, log errors in debug mode
-            let _e = check_mullvad().await;
-            #[cfg(debug_assertions)]
-            if let Err(ref e) = _e {
-                eprintln!("Failed to check mullvad status: {}", e);
+            #[cfg(feature = "tailscale")]
+            {
+                let _e = check_mullvad().await;
+                if let Err(ref e) = _e {
+                    error!("Failed to check mullvad status: {}", e);
+                }
             }
 
             Ok(connection_result)
@@ -1076,6 +1233,7 @@ async fn set_action(
     connected_devices: &[String],
     command_runner: &dyn CommandRunner,
     profile: bool,
+    config_path: Option<&PathBuf>,
 ) -> Result<bool, Box<dyn Error>> {
     match action {
         ActionType::Custom(custom_action) => handle_custom_action(custom_action),
@@ -1096,7 +1254,9 @@ async fn set_action(
             } else {
                 // Fall back to config file API key
                 debug!("Command line API key is empty in set_action, checking config file");
-                let key_opt = get_config().ok().and_then(|c| c.nextdns_api_key.clone());
+                let key_opt = get_config(config_path)
+                    .ok()
+                    .and_then(|c| c.nextdns_api_key.clone());
                 if let Some(key) = key_opt {
                     let trimmed_key = key.trim().to_string();
                     if !trimmed_key.is_empty() {
@@ -1140,6 +1300,7 @@ async fn set_action(
             result
         }
         ActionType::System(system_action) => handle_system_action(system_action, profile).await,
+        #[cfg(feature = "tailscale")]
         ActionType::Tailscale(mullvad_action) => {
             let notification_sender = DefaultNotificationSender;
             let tailscale_state = TailscaleState::new(command_runner);
@@ -1172,6 +1333,112 @@ async fn set_action(
                 .show();
             Ok(result.success)
         }
+        #[cfg(feature = "firewalld")]
+        ActionType::Firewalld(firewalld_action) => {
+            match handle_firewalld_action(firewalld_action, command_runner).await {
+                Ok(success) => {
+                    let message = match firewalld_action {
+                        FirewalldAction::SetZone(zone) => {
+                            format!("Switched to firewalld zone: {}", zone)
+                        }
+                        FirewalldAction::TogglePanicMode(enable) => {
+                            if *enable {
+                                "Firewalld panic mode enabled - all connections blocked".to_string()
+                            } else {
+                                "Firewalld panic mode disabled".to_string()
+                            }
+                        }
+                        FirewalldAction::GetCurrentZone => {
+                            "Current firewalld zone displayed".to_string()
+                        }
+                        FirewalldAction::ListZones => "Firewalld zones listed".to_string(),
+                        FirewalldAction::OpenConfigEditor => {
+                            "Firewalld configuration editor opened".to_string()
+                        }
+                    };
+                    let _ = Notification::new()
+                        .summary("🔥 Firewalld")
+                        .body(&message)
+                        .show();
+                    Ok(success)
+                }
+                Err(e) => {
+                    let error_msg = format!("Firewalld operation failed: {}", e);
+                    let _ = Notification::new()
+                        .summary("🔥 Firewalld Error")
+                        .body(&error_msg)
+                        .show();
+                    Ok(false)
+                }
+            }
+        }
+        ActionType::Ssh(ssh_action) => match ssh::handle_ssh_action(ssh_action, command_runner) {
+            Ok(_) => {
+                let message = match ssh_action {
+                    network_dmenu::SshAction::StartProxy(config) => {
+                        format!(
+                            "SSH SOCKS proxy {} started on port {}",
+                            config.name, config.port
+                        )
+                    }
+                    network_dmenu::SshAction::StopProxy(config) => {
+                        format!("SSH SOCKS proxy {} stopped", config.name)
+                    }
+                };
+                let _ = Notification::new()
+                    .summary("SSH Proxy")
+                    .body(&message)
+                    .show();
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = format!("SSH proxy operation failed: {}", e);
+                let _ = Notification::new()
+                    .summary("SSH Proxy Error")
+                    .body(&error_msg)
+                    .show();
+                Ok(false)
+            }
+        },
+        ActionType::Tor(tor_action) => match handle_tor_action(tor_action, command_runner) {
+            Ok(result) => {
+                let message = match tor_action {
+                    TorAction::StartTor => "Tor daemon started successfully".to_string(),
+                    TorAction::StopTor => "Tor daemon stopped".to_string(),
+                    TorAction::RestartTor => "Tor daemon restarted".to_string(),
+                    TorAction::RefreshCircuit => "Tor circuit refreshed".to_string(),
+                    TorAction::TestConnection => {
+                        if !result.is_empty() {
+                            result
+                        } else {
+                            "Tor connection test completed".to_string()
+                        }
+                    }
+                    TorAction::StartTorsocks(config) => {
+                        format!("Started {} via Tor", config.description)
+                    }
+                    TorAction::StopTorsocks(config) => {
+                        format!("Stopped {} via Tor", config.description)
+                    }
+                    TorAction::DebugControlPort => {
+                        "Tor control port diagnostics completed".to_string()
+                    }
+                };
+                let _ = Notification::new()
+                    .summary("🧅 Tor Proxy")
+                    .body(&message)
+                    .show();
+                Ok(true)
+            }
+            Err(e) => {
+                let error_msg = format!("Tor operation failed: {}", e);
+                let _ = Notification::new()
+                    .summary("🧅 Tor Error")
+                    .body(&error_msg)
+                    .show();
+                Ok(false)
+            }
+        },
     }
 }
 
@@ -1182,9 +1449,8 @@ pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>
         .body(&format!("Connected to {name}"))
         .show();
 
-    #[cfg(debug_assertions)]
     if let Err(ref e) = _e {
-        eprintln!("Failed to show notification: {}", e);
+        error!("Failed to show notification: {}", e);
     }
 
     // We don't want to propagate notification errors to the caller
@@ -1297,17 +1563,23 @@ mod tests {
 
     #[test]
     fn test_action_to_string_tailscale_set_exit_node() {
-        let action =
-            ActionType::Tailscale(TailscaleAction::SetExitNode("exit-node-name".to_string()));
-        let result = action_to_string(&action);
-        assert_eq!(result, "exit-node-name");
+        #[cfg(feature = "tailscale")]
+        {
+            let action =
+                ActionType::Tailscale(TailscaleAction::SetExitNode("exit-node-name".to_string()));
+            let result = action_to_string(&action);
+            assert_eq!(result, "exit-node-name");
+        }
     }
 
     #[test]
     fn test_action_to_string_tailscale_disable_exit_node() {
-        let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
-        let result = action_to_string(&action);
-        assert_eq!(result, "tailscale - ❌ Disable exit-node");
+        #[cfg(feature = "tailscale")]
+        {
+            let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
+            let result = action_to_string(&action);
+            assert!(result.contains("Disable exit node"));
+        }
     }
 
     #[test]
@@ -1445,7 +1717,7 @@ mod tests {
 
     #[test]
     fn test_get_config_path() {
-        let path = get_config_path();
+        let path = get_config_path(None);
         assert!(path.is_ok());
         let path_buf = path.unwrap();
         assert!(path_buf.to_string_lossy().contains("network-dmenu"));
@@ -1602,8 +1874,12 @@ mod tests {
             use_dns_cache: true,
             nextdns_api_key: None,
             nextdns_toggle_profiles: None,
+            ssh_proxies: std::collections::HashMap::new(),
+            torsocks_apps: std::collections::HashMap::new(),
             dmenu_cmd: "dmenu".to_string(),
             dmenu_args: String::new(),
+            #[cfg(feature = "geofencing")]
+            geofencing: network_dmenu::geofencing::GeofencingConfig::default(),
         };
 
         // When args are None, config values should be used
@@ -1614,6 +1890,7 @@ mod tests {
             no_bluetooth: false,
             no_tailscale: false,
             no_nextdns: false,
+            no_tor: false,
             nextdns_api_key: String::new(),
             validate_nextdns_key: false,
             refresh_nextdns_profiles: false,
@@ -1625,13 +1902,29 @@ mod tests {
             country: None,
             stdin: false,
             stdout: false,
+            config: None,
+            #[cfg(feature = "geofencing")]
+            daemon: false,
+            #[cfg(feature = "geofencing")]
+            stop_daemon: false,
+            #[cfg(feature = "geofencing")]
+            daemon_status: false,
+            #[cfg(feature = "geofencing")]
+            create_zone: None,
+            #[cfg(feature = "geofencing")]
+            add_fingerprint: None,
+            #[cfg(feature = "geofencing")]
+            list_zones: false,
+            #[cfg(feature = "geofencing")]
+            activate_zone: None,
+            #[cfg(feature = "geofencing")]
+            where_am_i: false,
+            #[cfg(feature = "geofencing")]
+            geofence_daemon_internal: false,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args
-            .country
-            .as_deref()
-            .or_else(|| config.country_filter.as_deref());
+        let country = args.country.as_deref().or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(2));
         assert_eq!(country, Some("Sweden"));
@@ -1641,10 +1934,7 @@ mod tests {
         args.country = Some("USA".to_string());
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
-        let country = args
-            .country
-            .as_deref()
-            .or_else(|| config.country_filter.as_deref());
+        let country = args.country.as_deref().or(config.country_filter.as_deref());
 
         assert_eq!(max_per_country, Some(3));
         assert_eq!(country, Some("USA"));
@@ -1666,4 +1956,414 @@ mod tests {
             _ => panic!("Expected TestConnectivity action"),
         }
     }
+}
+
+/// Validate configuration file syntax and structure
+async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    debug!("🔍 Checking if config file exists: {}", config_path.display());
+    
+    if !config_path.exists() {
+        return Err(format!("Configuration file not found: {}", config_path.display()).into());
+    }
+
+    debug!("📖 Reading configuration file");
+    let config_content = fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    if config_content.trim().is_empty() {
+        return Err("Configuration file is empty".into());
+    }
+
+    debug!("🔍 Parsing TOML syntax");
+    // First check basic TOML syntax
+    let parsed_toml: toml::Value = toml::from_str(&config_content)
+        .map_err(|e| format!("Invalid TOML syntax: {}", e))?;
+
+    debug!("✅ TOML syntax is valid");
+
+    // Try to parse as our Config structure
+    debug!("🔍 Validating configuration structure");
+    let _config: Config = toml::from_str(&config_content)
+        .map_err(|e| format!("Invalid configuration structure: {}", e))?;
+
+    debug!("✅ Configuration structure is valid");
+
+    // Validate geofencing configuration if present
+    #[cfg(feature = "geofencing")]
+    {
+        if let Some(geofencing_table) = parsed_toml.get("geofencing") {
+            debug!("🔍 Validating geofencing configuration");
+            
+            // Check if zones are present
+            if let Some(zones) = geofencing_table.get("zones") {
+                if let Some(zones_array) = zones.as_array() {
+                    debug!("📋 Validating {} geofencing zones", zones_array.len());
+                    for (i, zone) in zones_array.iter().enumerate() {
+                        validate_zone_config(zone, i)?;
+                    }
+                } else {
+                    return Err("geofencing.zones must be an array".into());
+                }
+            }
+            
+            debug!("✅ Geofencing configuration is valid");
+        }
+    }
+
+    // Validate custom actions if present
+    if let Some(actions_table) = parsed_toml.get("actions") {
+        if let Some(actions_array) = actions_table.as_array() {
+            debug!("🔍 Validating {} custom actions", actions_array.len());
+            for (i, action) in actions_array.iter().enumerate() {
+                validate_custom_action(action, i)?;
+            }
+        } else {
+            return Err("actions must be an array".into());
+        }
+    }
+
+    println!("✅ Configuration file validation completed successfully");
+    Ok(())
+}
+
+/// Validate a single geofencing zone configuration
+#[cfg(feature = "geofencing")]
+fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let zone_table = zone.as_table()
+        .ok_or_else(|| format!("Zone {} must be a table", index))?;
+
+    // Check required fields
+    if !zone_table.contains_key("name") && !zone_table.contains_key("id") {
+        return Err(format!("Zone {} missing required 'name' or 'id' field", index).into());
+    }
+
+    // Validate actions if present
+    if let Some(actions) = zone_table.get("actions") {
+        let actions_table = actions.as_table()
+            .ok_or_else(|| format!("Zone {} actions must be a table", index))?;
+
+        // Validate bluetooth field if present
+        if let Some(bluetooth) = actions_table.get("bluetooth") {
+            if !bluetooth.is_array() {
+                return Err(format!("Zone {} bluetooth field must be an array", index).into());
+            }
+        }
+
+        // Validate custom_commands field if present  
+        if let Some(custom_commands) = actions_table.get("custom_commands") {
+            if !custom_commands.is_array() {
+                return Err(format!("Zone {} custom_commands field must be an array", index).into());
+            }
+        }
+    }
+
+    debug!("✅ Zone {} configuration is valid", index);
+    Ok(())
+}
+
+/// Validate a single custom action configuration
+fn validate_custom_action(action: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let action_table = action.as_table()
+        .ok_or_else(|| format!("Action {} must be a table", index))?;
+
+    // Check required fields
+    if !action_table.contains_key("display") {
+        return Err(format!("Action {} missing required 'display' field", index).into());
+    }
+    
+    if !action_table.contains_key("cmd") {
+        return Err(format!("Action {} missing required 'cmd' field", index).into());
+    }
+
+    // Validate field types
+    if !action_table.get("display").unwrap().is_str() {
+        return Err(format!("Action {} 'display' field must be a string", index).into());
+    }
+
+    if !action_table.get("cmd").unwrap().is_str() {
+        return Err(format!("Action {} 'cmd' field must be a string", index).into());
+    }
+
+    debug!("✅ Action {} configuration is valid", index);
+    Ok(())
+}
+
+/// Handle geofencing-specific commands
+#[cfg(feature = "geofencing")]
+async fn handle_geofencing_commands(
+    args: &Args,
+) -> Result<Option<Result<(), Box<dyn Error>>>, Box<dyn Error>> {
+    use network_dmenu::geofencing::{
+        fingerprinting::create_wifi_fingerprint,
+        ipc::{DaemonClient, DaemonCommand, DaemonResponse},
+        PrivacyMode, ZoneActions,
+    };
+
+    // Load configuration for geofencing commands
+    let config = get_config(args.config.as_ref()).unwrap_or_else(|e| {
+        debug!("Failed to load config file, using defaults: {}", e);
+        Config::default()
+    });
+    let mut geofencing_config = config.geofencing;
+
+    // Enable geofencing for daemon commands
+    if args.daemon || args.geofence_daemon_internal {
+        geofencing_config.enabled = true;
+    }
+
+    // Internal daemon flag - run daemon directly
+    if args.geofence_daemon_internal {
+        use network_dmenu::geofencing::daemon::GeofencingDaemon;
+
+        let mut daemon = GeofencingDaemon::new(geofencing_config);
+        if let Err(e) = daemon.run().await {
+            error!("Daemon failed: {}", e);
+            std::process::exit(1);
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Start daemon
+    if args.daemon {
+        println!("Starting geofencing daemon...");
+
+        // Run daemon directly (this will block)
+        use network_dmenu::geofencing::daemon::GeofencingDaemon;
+        let mut daemon = GeofencingDaemon::new(geofencing_config);
+
+        println!("Geofencing daemon running...");
+        if let Err(e) = daemon.run().await {
+            error!("Daemon failed: {}", e);
+            return Ok(Some(Err(e.into())));
+        }
+
+        return Ok(Some(Ok(())));
+    }
+
+    // Stop daemon
+    if args.stop_daemon {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running");
+            return Ok(Some(Ok(())));
+        }
+
+        match client.send_command(DaemonCommand::Shutdown).await {
+            Ok(_) => println!("Daemon stopped successfully"),
+            Err(e) => error!("Failed to stop daemon: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Show daemon status
+    if args.daemon_status {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running");
+            return Ok(Some(Ok(())));
+        }
+
+        match client.get_status().await {
+            Ok(status) => {
+                println!("Daemon Status:");
+                println!("  Monitoring: {}", status.monitoring);
+                println!("  Zone count: {}", status.zone_count);
+                println!(
+                    "  Active zone: {}",
+                    status.active_zone_id.unwrap_or_else(|| "None".to_string())
+                );
+                println!(
+                    "  Last scan: {}",
+                    status
+                        .last_scan
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "Never".to_string())
+                );
+                println!("  Zone changes: {}", status.total_zone_changes);
+                println!("  Uptime: {}s", status.uptime_seconds);
+            }
+            Err(e) => error!("Failed to get daemon status: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Create zone
+    if let Some(ref zone_name) = args.create_zone {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+
+        // Look for matching zone actions in config file
+        let actions = geofencing_config
+            .zones
+            .iter()
+            .find(|zone| zone.name == *zone_name || zone.id == *zone_name)
+            .map(|zone| zone.actions.clone())
+            .unwrap_or_else(|| {
+                debug!("No zone actions found in config for '{}', using defaults", zone_name);
+                ZoneActions {
+                    notifications: true,
+                    ..Default::default()
+                }
+            });
+
+        // Check if actions are configured for user feedback
+        let has_configured_actions = actions.wifi.is_some() || actions.vpn.is_some() || 
+               actions.tailscale_exit_node.is_some() || actions.tailscale_shields.is_some() ||
+               !actions.bluetooth.is_empty() || !actions.custom_commands.is_empty();
+
+        debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}", 
+               zone_name, 
+               actions.wifi,
+               actions.vpn, 
+               actions.tailscale_exit_node,
+               actions.tailscale_shields,
+               actions.bluetooth,
+               actions.custom_commands);
+
+        match client.create_zone(zone_name.clone(), actions).await {
+            Ok(zone) => {
+                // Check if this was a new zone or updated existing zone
+                let is_new_zone = zone.fingerprints.len() == 1 && zone.match_count == 0;
+                
+                if is_new_zone {
+                    println!("✅ Created new zone '{}' with ID: {}", zone.name, zone.id);
+                } else {
+                    println!("✅ Updated existing zone '{}' with ID: {}", zone.name, zone.id);
+                }
+                
+                if let Some(first_fingerprint) = zone.fingerprints.first() {
+                    println!(
+                        "📊 Confidence score: {:.2}",
+                        first_fingerprint.confidence_score
+                    );
+                }
+                println!("📍 Fingerprints: {}", zone.fingerprints.len());
+                
+                // Show zone actions
+                if has_configured_actions {
+                    println!("🎯 Zone actions configured from config file");
+                }
+            }
+            Err(e) => error!("Failed to create zone: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Add fingerprint to existing zone
+    if let Some(ref zone_name) = args.add_fingerprint {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+
+        match client
+            .send_command(DaemonCommand::AddFingerprint {
+                zone_name: zone_name.clone(),
+            })
+            .await
+        {
+            Ok(DaemonResponse::FingerprintAdded { success, message }) => {
+                if success {
+                    println!("✅ {}", message);
+                } else {
+                    println!("ℹ️ {}", message);
+                }
+            }
+            Ok(_) => {
+                error!("Unexpected response from daemon");
+            }
+            Err(e) => {
+                error!("Failed to add fingerprint: {}", e);
+            }
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // List zones
+    if args.list_zones {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Zones are stored in config file.");
+            return Ok(Some(Ok(())));
+        }
+
+        match client.list_zones().await {
+            Ok(zones) => {
+                if zones.is_empty() {
+                    println!("No zones configured");
+                } else {
+                    println!("Configured zones:");
+                    for zone in zones {
+                        println!("  {} ({})", zone.name, zone.id);
+                        println!("    Created: {}", zone.created_at);
+                        println!("    Matches: {}", zone.match_count);
+                        if let Some(last_matched) = zone.last_matched {
+                            println!("    Last matched: {}", last_matched);
+                        }
+                    }
+                }
+            }
+            Err(e) => error!("Failed to list zones: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Activate zone
+    if let Some(ref zone_id) = args.activate_zone {
+        let client = DaemonClient::new();
+        if !client.is_daemon_running() {
+            println!("Daemon is not running. Please start it first with --daemon");
+            return Ok(Some(Ok(())));
+        }
+
+        match client
+            .send_command(DaemonCommand::ActivateZone {
+                zone_id: zone_id.clone(),
+            })
+            .await
+        {
+            Ok(DaemonResponse::ZoneChanged { to_zone, .. }) => {
+                println!("Activated zone: {}", to_zone.name);
+            }
+            Ok(DaemonResponse::Error { message }) => {
+                eprintln!("Failed to activate zone: {}", message);
+            }
+            Err(e) => eprintln!("Failed to activate zone: {}", e),
+            _ => eprintln!("Unexpected response"),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // Show current location
+    if args.where_am_i {
+        println!("Detecting current location...");
+        match create_wifi_fingerprint(PrivacyMode::High).await {
+            Ok(fingerprint) => {
+                println!("Location fingerprint:");
+                println!(
+                    "  WiFi networks detected: {}",
+                    fingerprint.wifi_networks.len()
+                );
+                println!("  Confidence score: {:.2}", fingerprint.confidence_score);
+                println!("  Timestamp: {}", fingerprint.timestamp);
+
+                // If daemon is running, check for zone match
+                let client = DaemonClient::new();
+                if client.is_daemon_running() {
+                    if let Ok(Some(active_zone)) = client.get_active_zone().await {
+                        println!("  Current zone: {} ({})", active_zone.name, active_zone.id);
+                    }
+                }
+            }
+            Err(e) => eprintln!("Failed to detect location: {}", e),
+        }
+        return Ok(Some(Ok(())));
+    }
+
+    // No geofencing command was used
+    Ok(None)
 }

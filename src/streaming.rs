@@ -1,21 +1,32 @@
+#[cfg(feature = "tailscale")]
+use crate::TailscaleAction;
 use crate::{
+    format_entry, ActionType, Args, Config, CustomAction, SystemAction, VpnAction, WifiAction,
+    ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
+};
+use network_dmenu::{
     bluetooth::get_paired_bluetooth_devices,
-    command::{CommandRunner, RealCommandRunner, is_command_installed},
-    diagnostics,
-    dns_cache,
+    command::{is_command_installed, CommandRunner, RealCommandRunner},
+    diagnostics, dns_cache,
     iwd::get_iwd_networks,
     networkmanager::{get_nm_vpn_networks, get_nm_wifi_networks},
-    nextdns,
-    rfkill,
-    tailscale::{get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled, get_locked_nodes, TailscaleState},
-    tailscale_prefs::parse_tailscale_prefs,
-    ActionType, Args, Config, CustomAction, SystemAction, TailscaleAction,
-    format_entry, ACTION_TYPE_SYSTEM, ICON_CROSS, ICON_SIGNAL,
+    nextdns, rfkill, tor,
 };
+#[cfg(feature = "tailscale")]
+use network_dmenu::{
+    tailscale::{
+        get_locked_nodes, get_mullvad_actions, is_exit_node_active, is_tailscale_lock_enabled,
+        TailscaleState,
+    },
+    tailscale_prefs::parse_tailscale_prefs,
+};
+
+#[cfg(feature = "firewalld")]
+use network_dmenu::firewalld::get_firewalld_actions;
 use std::error::Error;
 use std::process::Stdio;
-use tokio::sync::mpsc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 /// Stream actions to dmenu as they become available for faster responsiveness
 pub async fn select_action_from_menu_streaming(
@@ -29,7 +40,29 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdout mode - collect all actions first
     if use_stdout {
-        let actions = collect_all_actions(args.clone(), config.clone()).await?;
+        #[allow(unused_mut)] // Needed for ML feature
+        let mut actions = collect_all_actions(args, config).await?;
+
+        // Apply ML personalization if enabled
+        #[cfg(feature = "ml")]
+        {
+            let action_strings: Vec<String> = actions.iter().map(crate::action_to_string).collect();
+            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+            // Reorder actions based on personalized order
+            let mut reordered = Vec::with_capacity(actions.len());
+            for action_str in personalized {
+                if let Some(pos) = actions
+                    .iter()
+                    .position(|a| crate::action_to_string(a) == action_str)
+                {
+                    reordered.push(actions.remove(pos));
+                }
+            }
+            // Add any remaining actions that weren't in the personalized list
+            reordered.extend(actions);
+            actions = reordered;
+        }
         for (i, action) in actions.iter().enumerate() {
             println!("{}: {}", i + 1, crate::action_to_string(action));
         }
@@ -38,7 +71,29 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdin mode - collect all actions first
     if use_stdin {
-        let actions = collect_all_actions(args.clone(), config.clone()).await?;
+        #[allow(unused_mut)] // Needed for ML feature
+        let mut actions = collect_all_actions(args, config).await?;
+
+        // Apply ML personalization if enabled
+        #[cfg(feature = "ml")]
+        {
+            let action_strings: Vec<String> = actions.iter().map(crate::action_to_string).collect();
+            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+            // Reorder actions based on personalized order
+            let mut reordered = Vec::with_capacity(actions.len());
+            for action_str in personalized {
+                if let Some(pos) = actions
+                    .iter()
+                    .position(|a| crate::action_to_string(a) == action_str)
+                {
+                    reordered.push(actions.remove(pos));
+                }
+            }
+            // Add any remaining actions that weren't in the personalized list
+            reordered.extend(actions);
+            actions = reordered;
+        }
         use std::io::{self, BufRead};
         let stdin = io::stdin();
         let mut line = String::new();
@@ -51,28 +106,55 @@ pub async fn select_action_from_menu_streaming(
     let (tx, mut rx) = mpsc::unbounded_channel::<ActionType>();
 
     // Spawn dmenu immediately using async process
-    let dmenu_args: Vec<String> = config.dmenu_args.split_whitespace().map(|s| s.to_string()).collect();
     let mut child = tokio::process::Command::new(&config.dmenu_cmd)
-        .args(&dmenu_args)
+        .args(config.dmenu_args.split_whitespace())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
 
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
 
-    // Start producing actions in background
-    let args_clone = args.clone();
-    let config_clone = config.clone();
+    // Start producer task - need to clone for 'static lifetime
+    let args_cloned = args.clone();
+    let config_cloned = config.clone();
+    let producer_handle =
+        tokio::spawn(async move { stream_actions_simple(&args_cloned, &config_cloned, tx).await });
 
-    // Start producer task
-    let producer_handle = tokio::spawn(async move {
-        stream_actions_simple(args_clone, config_clone, tx).await
-    });
-
-    // Stream actions to dmenu as they arrive
+    // Collect all actions first for ML personalization
+    let mut all_actions = Vec::new();
     while let Some(action) = rx.recv().await {
+        all_actions.push(action);
+    }
+
+    // Apply ML personalization if enabled
+    #[cfg(feature = "ml")]
+    {
+        let action_strings: Vec<String> = all_actions.iter().map(crate::action_to_string).collect();
+        let personalized = network_dmenu::get_personalized_menu_order(action_strings);
+
+        // Reorder actions based on personalized order
+        let mut reordered = Vec::new();
+        for action_str in personalized {
+            if let Some(pos) = all_actions
+                .iter()
+                .position(|a| crate::action_to_string(a) == action_str)
+            {
+                reordered.push(all_actions.remove(pos));
+            }
+        }
+        // Add any remaining actions that weren't in the personalized list
+        reordered.extend(all_actions);
+        all_actions = reordered;
+    }
+
+    // Stream personalized actions to dmenu
+    for action in all_actions {
         let action_string = crate::action_to_string(&action);
-        if stdin.write_all(format!("{}\n", action_string).as_bytes()).await.is_err() {
+        if stdin
+            .write_all(format!("{}\n", action_string).as_bytes())
+            .await
+            .is_err()
+        {
             break; // dmenu closed
         }
         if stdin.flush().await.is_err() {
@@ -96,17 +178,20 @@ pub async fn select_action_from_menu_streaming(
 
 /// Simple streaming function that avoids Send issues
 async fn stream_actions_simple(
-    args: Args,
-    config: Config,
+    args: &Args,
+    config: &Config,
     tx: mpsc::UnboundedSender<ActionType>,
 ) {
     // Send custom actions first
-    for action in config.actions {
-        let _ = tx.send(ActionType::Custom(action));
+    for action in &config.actions {
+        let _ = tx.send(ActionType::Custom(action.clone()));
     }
 
     // Send system actions
-    if !args.no_wifi && is_command_installed("nmcli") && is_command_installed("nm-connection-editor") {
+    if !args.no_wifi
+        && is_command_installed("nmcli")
+        && is_command_installed("nm-connection-editor")
+    {
         let _ = tx.send(ActionType::System(SystemAction::EditConnections));
     }
 
@@ -134,11 +219,12 @@ async fn stream_actions_simple(
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         handles.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, &wifi_interface).await;
+            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
         }));
     }
 
     // Tailscale
+    #[cfg(feature = "tailscale")]
     if !args.no_tailscale && is_command_installed("tailscale") {
         let tx_clone = tx.clone();
         let max_nodes_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
@@ -146,7 +232,14 @@ async fn stream_actions_simple(
         let country_filter = args.country.clone().or(config.country_filter.clone());
         let exclude_exit_node = config.exclude_exit_node.clone();
         handles.push(tokio::spawn(async move {
-            send_tailscale_actions_simple(&tx_clone, exclude_exit_node, max_nodes_per_country, max_nodes_per_city, country_filter).await;
+            send_tailscale_actions_simple(
+                &tx_clone,
+                exclude_exit_node,
+                max_nodes_per_country,
+                max_nodes_per_city,
+                country_filter,
+            )
+            .await;
         }));
     }
 
@@ -157,11 +250,19 @@ async fn stream_actions_simple(
             Some(args.nextdns_api_key.clone())
         } else {
             config.nextdns_api_key.clone()
-        }.map(|k| k.trim().to_string());
+        }
+        .map(|k| k.trim().to_string());
 
-        debug!("NextDNS: Setting up with API key: {:?}",
-               api_key.as_ref().map(|k| if k.len() > 4 { &k[0..4] } else { k }));
-        debug!("NextDNS: Toggle profiles: {:?}", config.nextdns_toggle_profiles);
+        debug!(
+            "NextDNS: Setting up with API key: {:?}",
+            api_key
+                .as_ref()
+                .map(|k| if k.len() > 4 { &k[0..4] } else { k })
+        );
+        debug!(
+            "NextDNS: Toggle profiles: {:?}",
+            config.nextdns_toggle_profiles
+        );
 
         let toggle_profiles = config.nextdns_toggle_profiles.clone();
         handles.push(tokio::spawn(async move {
@@ -187,6 +288,31 @@ async fn stream_actions_simple(
         }));
     }
 
+    // SSH proxies
+    let tx_clone = tx.clone();
+    let ssh_proxies = config.ssh_proxies.clone();
+    handles.push(tokio::spawn(async move {
+        send_ssh_actions(&tx_clone, &ssh_proxies).await;
+    }));
+
+    // Tor proxies
+    if !args.no_tor {
+        let tx_clone = tx.clone();
+        let torsocks_apps = config.torsocks_apps.clone();
+        handles.push(tokio::spawn(async move {
+            send_tor_actions(&tx_clone, &torsocks_apps).await;
+        }));
+    }
+
+    // Firewalld
+    #[cfg(feature = "firewalld")]
+    {
+        let tx_clone = tx.clone();
+        handles.push(tokio::spawn(async move {
+            send_firewalld_actions(&tx_clone).await;
+        }));
+    }
+
     // Wait for all tasks
     for handle in handles {
         let _ = handle.await;
@@ -195,14 +321,14 @@ async fn stream_actions_simple(
 
 /// Collect all actions without streaming (fallback)
 async fn collect_all_actions(
-    args: Args,
-    config: Config,
+    args: &Args,
+    config: &Config,
 ) -> Result<Vec<ActionType>, Box<dyn Error>> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let command_runner = RealCommandRunner;
 
     // Produce actions directly
-    let _ = produce_actions_streaming(&args, &config, &command_runner, tx).await;
+    let _ = produce_actions_streaming(args, config, &command_runner, tx).await;
 
     let mut actions = Vec::new();
     while let Some(action) = rx.recv().await {
@@ -223,7 +349,10 @@ async fn produce_actions_streaming(
     send_custom_actions(config, command_runner, &tx).await?;
 
     // Send system actions
-    if !args.no_wifi && is_command_installed("nmcli") && is_command_installed("nm-connection-editor") {
+    if !args.no_wifi
+        && is_command_installed("nmcli")
+        && is_command_installed("nm-connection-editor")
+    {
         let _ = tx.send(ActionType::System(SystemAction::EditConnections));
     }
 
@@ -251,12 +380,13 @@ async fn produce_actions_streaming(
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         tasks.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, &wifi_interface).await;
+            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
         }));
     }
 
     // Tailscale (can be slow)
     // Handle Tailscale
+    #[cfg(feature = "tailscale")]
     if !args.no_tailscale && is_command_installed("tailscale") {
         let tx_clone = tx.clone();
         let max_nodes_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
@@ -265,7 +395,14 @@ async fn produce_actions_streaming(
         let exclude_exit_node = config.exclude_exit_node.clone();
 
         tasks.push(tokio::spawn(async move {
-            send_tailscale_actions_simple(&tx_clone, exclude_exit_node, max_nodes_per_country, max_nodes_per_city, country_filter).await;
+            send_tailscale_actions_simple(
+                &tx_clone,
+                exclude_exit_node,
+                max_nodes_per_country,
+                max_nodes_per_city,
+                country_filter,
+            )
+            .await;
         }));
     }
 
@@ -276,7 +413,8 @@ async fn produce_actions_streaming(
             Some(args.nextdns_api_key.clone())
         } else {
             config.nextdns_api_key.clone()
-        }.map(|k| k.trim().to_string());
+        }
+        .map(|k| k.trim().to_string());
         let toggle_profiles = config.nextdns_toggle_profiles.clone();
         tasks.push(tokio::spawn(async move {
             send_nextdns_actions(&tx_clone, api_key, toggle_profiles).await;
@@ -298,6 +436,31 @@ async fn produce_actions_streaming(
         let no_bluetooth = args.no_bluetooth;
         tasks.push(tokio::spawn(async move {
             send_rfkill_actions(&tx_clone, no_wifi, no_bluetooth).await;
+        }));
+    }
+
+    // SSH proxies
+    let tx_clone = tx.clone();
+    let ssh_proxies = config.ssh_proxies.clone();
+    tasks.push(tokio::spawn(async move {
+        send_ssh_actions(&tx_clone, &ssh_proxies).await;
+    }));
+
+    // Tor proxies
+    if !args.no_tor {
+        let tx_clone = tx.clone();
+        let torsocks_apps = config.torsocks_apps.clone();
+        tasks.push(tokio::spawn(async move {
+            send_tor_actions(&tx_clone, &torsocks_apps).await;
+        }));
+    }
+
+    // Firewalld
+    #[cfg(feature = "firewalld")]
+    {
+        let tx_clone = tx.clone();
+        tasks.push(tokio::spawn(async move {
+            send_firewalld_actions(&tx_clone).await;
         }));
     }
 
@@ -364,30 +527,50 @@ async fn send_vpn_actions(tx: &mpsc::UnboundedSender<ActionType>) {
 
     if let Ok(actions) = get_nm_vpn_networks(&command_runner) {
         for action in actions {
-            let _ = tx.send(ActionType::Vpn(action));
+            // Convert library VpnAction to main VpnAction
+            let main_action = match action {
+                network_dmenu::VpnAction::Connect(name) => VpnAction::Connect(name),
+                network_dmenu::VpnAction::Disconnect(name) => VpnAction::Disconnect(name),
+            };
+            let _ = tx.send(ActionType::Vpn(main_action));
         }
     }
 }
 
-async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interface: &str) {
+async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interface: Option<&str>) {
     let command_runner = RealCommandRunner;
 
     if is_command_installed("nmcli") {
         if let Ok(actions) = get_nm_wifi_networks(&command_runner) {
             for action in actions {
-                let _ = tx.send(ActionType::Wifi(action));
+                // Convert library WifiAction to main WifiAction
+                let main_action = match action {
+                    network_dmenu::WifiAction::Connect => WifiAction::Connect,
+                    network_dmenu::WifiAction::ConnectHidden => WifiAction::ConnectHidden,
+                    network_dmenu::WifiAction::Disconnect => WifiAction::Disconnect,
+                    network_dmenu::WifiAction::Network(name) => WifiAction::Network(name),
+                };
+                let _ = tx.send(ActionType::Wifi(main_action));
             }
         }
     } else if is_command_installed("iwctl") {
-        if let Ok(actions) = get_iwd_networks(wifi_interface, &command_runner) {
+        if let Ok(actions) = get_iwd_networks(wifi_interface.unwrap_or("wlan0"), &command_runner) {
             for action in actions {
-                let _ = tx.send(ActionType::Wifi(action));
+                // Convert library WifiAction to main WifiAction
+                let main_action = match action {
+                    network_dmenu::WifiAction::Connect => WifiAction::Connect,
+                    network_dmenu::WifiAction::ConnectHidden => WifiAction::ConnectHidden,
+                    network_dmenu::WifiAction::Disconnect => WifiAction::Disconnect,
+                    network_dmenu::WifiAction::Network(name) => WifiAction::Network(name),
+                };
+                let _ = tx.send(ActionType::Wifi(main_action));
             }
         }
     }
 }
 
 // Simplified tailscale action sender
+#[cfg(feature = "tailscale")]
 async fn send_tailscale_actions_simple(
     tx: &mpsc::UnboundedSender<ActionType>,
     exclude_exit_node: Vec<String>,
@@ -400,9 +583,15 @@ async fn send_tailscale_actions_simple(
     // Get Tailscale preferences
     if let Some(prefs) = parse_tailscale_prefs(&command_runner) {
         // Send basic Tailscale actions first (these are simple and fast)
-        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetShields(!prefs.ShieldsUp)));
-        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(!prefs.ExitNodeAllowLANAccess)));
-        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(!prefs.RouteAll)));
+        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetShields(
+            !prefs.ShieldsUp,
+        )));
+        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetAllowLanAccess(
+            !prefs.ExitNodeAllowLANAccess,
+        )));
+        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetAcceptRoutes(
+            !prefs.RouteAll,
+        )));
         let _ = tx.send(ActionType::Tailscale(TailscaleAction::ShowLockStatus));
 
         // Create TailscaleState to get exit node information
@@ -419,14 +608,23 @@ async fn send_tailscale_actions_simple(
         );
 
         for action_str in mullvad_actions {
-            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetExitNode(action_str)));
+            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetExitNode(
+                action_str,
+            )));
+        }
+
+        // Add auto exit-node action if a suggested node is available
+        if !tailscale_state.suggested_exit_node.is_empty() {
+            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetSuggestedExitNode));
         }
 
         if is_exit_node_active(&tailscale_state) {
             let _ = tx.send(ActionType::Tailscale(TailscaleAction::DisableExitNode));
         }
 
-        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetEnable(!prefs.WantRunning)));
+        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SetEnable(
+            !prefs.WantRunning,
+        )));
 
         // Add Tailscale Lock actions if enabled
         if is_tailscale_lock_enabled(&command_runner, Some(&tailscale_state)).unwrap_or(false) {
@@ -438,7 +636,9 @@ async fn send_tailscale_actions_simple(
                     let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignAllNodes));
 
                     for node in locked_nodes {
-                        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignLockedNode(node.node_key)));
+                        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignLockedNode(
+                            node.node_key,
+                        )));
                     }
                 }
             }
@@ -451,12 +651,18 @@ async fn send_nextdns_actions(
     api_key: Option<String>,
     toggle_profiles: Option<(String, String)>,
 ) {
-    debug!("NextDNS: Preparing to send actions with API key: {:?}, toggle profiles: {:?}",
-           api_key.as_ref().map(|k| if k.len() > 4 { &k[0..4] } else { k }),
-           toggle_profiles);
+    debug!(
+        "NextDNS: Preparing to send actions with API key: {:?}, toggle profiles: {:?}",
+        api_key
+            .as_ref()
+            .map(|k| if k.len() > 4 { &k[0..4] } else { k }),
+        toggle_profiles
+    );
 
     // Convert toggle_profiles tuple to the format needed by get_nextdns_actions
-    let toggle_tuple = toggle_profiles.as_ref().map(|(a, b)| (a.as_str(), b.as_str()));
+    let toggle_tuple = toggle_profiles
+        .as_ref()
+        .map(|(a, b)| (a.as_str(), b.as_str()));
 
     // Get NextDNS actions
     match nextdns::get_nextdns_actions(api_key.as_deref(), toggle_tuple).await {
@@ -476,6 +682,18 @@ async fn send_nextdns_actions(
 fn send_diagnostic_actions(tx: &mpsc::UnboundedSender<ActionType>) {
     for action in diagnostics::get_diagnostic_actions() {
         let _ = tx.send(ActionType::Diagnostic(action));
+    }
+}
+
+async fn send_ssh_actions(
+    tx: &mpsc::UnboundedSender<ActionType>,
+    ssh_proxies: &std::collections::HashMap<String, network_dmenu::SshProxyConfig>,
+) {
+    if is_command_installed("ssh") {
+        let actions = network_dmenu::get_ssh_proxy_actions(ssh_proxies);
+        for action in actions {
+            let _ = tx.send(ActionType::Ssh(action));
+        }
     }
 }
 
@@ -517,7 +735,8 @@ async fn send_rfkill_actions(
     if !no_wifi {
         if let Ok(devices) = rfkill::get_rfkill_devices_by_type("wlan").await {
             for device in devices {
-                let device_display = format!("{} ({})", device.device_type_display(), device.device);
+                let device_display =
+                    format!("{} ({})", device.device_type_display(), device.device);
                 if device.is_unblocked() {
                     let display_text = format_entry(
                         ACTION_TYPE_SYSTEM,
@@ -547,7 +766,8 @@ async fn send_rfkill_actions(
     if !no_bluetooth {
         if let Ok(devices) = rfkill::get_rfkill_devices_by_type("bluetooth").await {
             for device in devices {
-                let device_display = format!("{} ({})", device.device_type_display(), device.device);
+                let device_display =
+                    format!("{} ({})", device.device_type_display(), device.device);
                 if device.is_unblocked() {
                     let display_text = format_entry(
                         ACTION_TYPE_SYSTEM,
@@ -572,4 +792,103 @@ async fn send_rfkill_actions(
             }
         }
     }
+}
+
+/// Send Tor proxy actions
+async fn send_tor_actions(
+    tx: &mpsc::UnboundedSender<ActionType>,
+    torsocks_apps: &std::collections::HashMap<String, network_dmenu::TorsocksConfig>,
+) {
+    use log::debug;
+
+    debug!("TOR_DEBUG: Starting send_tor_actions()");
+    let start_time = std::time::Instant::now();
+
+    // Only show Tor daemon actions if tor command is available
+    debug!("TOR_DEBUG: Checking if 'tor' command is installed...");
+    let tor_installed = is_command_installed("tor");
+    debug!("TOR_DEBUG: tor command available: {}", tor_installed);
+
+    if tor_installed {
+        debug!(
+            "TOR_DEBUG: Tor command found, getting actions with {} torsocks configs",
+            torsocks_apps.len()
+        );
+
+        let actions_start = std::time::Instant::now();
+        let actions = tor::get_tor_actions_async(torsocks_apps).await;
+        let actions_elapsed = actions_start.elapsed();
+
+        debug!(
+            "TOR_DEBUG: get_tor_actions_async() took {:?}, got {} actions",
+            actions_elapsed,
+            actions.len()
+        );
+
+        for (i, action) in actions.iter().enumerate() {
+            debug!(
+                "TOR_DEBUG: Sending Tor action {}/{}: {:?}",
+                i + 1,
+                actions.len(),
+                action
+            );
+            let send_result = tx.send(ActionType::Tor(action.clone()));
+            if let Err(e) = send_result {
+                debug!("TOR_DEBUG: Failed to send action: {:?}", e);
+            }
+        }
+        debug!(
+            "TOR_DEBUG: Finished sending all {} Tor actions",
+            actions.len()
+        );
+    } else {
+        debug!("TOR_DEBUG: Tor command not found, skipping Tor actions");
+    }
+
+    let total_elapsed = start_time.elapsed();
+    debug!(
+        "TOR_DEBUG: send_tor_actions() completed in {:?}",
+        total_elapsed
+    );
+}
+
+/// Send firewalld actions
+#[cfg(feature = "firewalld")]
+async fn send_firewalld_actions(tx: &mpsc::UnboundedSender<ActionType>) {
+    let start_time = std::time::Instant::now();
+    debug!("FIREWALLD_DEBUG: Starting send_firewalld_actions()");
+
+    let command_runner = RealCommandRunner;
+    let actions_start = std::time::Instant::now();
+    let actions = get_firewalld_actions(&command_runner);
+    let actions_elapsed = actions_start.elapsed();
+
+    debug!(
+        "FIREWALLD_DEBUG: get_firewalld_actions() took {:?}, got {} actions",
+        actions_elapsed,
+        actions.len()
+    );
+
+    for (i, action) in actions.iter().enumerate() {
+        debug!(
+            "FIREWALLD_DEBUG: Sending firewalld action {}/{}: {:?}",
+            i + 1,
+            actions.len(),
+            action
+        );
+        let send_result = tx.send(ActionType::Firewalld(action.clone()));
+        if let Err(e) = send_result {
+            debug!("FIREWALLD_DEBUG: Failed to send action: {:?}", e);
+        }
+    }
+    debug!(
+        "FIREWALLD_DEBUG: Finished sending all {} firewalld actions",
+        actions.len()
+    );
+
+    let total_elapsed = start_time.elapsed();
+    debug!(
+        "FIREWALLD_DEBUG: send_firewalld_actions() completed in {:?}",
+        total_elapsed
+    );
 }
