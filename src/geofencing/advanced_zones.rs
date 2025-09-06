@@ -1917,7 +1917,7 @@ mod tests {
         let analyzer = RelationshipAnalyzer::new();
         let zones = Vec::new(); // Empty for test
         
-        let relationships = analyzer.analyze_zone_relationships(&zones);
+        let relationships = analyzer.analyze_relationships(&zones);
         assert!(relationships.is_empty());
     }
 

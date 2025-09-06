@@ -1,0 +1,21 @@
+# Example showing fixed TOML parsing - no 'id' field required
+[geofencing]
+enabled = true
+privacy_mode = "High"
+scan_interval_seconds = 30
+confidence_threshold = 0.8
+notifications = true
+
+[[geofencing.zones]]
+name = "home"
+[geofencing.zones.actions]
+wifi = "trucmuche (5ghz)"
+tailscale_exit_node = "suggested"
+tailscale_shields = true
+
+[[geofencing.zones]]
+name = "office"
+[geofencing.zones.actions]
+wifi = "Airdaily-Radius"
+tailscale_shields = true
+tailscale_exit_node = "raspberrypi"

@@ -1515,29 +1515,26 @@ mod tests {
         let mut learner = UsagePatternLearner::new();
         let context = create_test_context();
 
-        // Create stats directly rather than trying to update them through record_action
-        let mut stats = ActionStats::default();
-        stats.total_count = 1;
-        stats.recent_count = 1;
-        stats.last_used = Some(chrono::Utc::now().timestamp());
-        stats.hourly_distribution[14] = 1; // Hour 14
-        stats.daily_distribution[2] = 1; // Wednesday
-
-        // Insert directly into learner
+        // Test recording an action and verify stats are updated
         #[cfg(feature = "tailscale")]
         let test_action = UserAction::EnableTailscale;
         #[cfg(not(feature = "tailscale"))]
         let test_action = UserAction::CustomAction("test".to_string());
 
-        learner.action_stats.insert(test_action.clone(), stats);
-
-        learner.update_action_stats(&test_action, &context, 1400000000);
+        // Record the action once
+        learner.record_action(test_action.clone(), context.clone());
+        
+        // Verify stats were created and updated
         let stats = learner.action_stats.get(&test_action).unwrap();
         assert_eq!(stats.total_count, 1);
         assert_eq!(stats.recent_count, 1);
         assert!(stats.last_used.is_some());
-        assert_eq!(stats.hourly_distribution[14], 1); // Hour 14
-        assert_eq!(stats.daily_distribution[2], 1); // Wednesday
+        
+        // Record the action again 
+        learner.record_action(test_action.clone(), context.clone());
+        let stats = learner.action_stats.get(&test_action).unwrap();
+        assert_eq!(stats.total_count, 2);
+        assert_eq!(stats.recent_count, 2);
     }
 
     #[test]
