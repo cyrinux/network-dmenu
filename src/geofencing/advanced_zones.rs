@@ -4,15 +4,15 @@
 //! automatic zone splitting/merging, and ML-powered zone suggestions.
 
 use crate::geofencing::{
-    GeofenceError, GeofenceZone, LocationFingerprint, NetworkSignature, PrivacyMode, Result, ZoneActions
+    GeofenceError, GeofenceZone, LocationFingerprint, Result, ZoneActions
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc, Timelike, Datelike};
-use log::{debug, error, info, warn};
+use chrono::{DateTime, Utc, Timelike, Datelike};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock};
+use std::time::Duration;
+use tokio::sync::Mutex;
 
 /// Advanced zone manager with ML capabilities
 pub struct AdvancedZoneManager {
@@ -1005,7 +1005,7 @@ impl PatternRecognizer {
         
         self.temporal_patterns
             .entry(location_key.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(temporal_pattern);
         
         // Analyze action patterns
@@ -1019,7 +1019,7 @@ impl PatternRecognizer {
             
             self.action_patterns
                 .entry(location_key.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(action_pattern);
         }
         
@@ -1028,7 +1028,7 @@ impl PatternRecognizer {
             let sequence_key = format!("{}_sequence", location_key);
             self.sequence_patterns
                 .entry(sequence_key)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(visit.actions_performed.clone());
         }
         
@@ -1074,7 +1074,7 @@ impl PatternRecognizer {
                     average_visit_duration: Duration::from_secs(3600),
                     common_visit_times: patterns.clone(),
                     common_actions: self.action_patterns.get(location_key)
-                        .map(|actions| actions.clone())
+                        .cloned()
                         .unwrap_or_default(),
                     similar_zones: vec![],
                 };
@@ -1123,7 +1123,7 @@ impl OptimizationEngine {
         }
     }
 
-    fn suggest_optimizations(&mut self, analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion> {
+    fn suggest_optimizations(&mut self, _analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion> {
         let mut suggestions = Vec::new();
 
         for algorithm in &self.algorithms {

@@ -3,8 +3,8 @@
 //! Provides metrics collection, health checks, distributed tracing,
 //! structured logging, and integration with monitoring systems.
 
-use crate::geofencing::{GeofenceError, Result, GeofenceZone, LocationChange};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use crate::geofencing::{GeofenceError, Result, LocationChange};
+use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -64,7 +64,7 @@ pub struct HealthSummary {
 }
 
 /// Comprehensive daemon metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DaemonMetrics {
     /// Zone change statistics
     pub zone_metrics: ZoneMetrics,
@@ -346,6 +346,9 @@ pub struct MetricsCollector {
     last_collection: Instant,
 }
 
+/// Type alias for health history
+type HealthHistory = Arc<Mutex<VecDeque<(DateTime<Utc>, HashMap<String, HealthStatus>)>>>;
+
 /// Health checker for monitoring component health
 pub struct HealthChecker {
     /// Component health statuses
@@ -353,7 +356,7 @@ pub struct HealthChecker {
     /// Health check functions
     health_checks: HashMap<String, Box<dyn Fn() -> HealthStatus + Send + Sync>>,
     /// Health check history
-    health_history: Arc<Mutex<VecDeque<(DateTime<Utc>, HashMap<String, HealthStatus>)>>>,
+    health_history: HealthHistory,
 }
 
 /// Distributed tracer for operation tracing
@@ -872,7 +875,7 @@ impl ObservabilityManager {
     }
 
     /// Format metrics for InfluxDB line protocol
-    fn format_influxdb_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
+    fn format_influxdb_metrics(metrics: &DaemonMetrics, _health: &HealthSummary) -> String {
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
         
         format!(
@@ -936,19 +939,6 @@ impl MetricsCollector {
     }
 }
 
-impl Default for DaemonMetrics {
-    fn default() -> Self {
-        Self {
-            zone_metrics: ZoneMetrics::default(),
-            location_metrics: LocationMetrics::default(),
-            action_metrics: ActionMetrics::default(),
-            performance_metrics: PerformanceMetrics::default(),
-            error_metrics: ErrorMetrics::default(),
-            resource_metrics: ResourceMetrics::default(),
-            network_metrics: NetworkMetrics::default(),
-        }
-    }
-}
 
 impl Default for ZoneMetrics {
     fn default() -> Self {
@@ -1050,9 +1040,8 @@ impl HealthChecker {
         // Add critical health checks for geofencing system
         health_checks.insert("wifi_interface".to_string(), Box::new(|| {
             // Check if WiFi interface is available
-            if std::path::Path::new("/sys/class/net/wlan0/operstate").exists() {
-                HealthStatus::Healthy
-            } else if std::path::Path::new("/sys/class/net/wlp0s20f3/operstate").exists() {
+            if std::path::Path::new("/sys/class/net/wlan0/operstate").exists() 
+                || std::path::Path::new("/sys/class/net/wlp0s20f3/operstate").exists() {
                 HealthStatus::Healthy
             } else {
                 HealthStatus::Critical { error: "No WiFi interface found".to_string() }

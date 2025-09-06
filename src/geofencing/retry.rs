@@ -82,12 +82,17 @@ pub struct ActionContext {
     pub confidence: f64,
 }
 
+/// Type alias for success callback
+type SuccessCallback = Box<dyn Fn(&RetryableAction) + Send + Sync>;
+/// Type alias for failure callback
+type FailureCallback = Box<dyn Fn(&RetryableAction, &str) + Send + Sync>;
+
 /// Retry manager for handling failed actions
 pub struct RetryManager {
     config: RetryConfig,
     failed_actions: VecDeque<FailedAction>,
-    success_callback: Option<Box<dyn Fn(&RetryableAction) + Send + Sync>>,
-    failure_callback: Option<Box<dyn Fn(&RetryableAction, &str) + Send + Sync>>,
+    success_callback: Option<SuccessCallback>,
+    failure_callback: Option<FailureCallback>,
 }
 
 impl RetryManager {
@@ -262,7 +267,7 @@ impl RetryManager {
     async fn execute_with_retry(
         &self,
         action: RetryableAction,
-        context: &ActionContext,
+        _context: &ActionContext,
     ) -> RetryStatus {
         let mut attempt = 0;
 

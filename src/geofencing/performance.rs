@@ -67,7 +67,7 @@ pub struct ConnectionPool {
 
 /// Metrics for connection pool monitoring
 #[derive(Debug, Default, Clone)]
-struct ConnectionMetrics {
+pub struct ConnectionMetrics {
     total_connections: u64,
     active_connections: u32,
     peak_connections: u32,
@@ -168,7 +168,7 @@ struct CachedZoneMatch {
 
 /// Cache statistics for monitoring
 #[derive(Debug, Default, Clone)]
-struct CacheStatistics {
+pub struct CacheStatistics {
     fingerprint_hits: u64,
     fingerprint_misses: u64,
     zone_match_hits: u64,
@@ -250,7 +250,7 @@ pub enum TaskResult {
 
 /// Task metadata for tracking
 #[derive(Debug, Clone)]
-struct TaskMetadata {
+pub struct TaskMetadata {
     task_id: String,
     task_type: String,
     started_at: Instant,
@@ -579,6 +579,12 @@ impl ConnectionPool {
         if removed_count > 0 {
             debug!("Cleaned up {} stale connections from reuse pool", removed_count);
         }
+    }
+}
+
+impl Default for BatchProcessor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -938,7 +944,7 @@ impl CacheManager {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     
                     for line in stdout.lines() {
-                        if let Some(interface_name) = self.parse_interface_name(&line) {
+                        if let Some(interface_name) = self.parse_interface_name(line) {
                             if let Some(state) = self.get_interface_details(&interface_name, &command_runner).await {
                                 interface_states.insert(interface_name, state);
                             }
@@ -1024,8 +1030,9 @@ impl CacheManager {
         let mut addresses = Vec::new();
         
         for line in output.lines() {
-            if line.trim().starts_with("inet ") || line.trim().starts_with("inet6 ") {
-                if let Some(addr_part) = line.trim().split_whitespace().nth(1) {
+            let trimmed = line.trim();
+            if trimmed.starts_with("inet ") || trimmed.starts_with("inet6 ") {
+                if let Some(addr_part) = trimmed.split_whitespace().nth(1) {
                     if let Some(addr) = addr_part.split('/').next() {
                         addresses.push(addr.to_string());
                     }
@@ -1037,7 +1044,7 @@ impl CacheManager {
     }
 
     /// Get interface link speed if available
-    async fn get_interface_speed(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
+    async fn get_interface_speed(&self, interface: &str, _command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
         let speed_path = format!("/sys/class/net/{}/speed", interface);
         
         match tokio::fs::read_to_string(speed_path).await {
@@ -1312,7 +1319,7 @@ impl AsyncTaskManager {
     /// Cancel tasks by type
     pub async fn cancel_tasks_by_type(&self, task_type: &str) -> usize {
         let mut active_tasks = self.active_tasks.write().await;
-        let initial_count = active_tasks.len();
+        let _initial_count = active_tasks.len();
         
         // Find tasks to cancel
         let task_ids_to_cancel: Vec<String> = active_tasks
@@ -1389,7 +1396,7 @@ impl AsyncTaskManager {
         debug!("Starting async task manager background processor");
         
         let executor_pool_clone = Arc::clone(&self.executor_pool);
-        let active_tasks_clone = Arc::clone(&self.active_tasks);
+        let _active_tasks_clone = Arc::clone(&self.active_tasks);
         
         tokio::spawn(async move {
             loop {

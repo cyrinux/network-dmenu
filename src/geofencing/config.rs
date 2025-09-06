@@ -4,7 +4,7 @@
 //! environment variable overrides, and configuration profiles.
 
 use crate::geofencing::{
-    GeofenceError, GeofencingConfig, GeofenceZone, Result, ZoneActions,
+    GeofenceError, GeofencingConfig, Result,
     adaptive::ScanFrequency,
     performance::CacheConfig,
     security::SecurityPolicy,
@@ -696,7 +696,7 @@ impl ConfigManager {
             timestamp: Utc::now(),
             change_type: ConfigChangeType::ProfileActivated,
             path: "profiles.active".to_string(),
-            old_value: old_profile.map(|p| serde_json::Value::String(p)),
+            old_value: old_profile.map(serde_json::Value::String),
             new_value: serde_json::Value::String(profile_name.to_string()),
             changed_by: "api".to_string(),
         });
@@ -910,15 +910,13 @@ impl ConfigValidator for NetworkConfigValidator {
 
         // Check if any zones have network actions but no WiFi networks configured
         for zone in &config.geofencing.zones {
-            if zone.actions.wifi.is_some() || zone.actions.vpn.is_some() {
-                if zone.fingerprints.is_empty() {
-                    issues.push(ValidationIssue::Warning(ConfigWarning {
-                        path: format!("geofencing.zones.{}.fingerprints", zone.name),
-                        message: "Zone has network actions but no location fingerprints".to_string(),
-                        severity: WarningSeverity::High,
-                        suggestion: Some("Add location fingerprints by visiting the zone".to_string()),
-                    }));
-                }
+            if (zone.actions.wifi.is_some() || zone.actions.vpn.is_some()) && zone.fingerprints.is_empty() {
+                issues.push(ValidationIssue::Warning(ConfigWarning {
+                    path: format!("geofencing.zones.{}.fingerprints", zone.name),
+                    message: "Zone has network actions but no location fingerprints".to_string(),
+                    severity: WarningSeverity::High,
+                    suggestion: Some("Add location fingerprints by visiting the zone".to_string()),
+                }));
             }
         }
 

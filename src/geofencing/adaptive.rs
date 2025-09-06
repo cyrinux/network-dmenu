@@ -3,9 +3,9 @@
 //! Dynamically adjusts scanning intervals based on movement patterns,
 //! battery status, zone stability, and learning phases.
 
-use crate::geofencing::{LocationFingerprint, GeofenceError, Result};
+use crate::geofencing::{LocationFingerprint, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use log::{debug, info, warn};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -255,7 +255,7 @@ impl AdaptiveScanner {
 
         let now = Utc::now();
 
-        if let Some(current_zone) = zone_id {
+        if let Some(_current_zone) = zone_id {
             // Check if zone changed
             if self.zone_stability.time_in_zone == ChronoDuration::zero() {
                 // First zone detection
@@ -564,8 +564,6 @@ impl PowerMonitor {
         } else if info.charging {
             // When charging, be more optimistic about scanning frequency
             PowerState::BatteryCharging { level: info.battery_level }
-        } else if info.battery_level >= 80 {
-            PowerState::BatteryHigh
         } else if info.battery_level >= 50 {
             PowerState::BatteryHigh
         } else if info.battery_level >= 20 {

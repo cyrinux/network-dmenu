@@ -143,12 +143,12 @@ impl LifecycleManager {
 
         // Start monitoring tasks
         let state_clone = Arc::clone(&self.state);
-        let network_monitor_task = tokio::spawn(async move {
+        let _network_monitor_task = tokio::spawn(async move {
             Self::network_monitoring_loop(state_clone).await;
         });
 
         let state_clone = Arc::clone(&self.state);
-        let suspend_monitor_task = tokio::spawn(async move {
+        let _suspend_monitor_task = tokio::spawn(async move {
             Self::suspend_monitoring_loop(state_clone).await;
         });
 
@@ -190,7 +190,7 @@ impl LifecycleManager {
         
         self.event_handlers
             .entry(event)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(Box::new(handler));
     }
 
@@ -432,8 +432,8 @@ impl LifecycleManager {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 
                 for line in stdout.lines() {
-                    if line.starts_with("yes:") {
-                        let ssid = line[4..].trim();
+                    if let Some(stripped) = line.strip_prefix("yes:") {
+                        let ssid = stripped.trim();
                         if !ssid.is_empty() {
                             return Ok(Some(ssid.to_string()));
                         }
@@ -691,7 +691,7 @@ impl SystemEventHandler for SuspendHandler {
                 info!("Handling system resume - restoring zone context");
                 
                 // Use zone_manager to potentially trigger zone re-detection after resume
-                let mut zone_manager = self.zone_manager.lock().await;
+                let zone_manager = self.zone_manager.lock().await;
                 
                 if let Some(ref zone_id) = state.current_zone_id {
                     info!("Restoring zone context after resume: {}", zone_id);
@@ -730,7 +730,7 @@ impl ResumeHandler {
 #[async_trait::async_trait]
 #[async_trait::async_trait]
 impl SystemEventHandler for ResumeHandler {
-    async fn handle_event(&self, event: &SystemEvent, state: &DaemonState) -> Result<()> {
+    async fn handle_event(&self, event: &SystemEvent, _state: &DaemonState) -> Result<()> {
         if matches!(event, SystemEvent::Resume) {
             info!("Handling system resume - triggering immediate location check");
             
