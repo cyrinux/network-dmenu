@@ -267,13 +267,16 @@ impl RetryManager {
     async fn execute_with_retry(
         &self,
         action: RetryableAction,
-        _context: &ActionContext,
+        context: &ActionContext,
     ) -> RetryStatus {
         let mut attempt = 0;
+        debug!("Starting retry execution for action {:?} in zone '{}' with confidence {:.2}", 
+               action, context.zone_name, context.confidence);
 
         while attempt <= self.config.max_retries {
             attempt += 1;
-            debug!("Attempting action {:?} (attempt {}/{})", action, attempt, self.config.max_retries + 1);
+            debug!("Attempting action {:?} (attempt {}/{}) for zone '{}' with confidence {:.2}", 
+                   action, attempt, self.config.max_retries + 1, context.zone_name, context.confidence);
 
             match self.execute_action(&action).await {
                 Ok(()) => {
@@ -285,12 +288,14 @@ impl RetryManager {
                 }
                 Err(error) => {
                     let error_msg = error.to_string();
-                    debug!("Action {:?} failed on attempt {}: {}", action, attempt, error_msg);
+                    debug!("Action {:?} failed on attempt {} in zone '{}': {}", action, attempt, context.zone_name, error_msg);
 
                     if attempt > self.config.max_retries {
-                        error!("Action {:?} exceeded max retries", action);
+                        error!("Action {:?} exceeded max retries in zone '{}' (confidence: {:.2})", 
+                               action, context.zone_name, context.confidence);
                         if let Some(ref callback) = self.failure_callback {
-                            callback(&action, &error_msg);
+                            callback(&action, &format!("Zone: {}, Confidence: {:.2}, Error: {}", 
+                                                       context.zone_name, context.confidence, error_msg));
                         }
                         return RetryStatus::MaxRetriesExceeded;
                     }

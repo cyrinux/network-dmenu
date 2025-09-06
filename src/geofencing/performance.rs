@@ -1044,15 +1044,58 @@ impl CacheManager {
     }
 
     /// Get interface link speed if available
-    async fn get_interface_speed(&self, interface: &str, _command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
+    async fn get_interface_speed(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
+        // First try reading from sysfs (fastest method)
         let speed_path = format!("/sys/class/net/{}/speed", interface);
         
         match tokio::fs::read_to_string(speed_path).await {
             Ok(content) => {
-                content.trim().parse::<u64>().ok()
+                if let Ok(speed) = content.trim().parse::<u64>() {
+                    debug!("Interface {} speed from sysfs: {} Mbps", interface, speed);
+                    return Some(speed);
+                }
             }
-            Err(_) => None,
+            Err(e) => {
+                debug!("Failed to read interface speed from sysfs for {}: {}", interface, e);
+            }
         }
+        
+        // Fallback to using ethtool via command runner
+        debug!("Attempting to get interface {} speed using ethtool", interface);
+        match command_runner.run_command("ethtool", &[interface]) {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                
+                // Look for "Speed: 1000Mb/s" or similar patterns
+                for line in stdout.lines() {
+                    if line.trim().starts_with("Speed:") {
+                        let speed_str = line.trim()
+                            .replace("Speed:", "")
+                            .replace("Mb/s", "")
+                            .replace("Gb/s", "000") // Convert Gb to Mb
+                            .trim()
+                            .to_string();
+                        
+                        if let Ok(speed) = speed_str.parse::<u64>() {
+                            debug!("Interface {} speed from ethtool: {} Mbps", interface, speed);
+                            return Some(speed);
+                        }
+                    }
+                }
+                debug!("Could not parse speed from ethtool output for interface {}", interface);
+            }
+            Ok(output) => {
+                debug!("ethtool command failed for interface {}: exit code {}", 
+                       interface, output.status.code().unwrap_or(-1));
+            }
+            Err(e) => {
+                debug!("Failed to run ethtool for interface {}: {}", interface, e);
+            }
+        }
+        
+        // Final fallback - assume gigabit if we can't determine
+        debug!("Could not determine speed for interface {}, assuming 1000 Mbps", interface);
+        Some(1000)
     }
 
     /// Invalidate all caches

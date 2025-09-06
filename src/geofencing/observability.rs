@@ -875,11 +875,30 @@ impl ObservabilityManager {
     }
 
     /// Format metrics for InfluxDB line protocol
-    fn format_influxdb_metrics(metrics: &DaemonMetrics, _health: &HealthSummary) -> String {
+    fn format_influxdb_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
         
+        // Convert health status to numeric value for InfluxDB
+        let overall_health_score = match health.overall_status.as_str() {
+            "healthy" | "Healthy" => 100,
+            "degraded" | "Degraded" => 50,
+            "critical" | "Critical" => 0,
+            _ => 25, // Unknown status
+        };
+        
+        let healthy_components = health.component_statuses.values()
+            .filter(|status| matches!(status, HealthStatus::Healthy))
+            .count();
+        
+        let total_components = health.component_statuses.len();
+        let component_health_ratio = if total_components > 0 {
+            (healthy_components as f64 / total_components as f64) * 100.0
+        } else {
+            0.0
+        };
+        
         format!(
-            "geofence_daemon memory_mb={},cpu_percent={},zone_changes={},zone_confidence={},total_actions={},wifi_success_rate={},errors_total={} {}",
+            "geofence_daemon memory_mb={},cpu_percent={},zone_changes={},zone_confidence={},total_actions={},wifi_success_rate={},errors_total={},health_score={},healthy_components={},total_components={},component_health_ratio={:.1} {}",
             metrics.performance_metrics.memory_usage_mb,
             metrics.performance_metrics.cpu_usage_percent,
             metrics.zone_metrics.total_zone_changes,
@@ -887,6 +906,10 @@ impl ObservabilityManager {
             metrics.action_metrics.total_actions,
             metrics.network_metrics.wifi_scan_success_rate,
             metrics.error_metrics.total_errors,
+            overall_health_score,
+            healthy_components,
+            total_components,
+            component_health_ratio,
             timestamp
         )
     }

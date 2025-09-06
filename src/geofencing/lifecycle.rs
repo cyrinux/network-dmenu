@@ -730,21 +730,39 @@ impl ResumeHandler {
 #[async_trait::async_trait]
 #[async_trait::async_trait]
 impl SystemEventHandler for ResumeHandler {
-    async fn handle_event(&self, event: &SystemEvent, _state: &DaemonState) -> Result<()> {
+    async fn handle_event(&self, event: &SystemEvent, state: &DaemonState) -> Result<()> {
         if matches!(event, SystemEvent::Resume) {
-            info!("Handling system resume - triggering immediate location check");
+            info!("Handling system resume - triggering immediate location check (last active: {:?})", 
+                  state.last_active);
+            
+            // Check if we have a previous zone context from the daemon state
+            let previous_zone = state.current_zone_id.clone();
+            debug!("Previous zone before suspend: {:?}", previous_zone);
             
             // Trigger immediate location detection after resume
             let mut manager = self.zone_manager.lock().await;
             
             match manager.detect_location_change().await {
                 Ok(Some(change)) => {
-                    info!("Location change detected after resume: {} -> {}", 
+                    info!("Location change detected after resume: {} -> {} (suspend/resume count: {})", 
                           change.from.as_ref().map(|z| z.name.as_str()).unwrap_or("None"),
-                          change.to.name);
+                          change.to.name, state.suspend_resume_count);
+                    
+                    // If we had a zone before suspend and it's different now, log transition
+                    if let Some(prev) = &previous_zone {
+                        if prev != &change.to.name {
+                            info!("Zone transition after resume: {} -> {}", prev, change.to.name);
+                        }
+                    }
                 }
                 Ok(None) => {
-                    debug!("No location change detected after resume");
+                    debug!("No location change detected after resume (last active: {:?})", 
+                           state.last_active);
+                    
+                    // If we had a zone before, assume we're still there
+                    if let Some(prev) = &previous_zone {
+                        debug!("Assuming still in previous zone '{}' after resume", prev);
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to detect location after resume: {}", e);
