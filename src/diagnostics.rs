@@ -771,6 +771,7 @@ async fn run_dns_benchmark(
     let route_str = String::from_utf8_lossy(&route_output.stdout);
 
     // Extract the interface name from the default route
+    let default_interface = crate::utils::get_ethernet_interface();
     let interface = route_str
         .lines()
         .next()
@@ -779,7 +780,7 @@ async fn run_dns_benchmark(
                 .skip_while(|&word| word != "dev")
                 .nth(1)
         })
-        .unwrap_or("eth0");
+        .unwrap_or(&default_interface);
 
     // Set the DNS using systemd-resolved
     let set_dns_output = command_runner.run_command(

@@ -219,7 +219,7 @@ async fn stream_actions_simple(
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         handles.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
+            send_wifi_actions(&tx_clone, wifi_interface.as_deref()).await;
         }));
     }
 
@@ -380,7 +380,7 @@ async fn produce_actions_streaming(
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
         tasks.push(tokio::spawn(async move {
-            send_wifi_actions(&tx_clone, Some(wifi_interface.as_str())).await;
+            send_wifi_actions(&tx_clone, wifi_interface.as_deref()).await;
         }));
     }
 
@@ -554,7 +554,7 @@ async fn send_wifi_actions(tx: &mpsc::UnboundedSender<ActionType>, wifi_interfac
             }
         }
     } else if is_command_installed("iwctl") {
-        if let Ok(actions) = get_iwd_networks(wifi_interface.unwrap_or("wlan0"), &command_runner) {
+        if let Ok(actions) = get_iwd_networks(&crate::utils::get_wifi_interface(wifi_interface), &command_runner) {
             for action in actions {
                 // Convert library WifiAction to main WifiAction
                 let main_action = match action {

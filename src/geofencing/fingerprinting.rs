@@ -136,7 +136,8 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
     }
 
     // Fallback to IWD with iwctl
-    if let Ok(output) = command_runner.run_command("iwctl", &["station", "wlan0", "get-networks"]) {
+    let wifi_interface = crate::utils::get_wifi_interface(None);
+    if let Ok(output) = command_runner.run_command("iwctl", &["station", &wifi_interface, "get-networks"]) {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // Parse iwctl output - simplified version without signal strength

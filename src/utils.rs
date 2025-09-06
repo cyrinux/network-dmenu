@@ -1,5 +1,8 @@
 use country_emoji::flag;
 use log::debug;
+
+#[cfg(feature = "geofencing")]
+use sysinfo::Networks;
 use notify_rust::Notification;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -259,4 +262,96 @@ mod tests {
         // In a real implementation, we would mock the command execution
         // Test passed - function signature is correct
     }
+}
+
+/// Detect available network interfaces using sysinfo
+#[cfg(feature = "geofencing")]
+pub fn detect_network_interfaces() -> (Option<String>, Option<String>) {
+    let mut networks = Networks::new();
+    networks.refresh(true);
+    
+    let mut wifi_interface = None;
+    let mut ethernet_interface = None;
+    
+    debug!("Detecting network interfaces...");
+    
+    for (interface_name, _data) in networks.iter() {
+        let name = interface_name.to_string();
+        debug!("Found interface: {}", name);
+        
+        // Skip loopback and virtual interfaces
+        if name.starts_with("lo") || name.starts_with("docker") || name.starts_with("br-") {
+            continue;
+        }
+        
+        // Detect WiFi interfaces
+        if name.starts_with("wlan") || name.starts_with("wlp") || name.contains("wifi") {
+            if wifi_interface.is_none() {
+                wifi_interface = Some(name.clone());
+                debug!("Detected WiFi interface: {}", name);
+            }
+        }
+        // Detect Ethernet interfaces  
+        else if name.starts_with("eth") || name.starts_with("enp") || name.starts_with("eno") || name.starts_with("ens") {
+            if ethernet_interface.is_none() {
+                ethernet_interface = Some(name.clone());
+                debug!("Detected Ethernet interface: {}", name);
+            }
+        }
+    }
+    
+    (wifi_interface, ethernet_interface)
+}
+
+/// Get WiFi interface name with fallback detection
+pub fn get_wifi_interface(provided: Option<&str>) -> String {
+    if let Some(interface) = provided {
+        debug!("Using provided WiFi interface: {}", interface);
+        return interface.to_string();
+    }
+    
+    #[cfg(feature = "geofencing")]
+    {
+        let (wifi_iface, _) = detect_network_interfaces();
+        if let Some(interface) = wifi_iface {
+            debug!("Auto-detected WiFi interface: {}", interface);
+            return interface;
+        }
+    }
+    
+    // Fallback to common names
+    let fallback_interfaces = ["wlan0", "wlp3s0", "wlo1"];
+    for interface in &fallback_interfaces {
+        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
+            debug!("Found fallback WiFi interface: {}", interface);
+            return interface.to_string();
+        }
+    }
+    
+    debug!("No WiFi interface found, using default: wlan0");
+    "wlan0".to_string()
+}
+
+/// Get Ethernet interface name with fallback detection
+pub fn get_ethernet_interface() -> String {
+    #[cfg(feature = "geofencing")]
+    {
+        let (_, eth_iface) = detect_network_interfaces();
+        if let Some(interface) = eth_iface {
+            debug!("Auto-detected Ethernet interface: {}", interface);
+            return interface;
+        }
+    }
+    
+    // Fallback to common names
+    let fallback_interfaces = ["eth0", "enp0s3", "eno1", "ens3"];
+    for interface in &fallback_interfaces {
+        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
+            debug!("Found fallback Ethernet interface: {}", interface);
+            return interface.to_string();
+        }
+    }
+    
+    debug!("No Ethernet interface found, using default: eth0");
+    "eth0".to_string()
 }

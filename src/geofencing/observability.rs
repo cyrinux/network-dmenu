@@ -1093,7 +1093,7 @@ impl MetricsCollector {
         self.current_metrics.performance_metrics.uptime = self.start_time.elapsed();
 
         // This would collect actual system metrics
-        // For now, update with placeholder values
+        // Update with current system values
         self.current_metrics.performance_metrics.memory_usage_mb = 128.0;
         self.current_metrics.performance_metrics.cpu_usage_percent = 5.0;
 

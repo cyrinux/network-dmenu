@@ -181,7 +181,7 @@ pub fn generate_dns_actions_from_cache(cache: &DnsBenchmarkCache) -> Vec<CustomA
     // Always add DHCP revert option first
     // Include interface detection inside the privileged command
     let revert_cmd = wrap_privileged_command(
-        "iface=$(ip route show default | grep -oP 'dev \\K\\S+' | head -1); iface=${iface:-wlan0}; resolvectl revert \"${iface}\"",
+        "iface=$(ip route show default | grep -oP 'dev \\K\\S+' | head -1); iface=${iface:-$(cat /proc/net/route | awk '$2 == \"00000000\" && $3 == \"00000000\" {print $1}' | head -1)}; iface=${iface:-wlan0}; resolvectl revert \"${iface}\"",
         true
     );
 

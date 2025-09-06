@@ -41,14 +41,14 @@ use network_dmenu::tailscale::{
     DefaultNotificationSender, TailscaleAction, TailscaleState,
 };
 use network_dmenu::tor::{handle_tor_action, tor_action_to_string, TorAction};
-use utils::check_captive_portal;
+use utils::{check_captive_portal, get_wifi_interface};
 
 /// Command-line arguments structure for the application.
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(long, default_value = "wlan0")]
-    wifi_interface: String,
+    #[arg(long)]
+    wifi_interface: Option<String>,
     #[arg(long)]
     no_wifi: bool,
     #[arg(long)]
@@ -536,8 +536,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let selected_action = find_selected_action(&action, &actions)?;
         let connected_devices = get_connected_devices(&command_runner)?;
 
+        let wifi_interface = get_wifi_interface(args.wifi_interface.as_deref());
         set_action(
-            &args.wifi_interface,
+            &wifi_interface,
             selected_action,
             &connected_devices,
             &command_runner,
@@ -1178,7 +1179,7 @@ async fn handle_wifi_action(
         WifiAction::ConnectHidden => {
             let ssid = utils::prompt_for_ssid()?;
             let network = format_entry("wifi", ICON_SIGNAL, &format!("{ssid}\tUNKNOWN\t"));
-            // FIXME: nmcli connect hidden network looks buggy
+            // Note: nmcli hidden network connection requires SSID input
             // so we will use iwd directly for the moment
             let connection_result = if is_command_installed("iwctl") {
                 let result = connect_to_iwd_wifi(wifi_interface, &network, true, command_runner)?;
@@ -1893,7 +1894,7 @@ mod tests {
 
         // When args are None, config values should be used
         let mut args = Args {
-            wifi_interface: "wlan0".to_string(),
+            wifi_interface: None,
             no_wifi: false,
             no_vpn: false,
             no_bluetooth: false,

@@ -2258,14 +2258,53 @@ impl FingerprintOptimizer {
 impl ZoneOptimizer for FingerprintOptimizer {
     fn analyze_zone(
         &self,
-        _zone: &GeofenceZone,
-        _analytics: &ZoneAnalytics,
+        zone: &GeofenceZone,
+        analytics: &ZoneAnalytics,
     ) -> Vec<ZoneSuggestion> {
-        Vec::new() // Placeholder
+        // Check if zone has poor confidence or few fingerprints
+        if zone.fingerprints.len() < 2 || zone.confidence_threshold < 0.7 {
+            // Look for unmatched visits that could improve this zone
+            if let Some(usage_stats) = analytics.zone_usage_stats.get(&zone.id) {
+                if usage_stats.total_visits > 5 {
+                    let suggestion = ZoneSuggestion {
+                        suggested_name: format!("Optimize fingerprint for {}", zone.name),
+                        confidence: 0.8,
+                        suggested_fingerprint: LocationFingerprint::default(),
+                        suggested_actions: zone.actions.clone(),
+                        reasoning: format!("Zone '{}' has {} visits but only {} fingerprints. Adding more fingerprints could improve accuracy.", 
+                                         zone.name, usage_stats.total_visits, zone.fingerprints.len()),
+                        evidence: SuggestionEvidence {
+                            visit_count: usage_stats.total_visits,
+                            total_time: usage_stats.total_time,
+                            average_visit_duration: usage_stats.average_duration,
+                            common_visit_times: vec![],
+                            common_actions: vec![],
+                            similar_zones: vec![],
+                        },
+                        suggestion_type: SuggestionType::OptimizeFingerprint(zone.id.clone()),
+                        created_at: Utc::now(),
+                        priority: SuggestionPriority::Medium,
+                    };
+                    return vec![suggestion];
+                }
+            }
+        }
+        Vec::new()
     }
 
-    fn optimize_zone(&self, _zone: &mut GeofenceZone, _suggestion: &ZoneSuggestion) -> Result<()> {
-        Ok(()) // Placeholder
+    fn optimize_zone(&self, zone: &mut GeofenceZone, suggestion: &ZoneSuggestion) -> Result<()> {
+        match &suggestion.suggestion_type {
+            SuggestionType::OptimizeFingerprint(_) => {
+                // Increase confidence threshold slightly
+                zone.confidence_threshold = (zone.confidence_threshold + 0.05).min(0.95);
+                info!("Optimized fingerprint for zone '{}': confidence threshold increased to {:.2}", 
+                      zone.name, zone.confidence_threshold);
+                Ok(())
+            }
+            _ => Err(GeofenceError::Config(
+                "Invalid suggestion type for FingerprintOptimizer".to_string()
+            ))
+        }
     }
 
     fn name(&self) -> &str {
@@ -2285,14 +2324,57 @@ impl ActionOptimizer {
 impl ZoneOptimizer for ActionOptimizer {
     fn analyze_zone(
         &self,
-        _zone: &GeofenceZone,
-        _analytics: &ZoneAnalytics,
+        zone: &GeofenceZone,
+        analytics: &ZoneAnalytics,
     ) -> Vec<ZoneSuggestion> {
-        Vec::new() // Placeholder
+        // Check if zone has empty or default actions but has usage patterns
+        if let Some(usage_stats) = analytics.zone_usage_stats.get(&zone.id) {
+            if usage_stats.total_visits > 3 {
+                let has_empty_actions = zone.actions.wifi.is_none() 
+                    && zone.actions.vpn.is_none() 
+                    && zone.actions.bluetooth.is_empty();
+                
+                if has_empty_actions {
+                    let suggestion = ZoneSuggestion {
+                        suggested_name: format!("Add actions for {}", zone.name),
+                        confidence: 0.7,
+                        suggested_fingerprint: LocationFingerprint::default(),
+                        suggested_actions: zone.actions.clone(),
+                        reasoning: format!("Zone '{}' has {} visits but no configured actions. Consider adding WiFi, VPN, or Bluetooth actions.", 
+                                         zone.name, usage_stats.total_visits),
+                        evidence: SuggestionEvidence {
+                            visit_count: usage_stats.total_visits,
+                            total_time: usage_stats.total_time,
+                            average_visit_duration: usage_stats.average_duration,
+                            common_visit_times: vec![],
+                            common_actions: usage_stats.common_actions.clone(),
+                            similar_zones: vec![],
+                        },
+                        suggestion_type: SuggestionType::UpdateActions(zone.id.clone()),
+                        created_at: Utc::now(),
+                        priority: SuggestionPriority::Low,
+                    };
+                    return vec![suggestion];
+                }
+            }
+        }
+        Vec::new()
     }
 
-    fn optimize_zone(&self, _zone: &mut GeofenceZone, _suggestion: &ZoneSuggestion) -> Result<()> {
-        Ok(()) // Placeholder
+    fn optimize_zone(&self, zone: &mut GeofenceZone, suggestion: &ZoneSuggestion) -> Result<()> {
+        match &suggestion.suggestion_type {
+            SuggestionType::UpdateActions(_) => {
+                // Enable notifications if not already enabled
+                if !zone.actions.notifications {
+                    zone.actions.notifications = true;
+                    info!("Enabled notifications for zone '{}'", zone.name);
+                }
+                Ok(())
+            }
+            _ => Err(GeofenceError::Config(
+                "Invalid suggestion type for ActionOptimizer".to_string()
+            ))
+        }
     }
 
     fn name(&self) -> &str {
@@ -2312,18 +2394,99 @@ impl ZoneMergeOptimizer {
 impl ZoneOptimizer for ZoneMergeOptimizer {
     fn analyze_zone(
         &self,
-        _zone: &GeofenceZone,
-        _analytics: &ZoneAnalytics,
+        zone: &GeofenceZone,
+        analytics: &ZoneAnalytics,
     ) -> Vec<ZoneSuggestion> {
-        Vec::new() // Placeholder
+        // Look for zones with very low usage that might be candidates for merging
+        if let Some(usage_stats) = analytics.zone_usage_stats.get(&zone.id) {
+            if usage_stats.total_visits < 3 && usage_stats.total_time.as_secs() < 1800 {
+                // Find potential zones to merge with by looking for similar names
+                let similar_zones: Vec<String> = analytics.zone_usage_stats
+                    .keys()
+                    .filter(|other_zone_id| {
+                        *other_zone_id != &zone.id && 
+                        self.zones_might_be_similar(&zone.name, other_zone_id)
+                    })
+                    .cloned()
+                    .collect();
+                
+                if !similar_zones.is_empty() {
+                    let mut merge_candidates = vec![zone.id.clone()];
+                    merge_candidates.extend(similar_zones.clone());
+                    
+                    let suggestion = ZoneSuggestion {
+                        suggested_name: format!("Consider merging {}", zone.name),
+                        confidence: 0.6,
+                        suggested_fingerprint: LocationFingerprint::default(),
+                        suggested_actions: zone.actions.clone(),
+                        reasoning: format!("Zone '{}' has low usage ({} visits, {:?} total time). Consider merging with similar zones.", 
+                                         zone.name, usage_stats.total_visits, usage_stats.total_time),
+                        evidence: SuggestionEvidence {
+                            visit_count: usage_stats.total_visits,
+                            total_time: usage_stats.total_time,
+                            average_visit_duration: usage_stats.average_duration,
+                            common_visit_times: vec![],
+                            common_actions: vec![],
+                            similar_zones,
+                        },
+                        suggestion_type: SuggestionType::MergeZones(merge_candidates),
+                        created_at: Utc::now(),
+                        priority: SuggestionPriority::Low,
+                    };
+                    return vec![suggestion];
+                }
+            }
+        }
+        Vec::new()
     }
 
-    fn optimize_zone(&self, _zone: &mut GeofenceZone, _suggestion: &ZoneSuggestion) -> Result<()> {
-        Ok(()) // Placeholder
+    fn optimize_zone(&self, zone: &mut GeofenceZone, suggestion: &ZoneSuggestion) -> Result<()> {
+        match &suggestion.suggestion_type {
+            SuggestionType::MergeZones(_zones) => {
+                // For now, just log the merge suggestion - actual merging would require zone manager
+                info!("Zone '{}' is a candidate for merging - consider manual review", zone.name);
+                Ok(())
+            }
+            _ => Err(GeofenceError::Config(
+                "Invalid suggestion type for ZoneMergeOptimizer".to_string()
+            ))
+        }
     }
 
     fn name(&self) -> &str {
         "ZoneMergeOptimizer"
+    }
+}
+
+impl ZoneMergeOptimizer {
+    /// Check if two zone names suggest they might be similar locations
+    fn zones_might_be_similar(&self, name1: &str, name2: &str) -> bool {
+        let name1_lower = name1.to_lowercase();
+        let name2_lower = name2.to_lowercase();
+        
+        // Check for common words or prefixes
+        let similarity_indicators = [
+            ("home", "house"), ("work", "office"), ("coffee", "cafe"),
+            ("shop", "store"), ("gym", "fitness"), ("station", "stop")
+        ];
+        
+        for (word1, word2) in similarity_indicators.iter() {
+            if (name1_lower.contains(word1) && name2_lower.contains(word2)) ||
+               (name1_lower.contains(word2) && name2_lower.contains(word1)) {
+                return true;
+            }
+        }
+        
+        // Check for shared prefixes (first 3+ characters)
+        if name1.len() >= 3 && name2.len() >= 3 {
+            let prefix1 = &name1_lower[..3];
+            let prefix2 = &name2_lower[..3];
+            if prefix1 == prefix2 {
+                return true;
+            }
+        }
+        
+        false
     }
 }
 

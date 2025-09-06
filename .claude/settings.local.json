@@ -25,7 +25,9 @@
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"work-new\" --config /tmp/user_config.toml)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-medium\" --config /tmp/test_medium_privacy.toml)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-high\" --config /tmp/user_config.toml)",
-      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-bssid\" --config /tmp/test_config.toml)"
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-bssid\" --config /tmp/test_config.toml)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
