@@ -357,4 +357,47 @@ mod tests {
         assert_eq!(zone.id, "home");
         assert!(zone.actions.wifi.is_some());
     }
+
+    #[test]
+    fn test_zone_id_auto_generation() {
+        let toml_config = r#"
+enabled = true
+privacy_mode = "High"
+scan_interval_seconds = 30
+confidence_threshold = 0.8
+notifications = true
+
+[[zones]]
+name = "home"
+[zones.actions]
+wifi = "HomeWiFi"
+tailscale_shields = true
+
+[[zones]]
+name = "My Office"
+[zones.actions]
+wifi = "OfficeWiFi"
+tailscale_exit_node = "office-node"
+"#;
+
+        let config: GeofencingConfig = toml::from_str(toml_config).expect("Failed to parse TOML");
+        
+        assert_eq!(config.zones.len(), 2);
+        
+        // First zone: "home" should generate id "home"
+        let home_zone = config.zones.iter().find(|z| z.name == "home").unwrap();
+        assert_eq!(home_zone.id, "home");
+        assert_eq!(home_zone.actions.wifi, Some("HomeWiFi".to_string()));
+        
+        // Second zone: "My Office" should generate id "my_office"  
+        let office_zone = config.zones.iter().find(|z| z.name == "My Office").unwrap();
+        assert_eq!(office_zone.id, "my_office");
+        assert_eq!(office_zone.actions.wifi, Some("OfficeWiFi".to_string()));
+        
+        // Both zones should have default values
+        assert_eq!(home_zone.confidence_threshold, 0.8);
+        assert_eq!(office_zone.confidence_threshold, 0.8);
+        assert_eq!(home_zone.match_count, 0);
+        assert_eq!(office_zone.match_count, 0);
+    }
 }
