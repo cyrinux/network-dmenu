@@ -2099,8 +2099,11 @@ async fn handle_geofencing_commands(
         PrivacyMode, ZoneActions,
     };
 
-    // Load configuration - use default config for geofencing commands
-    let config = Config::default();
+    // Load configuration for geofencing commands
+    let config = get_config(args.config.as_ref()).unwrap_or_else(|e| {
+        debug!("Failed to load config file, using defaults: {}", e);
+        Config::default()
+    });
     let mut geofencing_config = config.geofencing;
 
     // Enable geofencing for daemon commands
@@ -2192,10 +2195,28 @@ async fn handle_geofencing_commands(
             return Ok(Some(Ok(())));
         }
 
-        let actions = ZoneActions {
-            notifications: true,
-            ..Default::default()
-        };
+        // Look for matching zone actions in config file
+        let actions = geofencing_config
+            .zones
+            .iter()
+            .find(|zone| zone.name == *zone_name || zone.id == *zone_name)
+            .map(|zone| zone.actions.clone())
+            .unwrap_or_else(|| {
+                debug!("No zone actions found in config for '{}', using defaults", zone_name);
+                ZoneActions {
+                    notifications: true,
+                    ..Default::default()
+                }
+            });
+
+        debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}", 
+               zone_name, 
+               actions.wifi,
+               actions.vpn, 
+               actions.tailscale_exit_node,
+               actions.tailscale_shields,
+               actions.bluetooth,
+               actions.custom_commands);
 
         match client.create_zone(zone_name.clone(), actions).await {
             Ok(zone) => {

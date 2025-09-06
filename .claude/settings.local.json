@@ -18,7 +18,9 @@
       "Read(//home/cyril/.local/share/**)",
       "Bash(cargo test:*)",
       "Bash(cargo clean:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"home\" --config /tmp/user_config.toml)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"public\" --config /tmp/user_config.toml)"
     ],
     "deny": [],
     "ask": []
