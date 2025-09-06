@@ -6,6 +6,7 @@
 use super::{CoarseLocation, LocationFingerprint, NetworkSignature, PrivacyMode, Result};
 use crate::command::{CommandRunner, RealCommandRunner};
 use chrono::Utc;
+use log::debug;
 use std::collections::BTreeSet;
 
 #[cfg(feature = "geofencing")]
@@ -42,6 +43,31 @@ pub async fn create_wifi_fingerprint(privacy_mode: PrivacyMode) -> Result<Locati
     Ok(fingerprint)
 }
 
+/// Find the end position of a BSSID in nmcli output format
+/// BSSID format: XX\:XX\:XX\:XX\:XX\:XX followed by non-escaped colon
+fn find_bssid_end(text: &str) -> Option<usize> {
+    // Look for pattern: XX\:XX\:XX\:XX\:XX\:XX where XX are hex digits
+    // Standard MAC address is 17 chars with escapes: 00\:01\:02\:03\:04\:05
+    let mut escaped_colons = 0;
+    
+    for (i, ch) in text.char_indices() {
+        if ch == ':' && i > 0 && text.chars().nth(i - 1) == Some('\\') {
+            escaped_colons += 1;
+        } else if ch == ':' && (i == 0 || text.chars().nth(i - 1) != Some('\\')) {
+            // Found unescaped colon - this should be end of BSSID
+            if escaped_colons == 5 && i >= 17 {
+                // Valid MAC address has 5 escaped colons
+                return Some(i);
+            } else {
+                return Some(i); // Best guess at BSSID end
+            }
+        }
+    }
+    
+    // If no unescaped colon found, return None
+    None
+}
+
 /// Scan for WiFi networks and create privacy-preserving signatures
 async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<NetworkSignature>> {
     let command_runner = RealCommandRunner;
@@ -63,28 +89,44 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                let parts: Vec<&str> = line.split(':').collect();
-                if parts.len() >= 4 {
-                    let ssid = parts[0].trim();
-                    let bssid = parts[1].trim();
-                    let signal_str = parts[2].trim();
-                    let freq_str = parts[3].trim();
+                // Parse nmcli output format: SSID:BSSID:SIGNAL:FREQ
+                // Note: BSSID contains escaped colons (\:) so we need careful parsing
+                if let Some(ssid_end) = line.find(':') {
+                    let ssid = line[..ssid_end].trim();
+                    let rest = &line[ssid_end + 1..];
+                    
+                    // Find BSSID by looking for the pattern with escaped colons
+                    // BSSID format: XX\:XX\:XX\:XX\:XX\:XX (17 chars with escapes)
+                    if let Some(bssid_end) = find_bssid_end(rest) {
+                        let bssid_raw = rest[..bssid_end].trim();
+                        let remaining = &rest[bssid_end + 1..];
+                        
+                        // Parse signal and frequency from remaining parts
+                        let parts: Vec<&str> = remaining.split(':').collect();
+                        if parts.len() >= 2 {
+                            let signal_str = parts[0].trim();
+                            let freq_str = parts[1].trim();
+                            
+                            // Clean up BSSID by removing escape characters
+                            let bssid = bssid_raw.replace("\\:", ":");
 
-                    if !ssid.is_empty() {
-                        // Parse signal strength (default to -50 if parsing fails)
-                        let signal_strength = signal_str.parse::<i8>().unwrap_or(-50);
+                            if !ssid.is_empty() {
+                                // Parse signal strength (default to -50 if parsing fails)
+                                let signal_strength = signal_str.parse::<i8>().unwrap_or(-50);
 
-                        // Parse frequency (default to 2412 MHz if parsing fails)
-                        let frequency = freq_str.parse::<u32>().unwrap_or(2412);
+                                // Parse frequency (default to 2412 MHz if parsing fails)
+                                let frequency = freq_str.parse::<u32>().unwrap_or(2412);
 
-                        if let Some(signature) = create_network_signature(
-                            ssid,
-                            bssid,
-                            signal_strength,
-                            frequency,
-                            privacy_mode,
-                        ) {
-                            signatures.insert(signature);
+                                if let Some(signature) = create_network_signature(
+                                    ssid,
+                                    &bssid,
+                                    signal_strength,
+                                    frequency,
+                                    privacy_mode,
+                                ) {
+                                    signatures.insert(signature);
+                                }
+                            }
                         }
                     }
                 }
@@ -139,10 +181,34 @@ fn create_network_signature(
         _ => hash_string(ssid),               // Hash for privacy
     };
 
-    let bssid_prefix = if bssid.len() >= 8 {
-        bssid[..8].to_string() // Just manufacturer part
-    } else {
-        "unknown".to_string()
+    let bssid_prefix = match privacy_mode {
+        PrivacyMode::High => {
+            // High privacy: Hash the full BSSID for fingerprinting
+            if !bssid.is_empty() && bssid.len() >= 8 {
+                hash_string(bssid)
+            } else {
+                debug!("BSSID too short or empty: '{}', length: {}", bssid, bssid.len());
+                "unknown".to_string()
+            }
+        }
+        PrivacyMode::Medium => {
+            // Medium privacy: Use manufacturer prefix (first 3 octets)
+            if bssid.len() >= 8 {
+                bssid[..8].to_string() // XX:XX:XX format
+            } else {
+                debug!("BSSID too short for manufacturer prefix: '{}', length: {}", bssid, bssid.len());
+                "unknown".to_string()
+            }
+        }
+        PrivacyMode::Low => {
+            // Low privacy: Store full BSSID
+            if !bssid.is_empty() {
+                bssid.to_string()
+            } else {
+                debug!("Empty BSSID in low privacy mode");
+                "unknown".to_string()
+            }
+        }
     };
 
     Some(NetworkSignature {
