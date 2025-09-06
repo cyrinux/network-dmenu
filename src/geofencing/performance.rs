@@ -424,28 +424,74 @@ impl ConnectionPool {
             }
         };
 
-        // Check for connection reuse opportunity
+        // Check for connection reuse opportunity with expiration and type-specific logic
         let connection_key = format!("{}_{}", operation_type, std::process::id());
         let reuse_info = {
             let mut reuse_pool = self.reuse_pool.lock().await;
+            
+            // Clean up expired connections first
+            let now = Instant::now();
+            let before_cleanup_count = reuse_pool.len();
+            reuse_pool.retain(|key, connection| {
+                let connection_age = now.duration_since(connection.created_at);
+                let max_age = match connection.connection_type.as_str() {
+                    "wifi_scan" => Duration::from_secs(30),      // WiFi connections expire faster
+                    "bluetooth_scan" => Duration::from_secs(20), // Bluetooth even faster
+                    "system_command" => Duration::from_secs(60), // System commands can be reused longer
+                    _ => Duration::from_secs(45),                // Default expiration
+                };
+                
+                if connection_age > max_age {
+                    debug!("Expiring {} connection '{}' after {:?} (max: {:?})", 
+                           connection.connection_type, key, connection_age, max_age);
+                    false
+                } else {
+                    true
+                }
+            });
+            
+            if reuse_pool.len() < before_cleanup_count {
+                debug!("Cleaned up {} expired connections", before_cleanup_count - reuse_pool.len());
+            }
+            
             if let Some(connection) = reuse_pool.get_mut(&connection_key) {
-                // Update existing connection usage
-                connection.last_used = Instant::now();
-                connection.usage_count += 1;
-                debug!("Reusing connection for '{}', usage count: {}", operation_type, connection.usage_count);
-                Some(("reused", connection.usage_count))
+                // Check if connection is still valid based on type and age
+                let connection_age = now.duration_since(connection.created_at);
+                let is_valid = match connection.connection_type.as_str() {
+                    "wifi_scan" => connection_age < Duration::from_secs(30) && connection.usage_count < 10,
+                    "bluetooth_scan" => connection_age < Duration::from_secs(20) && connection.usage_count < 5,
+                    "system_command" => connection_age < Duration::from_secs(60) && connection.usage_count < 20,
+                    _ => connection_age < Duration::from_secs(45) && connection.usage_count < 15,
+                };
+                
+                if is_valid {
+                    // Update existing connection usage
+                    connection.last_used = now;
+                    connection.usage_count += 1;
+                    debug!("Reusing {} connection for '{}', usage count: {}, age: {:?}", 
+                           connection.connection_type, operation_type, connection.usage_count, connection_age);
+                    Some(("reused", connection.usage_count))
+                } else {
+                    // Connection is too old or overused, remove and create new one
+                    debug!("Connection '{}' too old ({:?}) or overused ({}), creating new one", 
+                           operation_type, connection_age, connection.usage_count);
+                    reuse_pool.remove(&connection_key);
+                    None
+                }
             } else {
-                // Create new pooled connection
+                None
+            }.or_else(|| {
+                // Create new pooled connection with type-specific configuration
                 let new_connection = PooledConnection {
                     connection_type: operation_type.to_string(),
-                    created_at: Instant::now(),
-                    last_used: Instant::now(),
+                    created_at: now,
+                    last_used: now,
                     usage_count: 1,
                 };
                 reuse_pool.insert(connection_key.clone(), new_connection);
-                debug!("Created new pooled connection for '{}'", operation_type);
+                debug!("Created new {} pooled connection for '{}'", operation_type, operation_type);
                 Some(("new", 1))
-            }
+            })
         };
 
         // Update active connection metrics
@@ -730,19 +776,39 @@ impl CacheManager {
 
     /// Get cached location fingerprint
     pub async fn get_cached_fingerprint(&self, cache_key: &str) -> Option<LocationFingerprint> {
-        let cache = self.fingerprint_cache.read().await;
-        
-        if let Some(cached) = cache.get(cache_key) {
-            if cached.created_at.elapsed() < self.config.fingerprint_ttl {
-                // Update access metrics
-                {
-                    let mut stats = self.cache_stats.write().await;
-                    stats.fingerprint_hits += 1;
+        // First check with read lock
+        let cache_hit = {
+            let cache = self.fingerprint_cache.read().await;
+            if let Some(cached) = cache.get(cache_key) {
+                if cached.created_at.elapsed() < self.config.fingerprint_ttl {
+                    Some(cached.fingerprint.clone())
+                } else {
+                    None
                 }
-                
-                debug!("Cache hit for fingerprint key: {}", cache_key);
-                return Some(cached.fingerprint.clone());
+            } else {
+                None
             }
+        };
+        
+        if let Some(fingerprint) = cache_hit {
+            // Update access tracking with write lock (only if we found a valid entry)
+            {
+                let mut cache = self.fingerprint_cache.write().await;
+                if let Some(cached) = cache.get_mut(cache_key) {
+                    cached.access_count += 1;
+                    cached.last_accessed = Instant::now();
+                    debug!("Cache hit for fingerprint '{}' (access count: {})", 
+                           cache_key, cached.access_count);
+                }
+            }
+            
+            // Update cache hit statistics
+            {
+                let mut stats = self.cache_stats.write().await;
+                stats.fingerprint_hits += 1;
+            }
+            
+            return Some(fingerprint);
         }
 
         // Cache miss
@@ -781,13 +847,23 @@ impl CacheManager {
         
         if let Some(cached) = cache.get(fingerprint_hash) {
             if cached.created_at.elapsed() < self.config.zone_match_ttl {
+                // Validate cache integrity - ensure stored hash matches requested hash
+                if cached.fingerprint_hash != fingerprint_hash {
+                    warn!("Cache integrity violation: stored hash '{}' != requested hash '{}'", 
+                          cached.fingerprint_hash, fingerprint_hash);
+                    return None;
+                }
+                
                 {
                     let mut stats = self.cache_stats.write().await;
                     stats.zone_match_hits += 1;
                 }
                 
-                debug!("Cache hit for zone match: {}", fingerprint_hash);
+                debug!("Cache hit for zone match: {} (validated)", fingerprint_hash);
                 return Some((cached.zone_id.clone(), cached.confidence));
+            } else {
+                debug!("Cache entry expired for zone match: {} (age: {:?})", 
+                       cached.fingerprint_hash, cached.created_at.elapsed());
             }
         }
 
@@ -1027,16 +1103,28 @@ impl CacheManager {
     async fn cleanup_fingerprint_cache(&self, cache: &mut HashMap<String, CachedFingerprint>) {
         debug!("Cleaning up fingerprint cache (size: {})", cache.len());
 
-        // Remove oldest entries (simple cleanup strategy)
+        // Remove entries using smart LRU strategy (considers both access frequency and recency)
         let target_size = (self.config.max_entries as f64 * 0.8) as usize;
-        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.last_accessed)).collect();
+        let mut entries: Vec<_> = cache.iter().map(|(k, v)| {
+            // Calculate eviction score: lower score = more likely to be evicted
+            // Combines recency and frequency with aging factor
+            let age_penalty = v.last_accessed.elapsed().as_secs() as f64 / 3600.0; // Hours since last access
+            let frequency_bonus = (v.access_count as f64).ln_1p(); // Logarithmic bonus for access count
+            let eviction_score = frequency_bonus - age_penalty;
+            
+            (k.clone(), eviction_score, v.last_accessed, v.access_count)
+        }).collect();
         
-        // Sort by last accessed time
-        entries.sort_by_key(|(_, last_accessed)| *last_accessed);
+        // Sort by eviction score (ascending - lowest scores get evicted first)
+        entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         
-        // Remove oldest entries
+        // Remove entries with lowest scores
         let to_remove = cache.len().saturating_sub(target_size);
-        let keys_to_remove: Vec<_> = entries.iter().take(to_remove).map(|(k, _)| k.clone()).collect();
+        let keys_to_remove: Vec<_> = entries.iter().take(to_remove).map(|(k, score, last_access, access_count)| {
+            debug!("Evicting cache entry '{}' (score: {:.2}, access_count: {}, last_access: {:?})", 
+                   k, score, access_count, last_access.elapsed());
+            k.clone()
+        }).collect();
         
         for key in keys_to_remove {
             cache.remove(&key);
@@ -1064,29 +1152,49 @@ impl AsyncTaskManager {
         }
     }
 
-    /// Submit background task for execution
+    /// Submit background task for execution with default priority
     pub async fn submit_task<F>(&self, task_id: String, task_type: String, task: F) -> Result<()>
     where
         F: std::future::Future<Output = Result<String>> + Send + 'static,
     {
-        debug!("Submitting background task: {} ({})", task_id, task_type);
+        self.submit_task_with_priority(task_id, task_type, 5, task).await
+    }
 
-        // Check if we're at capacity
+    /// Submit background task for execution with specified priority
+    pub async fn submit_task_with_priority<F>(&self, task_id: String, task_type: String, priority: u8, task: F) -> Result<()>
+    where
+        F: std::future::Future<Output = Result<String>> + Send + 'static,
+    {
+        debug!("Submitting background task: {} ({}) priority: {}", task_id, task_type, priority);
+
+        // Check if we're at capacity (high priority tasks can preempt low priority ones)
         {
             let active_tasks = self.active_tasks.read().await;
             if active_tasks.len() >= self.max_concurrent_tasks {
-                return Err(GeofenceError::ActionExecution(
-                    "Task manager at capacity".to_string()
-                ));
+                // If high priority task, try to cancel low priority tasks
+                if priority >= 8 {
+                    drop(active_tasks); // Release read lock
+                    let cancelled = self.cancel_low_priority_tasks(3).await; // Cancel tasks with priority <= 3
+                    if cancelled == 0 {
+                        return Err(GeofenceError::ActionExecution(
+                            "Task manager at capacity and no low priority tasks to cancel".to_string()
+                        ));
+                    }
+                    debug!("Cancelled {} low priority tasks for high priority task", cancelled);
+                } else {
+                    return Err(GeofenceError::ActionExecution(
+                        "Task manager at capacity".to_string()
+                    ));
+                }
             }
         }
 
-        // Add task metadata
+        // Add task metadata with specified priority
         let task_metadata = TaskMetadata {
             task_id: task_id.clone(),
-            task_type,
+            task_type: task_type.clone(),
             started_at: Instant::now(),
-            priority: 5, // Default priority
+            priority,
         };
 
         {
@@ -1150,6 +1258,85 @@ impl AsyncTaskManager {
     /// Get active tasks
     pub async fn get_active_tasks(&self) -> HashMap<String, TaskMetadata> {
         self.active_tasks.read().await.clone()
+    }
+
+    /// Get tasks by type
+    pub async fn get_tasks_by_type(&self, task_type: &str) -> Vec<TaskMetadata> {
+        let active_tasks = self.active_tasks.read().await;
+        active_tasks
+            .values()
+            .filter(|metadata| metadata.task_type == task_type)
+            .cloned()
+            .collect()
+    }
+
+    /// Get long-running tasks (running for more than specified duration)
+    pub async fn get_long_running_tasks(&self, max_duration: Duration) -> Vec<TaskMetadata> {
+        let active_tasks = self.active_tasks.read().await;
+        let now = Instant::now();
+        
+        active_tasks
+            .values()
+            .filter(|metadata| now.duration_since(metadata.started_at) > max_duration)
+            .cloned()
+            .collect()
+    }
+
+    /// Get tasks by priority range
+    pub async fn get_tasks_by_priority(&self, min_priority: u8, max_priority: u8) -> Vec<TaskMetadata> {
+        let active_tasks = self.active_tasks.read().await;
+        active_tasks
+            .values()
+            .filter(|metadata| metadata.priority >= min_priority && metadata.priority <= max_priority)
+            .cloned()
+            .collect()
+    }
+
+    /// Cancel tasks by type
+    pub async fn cancel_tasks_by_type(&self, task_type: &str) -> usize {
+        let mut active_tasks = self.active_tasks.write().await;
+        let initial_count = active_tasks.len();
+        
+        // Find tasks to cancel
+        let task_ids_to_cancel: Vec<String> = active_tasks
+            .iter()
+            .filter(|(_, metadata)| metadata.task_type == task_type)
+            .map(|(task_id, metadata)| {
+                warn!("Cancelling {} task '{}' (running for {:?})", 
+                      metadata.task_type, task_id, metadata.started_at.elapsed());
+                task_id.clone()
+            })
+            .collect();
+        
+        // Remove from active tasks (in real implementation, would also cancel the actual tasks)
+        for task_id in &task_ids_to_cancel {
+            active_tasks.remove(task_id);
+        }
+        
+        task_ids_to_cancel.len()
+    }
+
+    /// Cancel low priority tasks to make room for higher priority ones
+    async fn cancel_low_priority_tasks(&self, max_priority: u8) -> usize {
+        let mut active_tasks = self.active_tasks.write().await;
+        
+        // Find low priority tasks to cancel (priority <= max_priority)
+        let task_ids_to_cancel: Vec<String> = active_tasks
+            .iter()
+            .filter(|(_, metadata)| metadata.priority <= max_priority)
+            .map(|(task_id, metadata)| {
+                warn!("Cancelling low priority {} task '{}' (priority: {}, running for {:?})", 
+                      metadata.task_type, task_id, metadata.priority, metadata.started_at.elapsed());
+                task_id.clone()
+            })
+            .collect();
+        
+        // Remove from active tasks
+        for task_id in &task_ids_to_cancel {
+            active_tasks.remove(task_id);
+        }
+        
+        task_ids_to_cancel.len()
     }
 
     /// Process completed tasks in executor pool

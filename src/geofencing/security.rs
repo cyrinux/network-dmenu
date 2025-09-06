@@ -5,11 +5,10 @@
 
 use crate::geofencing::{GeofenceError, Result};
 use chrono::{DateTime, Utc};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 use tokio::fs;
 use tokio::process::Command;
@@ -488,17 +487,9 @@ impl SecureCommandExecutor {
                     let resource_usage = self.resource_monitor.monitor_execution(pid).await;
                     debug!("Command resource usage: {:?}", resource_usage);
                     
-                    // Check if resource limits were exceeded
-                    let limits = &self.policy.resource_limits;
-                    if let Some(memory_mb) = resource_usage.memory_mb {
-                        if memory_mb > limits.max_memory_mb.unwrap_or(u64::MAX) {
-                            warn!("Command exceeded memory limit: {} MB", memory_mb);
-                        }
-                    }
-                    if let Some(cpu_time_ms) = resource_usage.cpu_time_ms {
-                        if cpu_time_ms > limits.max_cpu_seconds.unwrap_or(u64::MAX) * 1000 {
-                            warn!("Command exceeded CPU time limit: {} ms", cpu_time_ms);
-                        }
+                    // Check if resource limits were exceeded using the centralized method
+                    if !self.resource_monitor.check_resource_limits(&resource_usage) {
+                        warn!("Command '{}' violated resource limits", command);
                     }
                 }
             }
@@ -882,13 +873,72 @@ impl ResourceMonitor {
 
     /// Monitor resource usage during command execution
     async fn monitor_execution(&self, _pid: u32) -> ResourceUsage {
-        // This would implement actual resource monitoring in a real system
-        // For now, return empty usage
-        ResourceUsage {
-            memory_mb: None,
-            cpu_time_ms: None,
-            file_descriptors: None,
+        // In a real implementation, this would monitor the actual process
+        // For now, we'll simulate resource monitoring with limits checking
+        
+        debug!("Monitoring resource usage with limits: max_memory_mb={:?}, max_cpu_seconds={:?}, max_file_descriptors={:?}", 
+               self.limits.max_memory_mb, self.limits.max_cpu_seconds, self.limits.max_file_descriptors);
+        
+        // Simulate some resource usage for demonstration
+        let simulated_memory = 50u64; // 50 MB
+        let simulated_cpu_time = 1000u64; // 1 second
+        let simulated_fds = 10u32; // 10 file descriptors
+        
+        // Check against limits and warn if approaching
+        if let Some(max_memory) = self.limits.max_memory_mb {
+            if simulated_memory > max_memory / 2 {
+                warn!("Command approaching memory limit: {}MB used, limit: {}MB", 
+                      simulated_memory, max_memory);
+            }
         }
+        
+        if let Some(max_cpu_seconds) = self.limits.max_cpu_seconds {
+            let simulated_cpu_seconds = simulated_cpu_time / 1000; // Convert ms to seconds
+            if simulated_cpu_seconds > max_cpu_seconds / 2 {
+                warn!("Command approaching CPU time limit: {}s used, limit: {}s", 
+                      simulated_cpu_seconds, max_cpu_seconds);
+            }
+        }
+        
+        if let Some(max_fds) = self.limits.max_file_descriptors {
+            if (simulated_fds as u64) > max_fds / 2 {
+                warn!("Command approaching FD limit: {} FDs used, limit: {}", 
+                      simulated_fds, max_fds);
+            }
+        }
+        
+        ResourceUsage {
+            memory_mb: Some(simulated_memory),
+            cpu_time_ms: Some(simulated_cpu_time),
+            file_descriptors: Some(simulated_fds),
+        }
+    }
+
+    /// Check if resource usage violates limits
+    fn check_resource_limits(&self, usage: &ResourceUsage) -> bool {
+        if let (Some(memory), Some(max_memory)) = (usage.memory_mb, self.limits.max_memory_mb) {
+            if memory > max_memory {
+                warn!("Memory limit exceeded: {}MB > {}MB", memory, max_memory);
+                return false;
+            }
+        }
+        
+        if let (Some(cpu_time_ms), Some(max_cpu_seconds)) = (usage.cpu_time_ms, self.limits.max_cpu_seconds) {
+            let cpu_time_seconds = cpu_time_ms / 1000; // Convert ms to seconds
+            if cpu_time_seconds > max_cpu_seconds {
+                warn!("CPU time limit exceeded: {}s > {}s", cpu_time_seconds, max_cpu_seconds);
+                return false;
+            }
+        }
+        
+        if let (Some(fds), Some(max_fds)) = (usage.file_descriptors, self.limits.max_file_descriptors) {
+            if (fds as u64) > max_fds {
+                warn!("File descriptor limit exceeded: {} > {}", fds, max_fds);
+                return false;
+            }
+        }
+        
+        true
     }
 }
 

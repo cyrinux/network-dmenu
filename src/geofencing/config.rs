@@ -849,6 +849,54 @@ impl EnvVariableProvider {
             overrides,
         }
     }
+
+    /// Refresh environment variables (re-scan for new variables with the prefix)
+    pub fn refresh_environment_variables(&mut self) -> usize {
+        let old_count = self.overrides.len();
+        self.overrides.clear();
+        
+        // Reload environment variables with the current prefix
+        for (key, value) in std::env::vars() {
+            if key.starts_with(&format!("{}_", self.prefix)) {
+                // Convert environment variable name to config path
+                let config_key = key[self.prefix.len() + 1..]
+                    .to_lowercase()
+                    .replace('_', ".");
+                
+                self.overrides.insert(config_key, value);
+            }
+        }
+
+        let new_count = self.overrides.len();
+        debug!("Refreshed environment variables: {} -> {} overrides (prefix: {})", 
+               old_count, new_count, self.prefix);
+        
+        new_count
+    }
+
+    /// Get current prefix
+    pub fn get_prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Change the prefix and reload environment variables
+    pub fn change_prefix(&mut self, new_prefix: &str) -> usize {
+        debug!("Changing environment variable prefix from '{}' to '{}'", self.prefix, new_prefix);
+        self.prefix = new_prefix.to_string();
+        self.refresh_environment_variables()
+    }
+
+    /// Check if a specific environment variable with the prefix exists
+    pub fn has_env_variable(&self, variable_name: &str) -> bool {
+        let full_key = format!("{}_{}", self.prefix, variable_name.to_uppercase());
+        std::env::var(&full_key).is_ok()
+    }
+
+    /// Get a specific environment variable with the prefix
+    pub fn get_env_variable(&self, variable_name: &str) -> Option<String> {
+        let full_key = format!("{}_{}", self.prefix, variable_name.to_uppercase());
+        std::env::var(&full_key).ok()
+    }
 }
 
 // Example configuration validators
