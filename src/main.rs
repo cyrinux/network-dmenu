@@ -2380,9 +2380,23 @@ async fn handle_geofencing_commands(
                 // If daemon is running, check for zone match
                 let client = DaemonClient::new();
                 if client.is_daemon_running() {
-                    if let Ok(Some(active_zone)) = client.get_active_zone().await {
-                        println!("  Current zone: {} ({})", active_zone.name, active_zone.id);
+                    debug!("Daemon is running, requesting active zone");
+                    match client.get_active_zone().await {
+                        Ok(Some(active_zone)) => {
+                            println!("  Current zone: {} ({})", active_zone.name, active_zone.id);
+                        }
+                        Ok(None) => {
+                            debug!("No active zone returned from daemon");
+                            println!("  Current zone: None detected");
+                        }
+                        Err(e) => {
+                            debug!("Error getting active zone: {}", e);
+                            println!("  Current zone: Error - {}", e);
+                        }
                     }
+                } else {
+                    debug!("Daemon is not running");
+                    println!("  Current zone: Daemon not running");
                 }
             }
             Err(e) => eprintln!("Failed to detect location: {}", e),
