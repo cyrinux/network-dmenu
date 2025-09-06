@@ -746,7 +746,6 @@ impl RetryManager {
             "notify-send", "zenity", "kdialog",
             "echo ", "printf ", "logger ",
             "touch /tmp/", "mkdir -p /tmp/", "rm /tmp/",
-            "pactl set-sink-volume", "pactl set-source-mute", "pactl set-card-profile",
             "gsettings set", "dconf write",
             "xrandr --output", "brightnessctl set",
             "amixer set", "amixer sset",

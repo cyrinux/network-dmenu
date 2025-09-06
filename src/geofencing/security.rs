@@ -213,23 +213,6 @@ impl SecurityPolicy {
             resource_limits: Some(ResourceLimits::minimal()),
         });
 
-        // pactl (audio control)
-        commands.insert("pactl".to_string(), CommandPolicy {
-            allowed_args: vec![
-                r"^set-(sink|source)-(volume|mute)$".to_string(),
-                r"^set-card-profile$".to_string(),
-                r"^[0-9a-zA-Z\-_.@]+$".to_string(), // Device names
-                r"^[0-9]+%?$".to_string(), // Volume levels
-                r"^(0|1|toggle)$".to_string(), // Mute states
-            ],
-            forbidden_args: vec![],
-            max_execution_time: Duration::from_secs(15),
-            allowed_working_dirs: vec!["/home".to_string()],
-            env_restrictions: EnvRestrictions::safe_defaults(),
-            network_access: false,
-            resource_limits: Some(ResourceLimits::minimal()),
-        });
-
         // gsettings (GNOME settings)
         commands.insert("gsettings".to_string(), CommandPolicy {
             allowed_args: vec![

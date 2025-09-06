@@ -5,11 +5,14 @@
 
 use crate::geofencing::{LocationFingerprint, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::fs;
+
+#[cfg(feature = "geofencing")]
+use sysinfo::System;
 
 /// Movement detection state
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,7 +139,8 @@ struct MovementDetector {
 struct PowerMonitor {
     current_state: PowerState,
     last_check: DateTime<Utc>,
-    battery_path: String,
+    #[cfg(feature = "geofencing")]
+    system: Option<System>,
 }
 
 /// Individual scan event for analysis
@@ -478,11 +482,19 @@ impl MovementDetector {
 
 impl PowerMonitor {
     fn new() -> Self {
+        debug!("Initializing power monitor with sysinfo");
+        
+        #[cfg(feature = "geofencing")]
+        let system = {
+            debug!("Creating sysinfo system instance");
+            Some(System::new_all())
+        };
+        
         Self {
             current_state: PowerState::BatteryHigh, // Default assumption
             last_check: Utc::now(),
-            // TODO: my battery is here, need to handle it "/sys/class/power_supply/macsmc-battery"
-            battery_path: "/sys/class/power_supply/BAT0".to_string(),
+            #[cfg(feature = "geofencing")]
+            system,
         }
     }
 
@@ -495,23 +507,81 @@ impl PowerMonitor {
 
         self.last_check = now;
 
-        match self.read_battery_info().await {
-            Ok(info) => {
+        #[cfg(feature = "geofencing")]
+        {
+            let battery_info = if let Some(ref mut system) = self.system {
+                debug!("Refreshing system information for power state");
+                system.refresh_all();
+                
+                // Clone system for sysinfo method to avoid borrowing issues
+                let system_info = System::new_all();
+                match PowerMonitor::read_battery_info_sysinfo_static(&system_info) {
+                    Ok(info) => Some(info),
+                    Err(e) => {
+                        debug!("Failed to read battery info via sysinfo: {}", e);
+                        // Fallback to filesystem approach
+                        self.read_battery_info_fallback().await.ok()
+                    }
+                }
+            } else {
+                debug!("Sysinfo not available, using fallback battery detection");
+                self.read_battery_info_fallback().await.ok()
+            };
+
+            if let Some(info) = battery_info {
                 let old_state = self.current_state.clone();
                 self.current_state = self.classify_power_state(info);
                 
                 if old_state != self.current_state {
-                    debug!("Power state changed from {:?} to {:?}", old_state, self.current_state);
+                    info!("Power state changed from {:?} to {:?}", old_state, self.current_state);
                 }
+            } else {
+                debug!("All battery detection methods failed, keeping current state");
             }
-            Err(e) => {
-                debug!("Failed to read battery info: {}", e);
-                // Keep current state on error
+        }
+
+        #[cfg(not(feature = "geofencing"))]
+        {
+            debug!("Geofencing feature disabled, using fallback battery detection");
+            if let Ok(info) = self.read_battery_info_fallback().await {
+                let old_state = self.current_state.clone();
+                self.current_state = self.classify_power_state(info);
+                
+                if old_state != self.current_state {
+                    info!("Power state changed from {:?} to {:?} (fallback)", old_state, self.current_state);
+                }
+            } else {
+                debug!("Fallback battery detection failed, keeping current state");
             }
         }
     }
 
-    async fn read_battery_info(&self) -> Result<BatteryInfo> {
+    #[cfg(feature = "geofencing")]
+    fn read_battery_info_sysinfo_static(system: &System) -> Result<BatteryInfo> {
+        debug!("Reading battery information via sysinfo");
+        
+        // sysinfo doesn't directly support battery info in version 0.36
+        // We'll use it to check if we're on a laptop vs desktop  
+        let is_laptop = system.cpus().len() <= 8; // Heuristic: laptops usually have fewer cores
+        
+        if is_laptop {
+            debug!("Detected laptop system, trying manual battery detection");
+            // Fall back to manual detection for now, but with sysinfo system info
+            Err(crate::geofencing::GeofenceError::LocationDetection(
+                "sysinfo battery detection not implemented yet".to_string()
+            ))
+        } else {
+            debug!("Detected desktop system, assuming AC power");
+            // Desktop system - assume always plugged in
+            Ok(BatteryInfo {
+                ac_connected: true,
+                battery_level: 100,
+                charging: false,
+            })
+        }
+    }
+
+    async fn read_battery_info_fallback(&self) -> Result<BatteryInfo> {
         // Try to read AC adapter status first
         let ac_connected = if let Ok(content) = fs::read_to_string("/sys/class/power_supply/ADP1/online").await {
             content.trim() == "1"
@@ -533,26 +603,43 @@ impl PowerMonitor {
             });
         }
 
-        // Read battery information
-        let capacity_path = format!("{}/capacity", self.battery_path);
-        let status_path = format!("{}/status", self.battery_path);
-
-        let battery_level = match fs::read_to_string(&capacity_path).await {
-            Ok(content) => content.trim().parse::<u8>().unwrap_or(50),
-            Err(_) => {
-                debug!("Could not read battery capacity from {}", capacity_path);
-                return Ok(BatteryInfo {
-                    ac_connected: false,
-                    battery_level: 50, // Unknown, assume medium
-                    charging: false,
-                });
+        // Read battery information - try multiple common battery paths
+        let battery_paths = [
+            "/sys/class/power_supply/BAT0",
+            "/sys/class/power_supply/BAT1", 
+            "/sys/class/power_supply/macsmc-battery",
+        ];
+        
+        let mut battery_level = 50;
+        let mut charging = false;
+        let mut found_battery = false;
+        
+        for battery_path in &battery_paths {
+            let capacity_path = format!("{}/capacity", battery_path);
+            let status_path = format!("{}/status", battery_path);
+            
+            if let Ok(content) = fs::read_to_string(&capacity_path).await {
+                battery_level = content.trim().parse::<u8>().unwrap_or(50);
+                found_battery = true;
+                debug!("Found battery at {}: {}%", battery_path, battery_level);
+                
+                charging = if let Ok(status_content) = fs::read_to_string(&status_path).await {
+                    status_content.trim().eq_ignore_ascii_case("charging")
+                } else {
+                    false
+                };
+                break;
             }
-        };
-
-        let charging = match fs::read_to_string(&status_path).await {
-            Ok(content) => content.trim().eq_ignore_ascii_case("charging"),
-            Err(_) => false,
-        };
+        }
+        
+        if !found_battery {
+            debug!("No battery found in any of the standard paths, assuming desktop system");
+            return Ok(BatteryInfo {
+                ac_connected: true,
+                battery_level: 100,
+                charging: false,
+            });
+        }
 
         Ok(BatteryInfo {
             ac_connected,

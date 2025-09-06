@@ -1,5 +1,19 @@
 # Claude Code Development Notes
 
+## 🐧 Platform Support
+
+**network-dmenu is a Linux-only tool** that provides network management capabilities through a dmenu-style interface. It uses Linux-specific networking commands and system calls for:
+- NetworkManager integration (`nmcli`)
+- Bluetooth management (`bluetoothctl`)
+- Firewalld integration (`firewall-cmd`) 
+- Tailscale/VPN management
+- IP geolocation and network detection
+- System-specific network configuration paths
+
+**Supported Linux Distributions:** Any distribution with NetworkManager, systemd, and standard Linux networking tools.
+
+---
+
 ## Machine Learning Integration (September 2025)
 
 ### 🧠 Smart Action Sorting Implementation

@@ -131,8 +131,6 @@ pub mod time_patterns {
     pub const MORNING_ENTERTAINMENT_PENALTY: f32 = -0.1;
     /// Work hours diagnostic/VPN bonus
     pub const WORK_PRODUCTIVITY_BONUS: f32 = 0.15;
-    /// Work hours audio device bonus (meetings)
-    pub const WORK_AUDIO_BONUS: f32 = 0.1;
     /// Evening bluetooth major boost
     pub const EVENING_BLUETOOTH_MAJOR: f32 = 0.35;
     /// Evening entertainment general boost
@@ -533,15 +531,11 @@ impl ActionPrioritizer {
                 // Work hours - productivity focused environment
                 if action.contains("diagnostic") || action.contains("vpn") {
                     score += time_patterns::WORK_PRODUCTIVITY_BONUS;
-                } else if action.contains("bluetooth") && action.contains("headphones") {
-                    score += time_patterns::WORK_AUDIO_BONUS; // Audio devices for meetings
                 }
             }
             time_patterns::EVENING_START..=time_patterns::EVENING_END => {
                 // Evening - personal and entertainment use
-                if action.contains("bluetooth") && action.contains("headphones") {
-                    score += time_patterns::EVENING_BLUETOOTH_MAJOR; // Major boost for evening bluetooth headphone use
-                } else if action.contains("bluetooth") || action.contains("entertainment") {
+                if action.contains("bluetooth") || action.contains("entertainment") {
                     score += time_patterns::EVENING_ENTERTAINMENT; // General entertainment boost
                 } else if action.contains("exit") && action.contains("node") {
                     score += time_patterns::EVENING_EXIT_NODE; // Geographic shifting for content access
@@ -801,7 +795,7 @@ mod tests {
         let evening_vpn_score =
             prioritizer.calculate_temporal_score("tailscale- ✅ Enable VPN", &context);
         let evening_bluetooth_score =
-            prioritizer.calculate_temporal_score("bluetooth- 🎧 Connect Headphones", &context);
+            prioritizer.calculate_temporal_score("bluetooth- 📱 Connect Device", &context);
 
         assert!(morning_vpn_score > evening_vpn_score);
         assert!(evening_bluetooth_score > morning_vpn_score);
