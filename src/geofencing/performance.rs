@@ -257,6 +257,23 @@ struct TaskMetadata {
     priority: u8,
 }
 
+impl TaskMetadata {
+    /// Get task identifier
+    pub fn get_task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    /// Check if this is a high priority task
+    pub fn is_high_priority(&self) -> bool {
+        self.priority >= 8
+    }
+
+    /// Get task runtime duration
+    pub fn runtime(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+}
+
 /// Task completion notification
 #[derive(Debug, Clone)]
 pub struct TaskNotification {
@@ -1172,7 +1189,8 @@ impl AsyncTaskManager {
             let active_tasks = self.active_tasks.read().await;
             if active_tasks.len() >= self.max_concurrent_tasks {
                 // If high priority task, try to cancel low priority tasks
-                if priority >= 8 {
+                let is_high_priority = priority >= 8;
+                if is_high_priority {
                     drop(active_tasks); // Release read lock
                     let cancelled = self.cancel_low_priority_tasks(3).await; // Cancel tasks with priority <= 3
                     if cancelled == 0 {
@@ -1273,11 +1291,10 @@ impl AsyncTaskManager {
     /// Get long-running tasks (running for more than specified duration)
     pub async fn get_long_running_tasks(&self, max_duration: Duration) -> Vec<TaskMetadata> {
         let active_tasks = self.active_tasks.read().await;
-        let now = Instant::now();
         
         active_tasks
             .values()
-            .filter(|metadata| now.duration_since(metadata.started_at) > max_duration)
+            .filter(|metadata| metadata.runtime() > max_duration)
             .cloned()
             .collect()
     }
@@ -1303,7 +1320,7 @@ impl AsyncTaskManager {
             .filter(|(_, metadata)| metadata.task_type == task_type)
             .map(|(task_id, metadata)| {
                 warn!("Cancelling {} task '{}' (running for {:?})", 
-                      metadata.task_type, task_id, metadata.started_at.elapsed());
+                      metadata.task_type, metadata.get_task_id(), metadata.runtime());
                 task_id.clone()
             })
             .collect();
@@ -1323,10 +1340,10 @@ impl AsyncTaskManager {
         // Find low priority tasks to cancel (priority <= max_priority)
         let task_ids_to_cancel: Vec<String> = active_tasks
             .iter()
-            .filter(|(_, metadata)| metadata.priority <= max_priority)
+            .filter(|(_, metadata)| metadata.priority <= max_priority && !metadata.is_high_priority())
             .map(|(task_id, metadata)| {
                 warn!("Cancelling low priority {} task '{}' (priority: {}, running for {:?})", 
-                      metadata.task_type, task_id, metadata.priority, metadata.started_at.elapsed());
+                      metadata.task_type, metadata.get_task_id(), metadata.priority, metadata.runtime());
                 task_id.clone()
             })
             .collect();

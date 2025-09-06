@@ -130,11 +130,19 @@ pub struct ZoneActions {
     /// Tailscale shields up/down
     pub tailscale_shields: Option<bool>,
     /// Bluetooth devices to connect
+    #[serde(default)]
     pub bluetooth: Vec<String>,
     /// Custom shell commands to execute
+    #[serde(default)]
     pub custom_commands: Vec<String>,
     /// Whether to send notifications
+    #[serde(default = "default_notifications")]
     pub notifications: bool,
+}
+
+/// Default value for notifications field
+fn default_notifications() -> bool {
+    true
 }
 
 impl Default for ZoneActions {
