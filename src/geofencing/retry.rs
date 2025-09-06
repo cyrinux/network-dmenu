@@ -131,24 +131,44 @@ impl RetryManager {
         actions: &ZoneActions,
         context: &ActionContext,
     ) -> Result<()> {
-        debug!("Executing zone actions with retry for zone '{}' (confidence: {:.2})", 
-               context.zone_name, context.confidence);
+        info!("🎯 ZONE CHANGE: Starting action execution for zone '{}' (confidence: {:.2})", 
+              context.zone_name, context.confidence);
+        
+        debug!("Zone action details: WiFi={:?}, VPN={:?}, Tailscale Exit Node={:?}, Tailscale Shields={:?}, {} Bluetooth devices, {} custom commands",
+               actions.wifi, actions.vpn, actions.tailscale_exit_node, actions.tailscale_shields,
+               actions.bluetooth.len(), actions.custom_commands.len());
 
+        let action_start_time = std::time::Instant::now();
         let mut partial_failures = Vec::new();
+        let mut success_count = 0;
+        let total_actions = self.count_zone_actions(actions);
+        
+        info!("📋 Zone '{}' has {} total actions to execute", context.zone_name, total_actions);
 
         // Execute WiFi action
         if let Some(ref wifi_ssid) = actions.wifi {
+            info!("📶 [1/{}] WiFi Action: Connecting to SSID '{}'", total_actions, wifi_ssid);
+            debug!("WiFi connection attempt starting for zone '{}' to network '{}'", context.zone_name, wifi_ssid);
+            
+            let wifi_start = std::time::Instant::now();
             let action = RetryableAction::WiFiConnection(wifi_ssid.clone());
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("WiFi connection to '{}' successful", wifi_ssid);
+                    success_count += 1;
+                    info!("✅ WiFi connection to '{}' successful in {:?}", wifi_ssid, wifi_start.elapsed());
+                    debug!("WiFi action completed successfully for zone '{}' - network '{}' is now active", 
+                           context.zone_name, wifi_ssid);
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("WiFi connection to '{}' failed: {}", wifi_ssid, error);
+                    warn!("❌ WiFi connection to '{}' failed after {:?}: {}", wifi_ssid, wifi_start.elapsed(), error);
+                    debug!("WiFi action failed for zone '{}' - network '{}' connection unsuccessful", 
+                           context.zone_name, wifi_ssid);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("WiFi connection to '{}' exceeded max retries", wifi_ssid);
+                    error!("⏰ WiFi connection to '{}' exceeded max retries after {:?}", wifi_ssid, wifi_start.elapsed());
+                    debug!("WiFi action retry exhausted for zone '{}' - network '{}' connection abandoned", 
+                           context.zone_name, wifi_ssid);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
@@ -156,17 +176,29 @@ impl RetryManager {
 
         // Execute VPN action
         if let Some(ref vpn_name) = actions.vpn {
+            let vpn_action_num = if actions.wifi.is_some() { 2 } else { 1 };
+            info!("🔐 [{}/{}] VPN Action: Connecting to VPN '{}'", vpn_action_num, total_actions, vpn_name);
+            debug!("VPN connection attempt starting for zone '{}' to provider '{}'", context.zone_name, vpn_name);
+            
+            let vpn_start = std::time::Instant::now();
             let action = RetryableAction::VpnConnection(vpn_name.clone());
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("VPN connection to '{}' successful", vpn_name);
+                    success_count += 1;
+                    info!("✅ VPN connection to '{}' successful in {:?}", vpn_name, vpn_start.elapsed());
+                    debug!("VPN action completed successfully for zone '{}' - provider '{}' is now active", 
+                           context.zone_name, vpn_name);
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("VPN connection to '{}' failed: {}", vpn_name, error);
+                    warn!("❌ VPN connection to '{}' failed after {:?}: {}", vpn_name, vpn_start.elapsed(), error);
+                    debug!("VPN action failed for zone '{}' - provider '{}' connection unsuccessful", 
+                           context.zone_name, vpn_name);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("VPN connection to '{}' exceeded max retries", vpn_name);
+                    error!("⏰ VPN connection to '{}' exceeded max retries after {:?}", vpn_name, vpn_start.elapsed());
+                    debug!("VPN action retry exhausted for zone '{}' - provider '{}' connection abandoned", 
+                           context.zone_name, vpn_name);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
@@ -174,17 +206,33 @@ impl RetryManager {
 
         // Execute Tailscale exit node action
         if let Some(ref exit_node) = actions.tailscale_exit_node {
+            let mut action_num = 1;
+            if actions.wifi.is_some() { action_num += 1; }
+            if actions.vpn.is_some() { action_num += 1; }
+            
+            info!("🌐 [{}/{}] Tailscale Exit Node: Setting to '{}'", action_num, total_actions, exit_node);
+            debug!("Tailscale exit node configuration starting for zone '{}' - switching to node '{}'", 
+                   context.zone_name, exit_node);
+            
+            let exit_start = std::time::Instant::now();
             let action = RetryableAction::TailscaleExitNode(exit_node.clone());
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("Tailscale exit node '{}' configured successfully", exit_node);
+                    success_count += 1;
+                    info!("✅ Tailscale exit node '{}' configured successfully in {:?}", exit_node, exit_start.elapsed());
+                    debug!("Tailscale exit node action completed for zone '{}' - now routing through '{}'", 
+                           context.zone_name, exit_node);
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("Tailscale exit node '{}' failed: {}", exit_node, error);
+                    warn!("❌ Tailscale exit node '{}' failed after {:?}: {}", exit_node, exit_start.elapsed(), error);
+                    debug!("Tailscale exit node action failed for zone '{}' - node '{}' configuration unsuccessful", 
+                           context.zone_name, exit_node);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("Tailscale exit node '{}' exceeded max retries", exit_node);
+                    error!("⏰ Tailscale exit node '{}' exceeded max retries after {:?}", exit_node, exit_start.elapsed());
+                    debug!("Tailscale exit node retry exhausted for zone '{}' - node '{}' configuration abandoned", 
+                           context.zone_name, exit_node);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
@@ -192,74 +240,156 @@ impl RetryManager {
 
         // Execute Tailscale shields action
         if let Some(shields_up) = actions.tailscale_shields {
+            let mut action_num = 1;
+            if actions.wifi.is_some() { action_num += 1; }
+            if actions.vpn.is_some() { action_num += 1; }
+            if actions.tailscale_exit_node.is_some() { action_num += 1; }
+            
+            let shield_status = if shields_up { "ENABLING" } else { "DISABLING" };
+            info!("🛡️  [{}/{}] Tailscale Shields: {} for zone '{}'", action_num, total_actions, shield_status, context.zone_name);
+            debug!("Tailscale shields configuration starting for zone '{}' - setting shields_up={}", 
+                   context.zone_name, shields_up);
+            
+            let shields_start = std::time::Instant::now();
             let action = RetryableAction::TailscaleShields(shields_up);
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("Tailscale shields {} successfully", 
-                          if shields_up { "enabled" } else { "disabled" });
+                    success_count += 1;
+                    let status_msg = if shields_up { "ENABLED" } else { "DISABLED" };
+                    info!("✅ Tailscale shields {} successfully in {:?}", status_msg, shields_start.elapsed());
+                    debug!("Tailscale shields action completed for zone '{}' - shields are now {}", 
+                           context.zone_name, if shields_up { "active (blocking connections)" } else { "inactive (allowing connections)" });
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("Tailscale shields configuration failed: {}", error);
+                    let status_msg = if shields_up { "enable" } else { "disable" };
+                    warn!("❌ Tailscale shields {} failed after {:?}: {}", status_msg, shields_start.elapsed(), error);
+                    debug!("Tailscale shields action failed for zone '{}' - shields configuration unsuccessful", 
+                           context.zone_name);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("Tailscale shields configuration exceeded max retries");
+                    let status_msg = if shields_up { "enable" } else { "disable" };
+                    error!("⏰ Tailscale shields {} exceeded max retries after {:?}", status_msg, shields_start.elapsed());
+                    debug!("Tailscale shields retry exhausted for zone '{}' - shields configuration abandoned", 
+                           context.zone_name);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
         }
 
         // Execute Bluetooth actions
-        for device_name in &actions.bluetooth {
+        if !actions.bluetooth.is_empty() {
+            let mut bluetooth_action_num = 1;
+            if actions.wifi.is_some() { bluetooth_action_num += 1; }
+            if actions.vpn.is_some() { bluetooth_action_num += 1; }
+            if actions.tailscale_exit_node.is_some() { bluetooth_action_num += 1; }
+            if actions.tailscale_shields.is_some() { bluetooth_action_num += 1; }
+            
+            info!("📱 [{}/{}] Bluetooth Actions: Connecting {} devices", bluetooth_action_num, total_actions, actions.bluetooth.len());
+            debug!("Bluetooth connections starting for zone '{}' - devices: {:?}", context.zone_name, actions.bluetooth);
+        }
+        
+        for (bt_index, device_name) in actions.bluetooth.iter().enumerate() {
+            let bt_start = std::time::Instant::now();
             let action = RetryableAction::BluetoothConnection(device_name.clone());
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("Bluetooth device '{}' connected successfully", device_name);
+                    success_count += 1;
+                    info!("✅ Bluetooth device '{}' connected successfully in {:?}", device_name, bt_start.elapsed());
+                    debug!("Bluetooth device {} ({}/{}) connected for zone '{}'", 
+                           device_name, bt_index + 1, actions.bluetooth.len(), context.zone_name);
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("Bluetooth device '{}' connection failed: {}", device_name, error);
+                    warn!("❌ Bluetooth device '{}' connection failed after {:?}: {}", device_name, bt_start.elapsed(), error);
+                    debug!("Bluetooth device {} ({}/{}) failed for zone '{}' - connection unsuccessful", 
+                           device_name, bt_index + 1, actions.bluetooth.len(), context.zone_name);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("Bluetooth device '{}' connection exceeded max retries", device_name);
+                    error!("⏰ Bluetooth device '{}' connection exceeded max retries after {:?}", device_name, bt_start.elapsed());
+                    debug!("Bluetooth device {} retry exhausted for zone '{}' - connection abandoned", 
+                           device_name, context.zone_name);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
         }
 
         // Execute custom commands
-        for command in &actions.custom_commands {
+        if !actions.custom_commands.is_empty() {
+            let mut custom_action_num = 1;
+            if actions.wifi.is_some() { custom_action_num += 1; }
+            if actions.vpn.is_some() { custom_action_num += 1; }
+            if actions.tailscale_exit_node.is_some() { custom_action_num += 1; }
+            if actions.tailscale_shields.is_some() { custom_action_num += 1; }
+            if !actions.bluetooth.is_empty() { custom_action_num += 1; }
+            
+            info!("⚙️  [{}/{}] Custom Commands: Executing {} commands", custom_action_num, total_actions, actions.custom_commands.len());
+            debug!("Custom commands starting for zone '{}' - commands: {:?}", context.zone_name, actions.custom_commands);
+        }
+        
+        for (cmd_index, command) in actions.custom_commands.iter().enumerate() {
+            let cmd_start = std::time::Instant::now();
             let action = RetryableAction::CustomCommand(command.clone());
             match self.execute_with_retry(action.clone(), context).await {
                 RetryStatus::Success => {
-                    info!("Custom command '{}' executed successfully", command);
+                    success_count += 1;
+                    info!("✅ Custom command '{}' executed successfully in {:?}", command, cmd_start.elapsed());
+                    debug!("Custom command {} ({}/{}) executed for zone '{}'", 
+                           command, cmd_index + 1, actions.custom_commands.len(), context.zone_name);
                 }
                 RetryStatus::Failed(error) => {
-                    warn!("Custom command '{}' failed: {}", command, error);
+                    warn!("❌ Custom command '{}' failed after {:?}: {}", command, cmd_start.elapsed(), error);
+                    debug!("Custom command {} ({}/{}) failed for zone '{}' - execution unsuccessful", 
+                           command, cmd_index + 1, actions.custom_commands.len(), context.zone_name);
                     partial_failures.push((action, error));
                 }
                 RetryStatus::MaxRetriesExceeded => {
-                    error!("Custom command '{}' exceeded max retries", command);
+                    error!("⏰ Custom command '{}' exceeded max retries after {:?}", command, cmd_start.elapsed());
+                    debug!("Custom command {} retry exhausted for zone '{}' - execution abandoned", 
+                           command, context.zone_name);
                     partial_failures.push((action, "Max retries exceeded".to_string()));
                 }
             }
         }
 
-        // Handle partial failures
+        // Generate comprehensive execution summary
+        let total_execution_time = action_start_time.elapsed();
+        let failure_count = partial_failures.len();
+        
+        if failure_count == 0 {
+            info!("🎉 ZONE CHANGE COMPLETE: All {} actions for zone '{}' executed successfully in {:?}", 
+                  success_count, context.zone_name, total_execution_time);
+            debug!("Zone action execution perfect success for '{}' - all systems configured", context.zone_name);
+        } else if success_count > 0 {
+            warn!("⚠️  ZONE CHANGE PARTIAL: {}/{} actions succeeded for zone '{}' in {:?} - {} failed", 
+                  success_count, total_actions, context.zone_name, total_execution_time, failure_count);
+            debug!("Zone action execution partially completed for '{}' - some systems may need manual intervention", 
+                   context.zone_name);
+        } else {
+            error!("❌ ZONE CHANGE FAILED: All {} actions for zone '{}' failed in {:?}", 
+                   total_actions, context.zone_name, total_execution_time);
+            debug!("Zone action execution completely failed for '{}' - zone change unsuccessful", context.zone_name);
+        }
+
+        // Handle partial failures  
         if !partial_failures.is_empty() {
-            let failure_count = partial_failures.len();
-            let total_actions = self.count_zone_actions(actions);
-            
-            warn!("Zone actions partially completed: {}/{} actions failed", 
-                  failure_count, total_actions);
+            warn!("📋 Failed actions summary for zone '{}':", context.zone_name);
+            for (i, (action, error)) in partial_failures.iter().enumerate() {
+                warn!("  {}: {:?} - {}", i + 1, action, error);
+            }
             
             // Add failed actions to retry queue
             for (action, error) in partial_failures {
+                debug!("Scheduling retry for failed action {:?} in zone '{}'", action, context.zone_name);
                 self.schedule_retry(action, error, &context.zone_id);
             }
+            
+            info!("Failed actions have been queued for automatic retry");
         }
 
-        debug!("Zone action execution completed for zone '{}'", context.zone_name);
+        // Final debug summary
+        debug!("Zone action execution completed for zone '{}' - Total: {}, Success: {}, Failed: {}, Duration: {:?}", 
+               context.zone_name, total_actions, success_count, failure_count, total_execution_time);
         Ok(())
     }
 
@@ -475,33 +605,61 @@ impl RetryManager {
             }
 
             RetryableAction::TailscaleShields(shields_up) => {
-                debug!("Executing Tailscale shields configuration: {}", shields_up);
+                let action_desc = if *shields_up { "ENABLING" } else { "DISABLING" };
+                debug!("🛡️  Executing Tailscale shields configuration: {} (shields_up={})", action_desc, shields_up);
                 
                 if crate::command::is_command_installed("tailscale") {
+                    debug!("Tailscale command found - proceeding with shields configuration");
+                    
                     let shield_arg = if *shields_up {
                         "--shields-up=true"
                     } else {
                         "--shields-up=false"
                     };
                     
+                    debug!("Executing command: tailscale set {}", shield_arg);
+                    let cmd_start = std::time::Instant::now();
                     let result = command_runner.run_command("tailscale", &["set", shield_arg]);
+                    let cmd_duration = cmd_start.elapsed();
                     
                     match result {
                         Ok(output) if output.status.success() => {
-                            debug!("Tailscale shields configuration successful");
+                            let status_msg = if *shields_up { "ENABLED" } else { "DISABLED" };
+                            debug!("✅ Tailscale shields configuration successful - shields are now {} (took {:?})", status_msg, cmd_duration);
+                            
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stdout.trim().is_empty() {
+                                debug!("Tailscale command output: {}", stdout.trim());
+                            }
                             Ok(())
                         }
                         Ok(output) => {
                             let stderr = String::from_utf8_lossy(&output.stderr);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            warn!("❌ Tailscale shields command failed after {:?} with exit code: {:?}", 
+                                 cmd_duration, output.status.code());
+                            
+                            if !stdout.trim().is_empty() {
+                                warn!("Tailscale stdout: {}", stdout.trim());
+                            }
+                            if !stderr.trim().is_empty() {
+                                warn!("Tailscale stderr: {}", stderr.trim());
+                            }
+                            
                             Err(GeofenceError::ActionExecution(format!(
-                                "Tailscale shields configuration failed: {}", stderr
+                                "Tailscale shields configuration failed (exit code: {:?}): {}", 
+                                output.status.code(), stderr
                             )))
                         }
-                        Err(e) => Err(GeofenceError::ActionExecution(format!(
-                            "Failed to execute tailscale: {}", e
-                        ))),
+                        Err(e) => {
+                            error!("❌ Failed to execute tailscale command after {:?}: {}", cmd_duration, e);
+                            Err(GeofenceError::ActionExecution(format!(
+                                "Failed to execute tailscale: {}", e
+                            )))
+                        }
                     }
                 } else {
+                    warn!("⚠️  Tailscale command not found - cannot configure shields");
                     Err(GeofenceError::ActionExecution(
                         "tailscale not available for shields configuration".to_string()
                     ))

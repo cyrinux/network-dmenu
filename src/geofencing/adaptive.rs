@@ -481,6 +481,7 @@ impl PowerMonitor {
         Self {
             current_state: PowerState::BatteryHigh, // Default assumption
             last_check: Utc::now(),
+            // TODO: my battery is here, need to handle it "/sys/class/power_supply/macsmc-battery"
             battery_path: "/sys/class/power_supply/BAT0".to_string(),
         }
     }
@@ -513,6 +514,8 @@ impl PowerMonitor {
     async fn read_battery_info(&self) -> Result<BatteryInfo> {
         // Try to read AC adapter status first
         let ac_connected = if let Ok(content) = fs::read_to_string("/sys/class/power_supply/ADP1/online").await {
+            content.trim() == "1"
+        } else if let Ok(content) = fs::read_to_string("/sys/class/power_supply/macsmc-ac/online").await {
             content.trim() == "1"
         } else if let Ok(content) = fs::read_to_string("/sys/class/power_supply/AC/online").await {
             content.trim() == "1"

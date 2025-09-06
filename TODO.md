@@ -1,1 +1,4 @@
+- update CLAUDE.md
+- keep somewhere that is a linux only tool
+- i feel like for geofencing code you have done just skaffolding with no actions really done for bluetooth, tailscale, vpn etc, finish the implementation of this geofencing
 - remove audio related stuff

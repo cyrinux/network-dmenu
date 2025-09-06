@@ -231,23 +231,48 @@ impl GeofencingDaemon {
             // Handle zone change
             if let Some(change) = location_change {
                 info!(
-                    "Zone change detected: {} -> {} (confidence: {:.2})",
+                    "🌍 ZONE CHANGE DETECTED: {} -> {} (confidence: {:.2}%)",
                     change
                         .from
                         .as_ref()
                         .map(|z| z.name.as_str())
                         .unwrap_or("None"),
                     change.to.name,
-                    change.confidence
+                    change.confidence * 100.0
                 );
-                debug!("Zone change details - ID: {}, Actions: WiFi={:?}, VPN={:?}, Tailscale Exit={:?}, Shields={:?}, Bluetooth={:?}, Custom commands={}",
-                    change.to.id,
-                    change.suggested_actions.wifi,
-                    change.suggested_actions.vpn,
-                    change.suggested_actions.tailscale_exit_node,
-                    change.suggested_actions.tailscale_shields,
-                    change.suggested_actions.bluetooth,
-                    change.suggested_actions.custom_commands.len());
+                
+                debug!("🔍 Zone change analysis:");
+                debug!("  • From Zone: {}", 
+                       change.from.as_ref().map(|z| format!("'{}' (ID: {})", z.name, z.id)).unwrap_or("None".to_string()));
+                debug!("  • To Zone: '{}' (ID: {})", change.to.name, change.to.id);
+                debug!("  • Confidence Score: {:.2}%", change.confidence * 100.0);
+                debug!("  • Threshold: {:.2}", change.to.confidence_threshold);
+                
+                debug!("📋 Zone '{}' action summary:", change.to.name);
+                debug!("  • WiFi: {}", change.suggested_actions.wifi.as_ref().map(|s| s.as_str()).unwrap_or("None"));
+                debug!("  • VPN: {}", change.suggested_actions.vpn.as_ref().map(|s| s.as_str()).unwrap_or("None"));
+                debug!("  • Tailscale Exit Node: {}", change.suggested_actions.tailscale_exit_node.as_ref().map(|s| s.as_str()).unwrap_or("None"));
+                debug!("  • Tailscale Shields: {}", 
+                       match change.suggested_actions.tailscale_shields {
+                           Some(true) => "Enable",
+                           Some(false) => "Disable", 
+                           None => "No change"
+                       });
+                debug!("  • Bluetooth Devices: {} ({})", 
+                       change.suggested_actions.bluetooth.len(),
+                       if change.suggested_actions.bluetooth.is_empty() {
+                           "none".to_string()
+                       } else {
+                           change.suggested_actions.bluetooth.join(", ")
+                       });
+                debug!("  • Custom Commands: {} ({})", 
+                       change.suggested_actions.custom_commands.len(),
+                       if change.suggested_actions.custom_commands.is_empty() {
+                           "none".to_string()
+                       } else {
+                           change.suggested_actions.custom_commands.join("; ")
+                       });
+                debug!("  • Notifications: {}", if change.suggested_actions.notifications { "Enabled" } else { "Disabled" });
 
                 // Execute zone actions
                 debug!("Executing zone actions for zone '{}'", change.to.name);
