@@ -1,7 +1,16 @@
-# General settings
+# Network DMenu Configuration File
+# Complete configuration example with all available options
+# Copy this to ~/.config.toml or ~/config.toml and modify as needed
+
+# ============================================================================
+# GENERAL SETTINGS
+# ============================================================================
+
+# DMenu command and appearance
 dmenu_cmd = "dmenu"
 dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bind='alt-w:change-query('wifi')' -f --bind='alt-m:change-query('mullvad')' -f --bind='alt-b:change-query('bluetooth')' -f --bind='alt-s:change-query('sign')' -f --bind='alt-e:change-query('exit-node')' -f --bind='alt-v:change-query('vpn')' -f --bind='alt-d:change-query('diagnostic')'"
 
+# Exit node display limits (optional)
 # Limit the number of exit nodes shown per country (sorted by priority)
 # max_nodes_per_country = 2
 
@@ -15,6 +24,10 @@ dmenu_args = "-f --no-multi -f --bind='alt-t:change-query('tailscale')' -f --bin
 # You can also apply these filters at runtime with command-line parameters:
 # --max-nodes-per-country, --max-nodes-per-city, and --country (these will override config file settings)
 
+# ============================================================================
+# CUSTOM ACTIONS
+# ============================================================================
+
 [[actions]]
 display = "📡 DNS: Use DHCP server"
 cmd = "sudo resolvectl revert wlan0"
@@ -27,7 +40,9 @@ cmd = "sudo resolvectl dns wlan0 '1.1.1.1#cloudflare-dns.com'; sudo resolvectl d
 display = "📡 DNS: Use Hagezi's server"
 cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.com'; sudo resolvectl dnsovertls wlan0 yes"
 
-# Geofencing Configuration
+# ============================================================================
+# GEOFENCING CONFIGURATION
+# ============================================================================
 # Automatically detect location changes using WiFi fingerprinting and execute network actions
 [geofencing]
 # Enable geofencing daemon
@@ -49,82 +64,239 @@ confidence_threshold = 0.8
 # Send desktop notifications on zone changes
 notifications = true
 
-# Geofence zones - these are automatically created via CLI commands
-# Use: network-dmenu --create-zone "home" to create a new zone
-# Example zones (automatically populated by the daemon):
+# ============================================================================
+# GEOFENCE ZONES
+# ============================================================================
+# Define zones that trigger automatic network configuration changes
+# IMPORTANT: These are automatically created via CLI commands, but you can also define them manually
 
+# HOME ZONE EXAMPLE
 [[geofencing.zones]]
 id = "home-12345678"
 name = "Home"
-created_at = "2025-09-04T12:00:00Z"
+created_at = "2025-09-06T12:00:00Z"
 
 # Zone actions - what to do when entering this zone
 [geofencing.zones.actions]
-# Send desktop notifications
+# Send desktop notifications when entering this zone
 notifications = true
 
 # Connect to specific WiFi network
-wifi = "HomeWiFi"
+wifi = "HomeWiFi-5G"
 
-# Connect to VPN
-vpn = "HomeVPN"
+# Connect to VPN (uses NetworkManager connection name)
+# vpn = "HomeVPN"
 
-# Set Tailscale exit node
-tailscale_exit_node = "home-server"
+# Set Tailscale exit node ("auto", "none", or specific node hostname/IP)
+tailscale_exit_node = "none"
 
-# Enable/disable Tailscale shields
+# Enable/disable Tailscale shields (true = block incoming connections)
 tailscale_shields = false
 
-# Connect Bluetooth devices
-bluetooth = ["Bluetooth Headphones", "Wireless Mouse"]
+# Connect Bluetooth devices (by device name)
+bluetooth = ["WH-1000XM4", "Magic Mouse", "AirPods Pro"]
 
-# Execute custom commands
+# Execute custom commands when entering zone
 custom_commands = [
     "systemctl --user start syncthing",
-    "notify-send 'Welcome Home' 'Network configured for home use'"
+    "notify-send 'Welcome Home' 'Network configured for home use'",
+    "pactl set-default-sink homeaudio"
 ]
 
-# WiFi fingerprint (automatically generated)
+# WiFi fingerprint (automatically generated - don't edit manually)
 [geofencing.zones.fingerprint]
-confidence_score = 0.90
-timestamp = "2025-09-04T12:00:00Z"
+confidence_score = 0.95
+timestamp = "2025-09-06T12:00:00Z"
 # WiFi signatures are automatically collected and hashed for privacy
 
+# OFFICE ZONE EXAMPLE
 [[geofencing.zones]]
 id = "office-87654321" 
 name = "Office"
-created_at = "2025-09-04T09:00:00Z"
+created_at = "2025-09-06T09:00:00Z"
 
 [geofencing.zones.actions]
 notifications = true
-wifi = "OfficeWiFi"
-vpn = "CorporateVPN"
+wifi = "Corporate-WiFi"
+vpn = "VPN-Corporate"
 tailscale_exit_node = "office-gateway"
+# Enable shields at work for security
 tailscale_shields = true
+bluetooth = ["Work Headset"]
 custom_commands = [
     "systemctl --user stop syncthing",
-    "notify-send 'At Office' 'Corporate network configured'"
+    "notify-send 'At Office' 'Corporate network configured'",
+    "slack --startup"
+]
+
+[geofencing.zones.fingerprint]
+confidence_score = 0.90
+timestamp = "2025-09-06T09:00:00Z"
+
+# CAFE/PUBLIC WIFI EXAMPLE
+[[geofencing.zones]]
+id = "cafe-11223344"
+name = "Coffee Shop"
+created_at = "2025-09-06T14:30:00Z"
+
+[geofencing.zones.actions] 
+notifications = true
+wifi = "CafeWiFi-Guest"
+vpn = "Mullvad-Public"
+# Always enable shields on public WiFi for security
+tailscale_shields = true
+bluetooth = []  # Don't auto-connect Bluetooth on public networks
+custom_commands = [
+    "notify-send 'Public WiFi' 'Secure VPN connection enabled'",
+    "mullvad connect"
 ]
 
 [geofencing.zones.fingerprint]
 confidence_score = 0.85
-timestamp = "2025-09-04T09:00:00Z"
+timestamp = "2025-09-06T14:30:00Z"
 
-# Coffee shop example
+# MOBILE ZONE EXAMPLE (for mobile hotspot/cellular)
 [[geofencing.zones]]
-id = "cafe-11223344"
-name = "Coffee Shop"
-created_at = "2025-09-04T14:30:00Z"
+id = "mobile-99887766"
+name = "Mobile Hotspot"
+created_at = "2025-09-06T16:00:00Z"
 
-[geofencing.zones.actions] 
+[geofencing.zones.actions]
 notifications = true
-wifi = "CafeWiFi"
-vpn = "PublicVPN"
+# No WiFi for mobile zones
+# wifi = ""
+vpn = "Mullvad-Mobile"
+tailscale_exit_node = "auto"
 tailscale_shields = true
+bluetooth = ["AirPods Pro"]  # Keep essential devices only
 custom_commands = [
-    "notify-send 'Public WiFi' 'Secure connection enabled'"
+    "notify-send 'On Mobile Data' 'Data-saving mode activated'",
+    "systemctl --user stop backup-sync"
 ]
 
 [geofencing.zones.fingerprint]
-confidence_score = 0.75
-timestamp = "2025-09-04T14:30:00Z"
+confidence_score = 0.80
+timestamp = "2025-09-06T16:00:00Z"
+
+# ============================================================================
+# ADVANCED GEOFENCING FEATURES (Optional)
+# ============================================================================
+
+# ML-powered zone suggestions and optimization
+[geofencing.advanced_zones]
+# Enable ML-driven zone suggestions
+enable_ml_suggestions = true
+# Minimum visits before suggesting zone creation
+min_visits_for_suggestion = 5
+# Minimum time spent before suggesting zone creation (in minutes)
+min_time_for_suggestion_minutes = 30
+# Enable automatic zone optimization
+enable_auto_optimization = true
+# Enable hierarchical zones (work building contains meeting rooms)
+enable_hierarchical_zones = false
+
+# Performance and caching settings
+[geofencing.cache]
+# WiFi fingerprint cache TTL (in seconds)
+fingerprint_ttl_seconds = 300
+# Network state cache TTL (in seconds) 
+network_state_ttl_seconds = 60
+# Zone match cache TTL (in seconds)
+zone_match_ttl_seconds = 120
+# Maximum cache entries
+max_entries = 1000
+
+# Adaptive scanning based on movement patterns
+[geofencing.adaptive_scanning]
+# Base scanning frequency (in seconds)
+base_frequency_seconds = 30
+# Minimum scanning frequency when stationary (in seconds)
+min_frequency_seconds = 60
+# Maximum scanning frequency when moving (in seconds) 
+max_frequency_seconds = 10
+# Power-saving mode settings
+enable_power_saving = true
+# Battery level threshold for power saving (percentage)
+power_save_battery_threshold = 20
+
+# Security settings
+[geofencing.security]
+# Security policy level ("strict", "balanced", "permissive")
+policy = "balanced"
+# Maximum failed action attempts before zone is disabled
+max_failed_attempts = 5
+# Timeout for zone actions (in seconds)
+action_timeout_seconds = 30
+# Enable command sandboxing
+enable_sandboxing = true
+# Require confirmation for high-risk actions
+require_confirmation = false
+
+# Retry behavior for failed actions
+[geofencing.retry]
+# Maximum retry attempts for failed actions
+max_retries = 3
+# Base delay before first retry (in milliseconds)
+base_delay_ms = 1000
+# Maximum delay between retries (in milliseconds)
+max_delay_ms = 30000
+# Exponential backoff multiplier
+backoff_multiplier = 2.0
+# Enable jitter to avoid thundering herd
+enable_jitter = true
+
+# Observability and monitoring
+[geofencing.observability]
+# Enable metrics collection
+metrics_enabled = true
+# Metrics collection interval (in seconds)
+metrics_interval_seconds = 60
+# Enable distributed tracing
+tracing_enabled = false
+# Trace sampling rate (0.0 to 1.0)
+trace_sampling_rate = 0.1
+# Health check interval (in seconds)
+health_check_interval_seconds = 30
+
+# Export configuration
+[geofencing.observability.export]
+# Export format ("prometheus", "json", "influxdb")
+format = "json"
+# Export endpoint URL (optional)
+# endpoint = "http://localhost:8080/metrics"
+# Export interval (in seconds)
+interval_seconds = 300
+# Export to local files
+export_to_file = true
+# File path for exports
+file_path = "/tmp/network-dmenu-metrics.json"
+
+# Logging configuration
+[geofencing.observability.logging]
+# Minimum log level ("debug", "info", "warn", "error")
+min_level = "info"
+# Maximum events to buffer
+buffer_size = 1000
+# Include source code locations in logs
+include_source = false
+
+# ============================================================================
+# USAGE EXAMPLES AND CLI COMMANDS
+# ============================================================================
+
+# To create zones automatically:
+# network-dmenu --create-zone "home"     # Creates zone at current location
+# network-dmenu --daemon                 # Start geofencing daemon
+# network-dmenu --where-am-i             # Check current location
+# network-dmenu --list-zones             # List all configured zones
+
+# To test zone actions manually:
+# network-dmenu --test-zone "home"       # Test zone actions without changing location
+
+# Debugging and monitoring:
+# RUST_LOG=debug network-dmenu --daemon  # Start with detailed logging
+# network-dmenu --daemon-status          # Check daemon status
+
+# Configuration validation:
+# network-dmenu --validate-config        # Check config for errors
+# network-dmenu --validate-config --config ~/.config.toml  # Check specific file

@@ -1,0 +1,78 @@
+# Minimal Network DMenu Configuration
+# Copy this to ~/.config.toml or ~/config.toml and customize
+
+# Basic dmenu configuration
+dmenu_cmd = "dmenu"
+dmenu_args = "-i -p 'Network:'"
+
+# Custom DNS actions
+[[actions]]
+display = "📡 DNS: Use Cloudflare (1.1.1.1)"
+cmd = "sudo resolvectl dns wlan0 1.1.1.1 1.0.0.1"
+
+[[actions]]
+display = "📡 DNS: Use DHCP default"
+cmd = "sudo resolvectl revert wlan0"
+
+# Geofencing - automatic network switching based on location
+[geofencing]
+enabled = true
+privacy_mode = "High"              # Only WiFi networks, hashed for privacy
+scan_interval_seconds = 30         # Check location every 30 seconds
+confidence_threshold = 0.8         # How sure to be before switching (0.0-1.0)
+notifications = true               # Show desktop notifications
+
+# Example zone: Home
+# Create this with: network-dmenu --create-zone "home"
+[[geofencing.zones]]
+name = "Home"
+id = "home"
+
+[geofencing.zones.actions]
+notifications = true
+wifi = "Your-Home-WiFi"                    # WiFi network name
+tailscale_exit_node = "none"               # No exit node at home
+tailscale_shields = false                  # Allow incoming connections at home
+bluetooth = ["Headphones", "Mouse"]        # Auto-connect these devices
+custom_commands = [
+    "notify-send 'Welcome Home!'"
+]
+
+# Example zone: Work/Office
+[[geofencing.zones]]
+name = "Office" 
+id = "office"
+
+[geofencing.zones.actions]
+notifications = true
+wifi = "Office-WiFi"                       # Office WiFi network
+vpn = "Work-VPN"                          # Connect to work VPN
+tailscale_exit_node = "office-server"     # Route through office
+tailscale_shields = true                  # Block incoming for security
+bluetooth = ["Work Headset"]             # Only work devices
+custom_commands = [
+    "notify-send 'At Work' 'VPN connected'"
+]
+
+# Example zone: Public WiFi (cafe, airport, etc.)
+[[geofencing.zones]]
+name = "Public WiFi"
+id = "public"
+
+[geofencing.zones.actions]
+notifications = true
+vpn = "Mullvad"                           # Always use VPN on public WiFi
+tailscale_shields = true                  # Block all incoming connections
+bluetooth = []                            # Don't auto-connect anything
+custom_commands = [
+    "notify-send 'Public WiFi' 'VPN enabled for security'"
+]
+
+# USAGE:
+# 1. Copy this file to ~/.config.toml
+# 2. Edit WiFi names, VPN connections, and device names above
+# 3. Validate: network-dmenu --validate-config
+# 4. Run: network-dmenu --create-zone "home" (while at home)
+# 5. Run: network-dmenu --create-zone "office" (while at office)  
+# 6. Start daemon: network-dmenu --daemon
+# 7. Test: network-dmenu --where-am-i

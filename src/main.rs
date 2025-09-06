@@ -150,6 +150,9 @@ struct Args {
         hide = true
     )]
     geofence_daemon_internal: bool,
+
+    #[arg(long, help = "Validate configuration file and exit")]
+    validate_config: bool,
 }
 
 /// Configuration structure for the application.
@@ -323,6 +326,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "ml")]
     {
         network_dmenu::initialize_ml_system();
+    }
+
+    // Handle validate-config flag
+    if args.validate_config {
+        let config_path = args
+            .config
+            .clone()
+            .or_else(|| {
+                config_dir().map(|dir| dir.join("config.toml"))
+            })
+            .unwrap_or_else(|| dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("config.toml"));
+
+        debug!("📋 Validating configuration file: {}", config_path.display());
+
+        match validate_config_file(&config_path).await {
+            Ok(()) => {
+                println!("✅ Configuration file is valid");
+                return Ok(());
+            }
+            Err(e) => {
+                error!("❌ Configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     // Handle geofencing commands
@@ -1927,6 +1956,136 @@ mod tests {
             _ => panic!("Expected TestConnectivity action"),
         }
     }
+}
+
+/// Validate configuration file syntax and structure
+async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    debug!("🔍 Checking if config file exists: {}", config_path.display());
+    
+    if !config_path.exists() {
+        return Err(format!("Configuration file not found: {}", config_path.display()).into());
+    }
+
+    debug!("📖 Reading configuration file");
+    let config_content = fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    if config_content.trim().is_empty() {
+        return Err("Configuration file is empty".into());
+    }
+
+    debug!("🔍 Parsing TOML syntax");
+    // First check basic TOML syntax
+    let parsed_toml: toml::Value = toml::from_str(&config_content)
+        .map_err(|e| format!("Invalid TOML syntax: {}", e))?;
+
+    debug!("✅ TOML syntax is valid");
+
+    // Try to parse as our Config structure
+    debug!("🔍 Validating configuration structure");
+    let _config: Config = toml::from_str(&config_content)
+        .map_err(|e| format!("Invalid configuration structure: {}", e))?;
+
+    debug!("✅ Configuration structure is valid");
+
+    // Validate geofencing configuration if present
+    #[cfg(feature = "geofencing")]
+    {
+        if let Some(geofencing_table) = parsed_toml.get("geofencing") {
+            debug!("🔍 Validating geofencing configuration");
+            
+            // Check if zones are present
+            if let Some(zones) = geofencing_table.get("zones") {
+                if let Some(zones_array) = zones.as_array() {
+                    debug!("📋 Validating {} geofencing zones", zones_array.len());
+                    for (i, zone) in zones_array.iter().enumerate() {
+                        validate_zone_config(zone, i)?;
+                    }
+                } else {
+                    return Err("geofencing.zones must be an array".into());
+                }
+            }
+            
+            debug!("✅ Geofencing configuration is valid");
+        }
+    }
+
+    // Validate custom actions if present
+    if let Some(actions_table) = parsed_toml.get("actions") {
+        if let Some(actions_array) = actions_table.as_array() {
+            debug!("🔍 Validating {} custom actions", actions_array.len());
+            for (i, action) in actions_array.iter().enumerate() {
+                validate_custom_action(action, i)?;
+            }
+        } else {
+            return Err("actions must be an array".into());
+        }
+    }
+
+    println!("✅ Configuration file validation completed successfully");
+    Ok(())
+}
+
+/// Validate a single geofencing zone configuration
+#[cfg(feature = "geofencing")]
+fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let zone_table = zone.as_table()
+        .ok_or_else(|| format!("Zone {} must be a table", index))?;
+
+    // Check required fields
+    if !zone_table.contains_key("name") && !zone_table.contains_key("id") {
+        return Err(format!("Zone {} missing required 'name' or 'id' field", index).into());
+    }
+
+    // Validate actions if present
+    if let Some(actions) = zone_table.get("actions") {
+        let actions_table = actions.as_table()
+            .ok_or_else(|| format!("Zone {} actions must be a table", index))?;
+
+        // Validate bluetooth field if present
+        if let Some(bluetooth) = actions_table.get("bluetooth") {
+            if !bluetooth.is_array() {
+                return Err(format!("Zone {} bluetooth field must be an array", index).into());
+            }
+        }
+
+        // Validate custom_commands field if present  
+        if let Some(custom_commands) = actions_table.get("custom_commands") {
+            if !custom_commands.is_array() {
+                return Err(format!("Zone {} custom_commands field must be an array", index).into());
+            }
+        }
+    }
+
+    debug!("✅ Zone {} configuration is valid", index);
+    Ok(())
+}
+
+/// Validate a single custom action configuration
+fn validate_custom_action(action: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let action_table = action.as_table()
+        .ok_or_else(|| format!("Action {} must be a table", index))?;
+
+    // Check required fields
+    if !action_table.contains_key("display") {
+        return Err(format!("Action {} missing required 'display' field", index).into());
+    }
+    
+    if !action_table.contains_key("cmd") {
+        return Err(format!("Action {} missing required 'cmd' field", index).into());
+    }
+
+    // Validate field types
+    if !action_table.get("display").unwrap().is_str() {
+        return Err(format!("Action {} 'display' field must be a string", index).into());
+    }
+
+    if !action_table.get("cmd").unwrap().is_str() {
+        return Err(format!("Action {} 'cmd' field must be a string", index).into());
+    }
+
+    debug!("✅ Action {} configuration is valid", index);
+    Ok(())
 }
 
 /// Handle geofencing-specific commands
