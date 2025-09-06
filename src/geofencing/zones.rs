@@ -10,7 +10,7 @@ use super::{
     PrivacyMode, Result, ZoneActions,
 };
 use chrono::{DateTime, Utc};
-use log::info;
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -180,12 +180,44 @@ impl ZoneManager {
         Ok(())
     }
 
-    /// Create a new geofence zone from current location
+    /// Create a new geofence zone from current location or add fingerprint to existing zone
     pub async fn create_zone_from_current_location(
         &mut self,
         name: String,
         actions: ZoneActions,
     ) -> Result<GeofenceZone> {
+        // Check if a zone with this name already exists
+        let existing_zone = self
+            .zones
+            .iter()
+            .find(|(_, zone)| zone.name == name)
+            .map(|(id, zone)| (id.clone(), zone.clone()));
+
+        if let Some((existing_id, existing_zone)) = existing_zone {
+            debug!("Zone '{}' already exists with ID '{}'. Adding fingerprint instead of creating duplicate.", name, existing_id);
+            
+            // Add fingerprint to existing zone
+            match self.add_fingerprint_to_zone(&name).await {
+                Ok(true) => {
+                    debug!("Successfully added new fingerprint to existing zone '{}'", name);
+                    // Return updated zone
+                    return Ok(self.zones.get(&existing_id).unwrap().clone());
+                }
+                Ok(false) => {
+                    debug!("Fingerprint too similar to existing ones, returning existing zone '{}'", name);
+                    // Return existing zone even if fingerprint wasn't added
+                    return Ok(existing_zone);
+                }
+                Err(e) => {
+                    warn!("Failed to add fingerprint to existing zone '{}': {}", name, e);
+                    // Return existing zone as fallback
+                    return Ok(existing_zone);
+                }
+            }
+        }
+
+        debug!("Creating new zone '{}' as no existing zone found with this name", name);
+
         // Create location fingerprint
         let fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
 

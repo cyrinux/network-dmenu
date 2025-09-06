@@ -124,11 +124,11 @@ struct Args {
     daemon_status: bool,
 
     #[cfg(feature = "geofencing")]
-    #[arg(long, help = "Create geofence zone from current location")]
+    #[arg(long, help = "Create geofence zone from current location (or add fingerprint if zone exists)")]
     create_zone: Option<String>,
 
     #[cfg(feature = "geofencing")]
-    #[arg(long, help = "Add fingerprint to existing zone (for large areas)")]
+    #[arg(long, help = "Add fingerprint to existing zone (for large areas with multiple rooms)")]
     add_fingerprint: Option<String>,
 
     #[cfg(feature = "geofencing")]
@@ -2209,6 +2209,11 @@ async fn handle_geofencing_commands(
                 }
             });
 
+        // Check if actions are configured for user feedback
+        let has_configured_actions = actions.wifi.is_some() || actions.vpn.is_some() || 
+               actions.tailscale_exit_node.is_some() || actions.tailscale_shields.is_some() ||
+               !actions.bluetooth.is_empty() || !actions.custom_commands.is_empty();
+
         debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}", 
                zone_name, 
                actions.wifi,
@@ -2220,14 +2225,27 @@ async fn handle_geofencing_commands(
 
         match client.create_zone(zone_name.clone(), actions).await {
             Ok(zone) => {
-                println!("Created zone '{}' with ID: {}", zone.name, zone.id);
+                // Check if this was a new zone or updated existing zone
+                let is_new_zone = zone.fingerprints.len() == 1 && zone.match_count == 0;
+                
+                if is_new_zone {
+                    println!("✅ Created new zone '{}' with ID: {}", zone.name, zone.id);
+                } else {
+                    println!("✅ Updated existing zone '{}' with ID: {}", zone.name, zone.id);
+                }
+                
                 if let Some(first_fingerprint) = zone.fingerprints.first() {
                     println!(
-                        "Confidence score: {:.2}",
+                        "📊 Confidence score: {:.2}",
                         first_fingerprint.confidence_score
                     );
                 }
-                println!("Fingerprints: {}", zone.fingerprints.len());
+                println!("📍 Fingerprints: {}", zone.fingerprints.len());
+                
+                // Show zone actions
+                if has_configured_actions {
+                    println!("🎯 Zone actions configured from config file");
+                }
             }
             Err(e) => error!("Failed to create zone: {}", e),
         }
