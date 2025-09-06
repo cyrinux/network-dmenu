@@ -160,7 +160,9 @@ impl Default for ZoneActions {
 }
 
 /// Geographic zone with location fingerprint and associated actions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+#[derive(Deserialize)]
+#[serde(from = "GeofenceZoneHelper")]
 pub struct GeofenceZone {
     /// Unique zone identifier
     pub id: String,
@@ -178,6 +180,56 @@ pub struct GeofenceZone {
     pub last_matched: Option<DateTime<Utc>>,
     /// Number of times this zone has been entered
     pub match_count: u32,
+}
+
+/// Helper struct for deserializing GeofenceZone with optional id field
+#[derive(Debug, Deserialize)]
+struct GeofenceZoneHelper {
+    /// Optional zone identifier (will be generated from name if not provided)
+    pub id: Option<String>,
+    /// Human-readable zone name
+    pub name: String,
+    /// Location fingerprints for matching (supports multiple fingerprints per zone)
+    #[serde(default)]
+    pub fingerprints: Vec<LocationFingerprint>,
+    /// Confidence threshold for zone matching (0.0 to 1.0)
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f64,
+    /// Actions to execute in this zone
+    pub actions: ZoneActions,
+    /// When this zone was created
+    #[serde(default = "chrono::Utc::now")]
+    pub created_at: DateTime<Utc>,
+    /// Last time this zone was matched
+    pub last_matched: Option<DateTime<Utc>>,
+    /// Number of times this zone has been entered
+    #[serde(default)]
+    pub match_count: u32,
+}
+
+impl From<GeofenceZoneHelper> for GeofenceZone {
+    fn from(helper: GeofenceZoneHelper) -> Self {
+        let id = helper.id.unwrap_or_else(|| {
+            // Generate ID from name: lowercase, replace spaces with underscores
+            helper.name.to_lowercase().replace(' ', "_")
+        });
+        
+        Self {
+            id,
+            name: helper.name,
+            fingerprints: helper.fingerprints,
+            confidence_threshold: helper.confidence_threshold,
+            actions: helper.actions,
+            created_at: helper.created_at,
+            last_matched: helper.last_matched,
+            match_count: helper.match_count,
+        }
+    }
+}
+
+/// Default confidence threshold
+fn default_confidence_threshold() -> f64 {
+    0.8
 }
 
 /// Geofencing configuration
