@@ -49,9 +49,9 @@ cmd = "sudo resolvectl dns wlan0 '76.76.2.11#x-hagezi-ultimate.freedns.controld.
 enabled = true
 
 # Privacy mode for location detection
-# - "High": Only WiFi networks, hashed identifiers, local processing only (recommended)
-# - "Medium": WiFi + Bluetooth beacons, some caching allowed (planned)
-# - "Low": All methods including IP geolocation (planned)
+# - "High": Only WiFi networks, hashed identifiers, local processing only (recommended for security)
+# - "Medium": WiFi + Bluetooth beacons, hashed MAC addresses, improved accuracy
+# - "Low": All methods including IP geolocation, best accuracy but reduced privacy
 privacy_mode = "High"
 
 # How often to scan for location changes (in seconds)

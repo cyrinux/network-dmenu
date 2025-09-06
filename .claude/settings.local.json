@@ -22,7 +22,9 @@
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"home\" --config /tmp/user_config.toml)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"public\" --config /tmp/user_config.toml)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --add-fingerprint \"home\" --config /tmp/user_config.toml)",
-      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"work-new\" --config /tmp/user_config.toml)"
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"work-new\" --config /tmp/user_config.toml)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-medium\" --config /tmp/test_medium_privacy.toml)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-high\" --config /tmp/user_config.toml)"
     ],
     "deny": [],
     "ask": []

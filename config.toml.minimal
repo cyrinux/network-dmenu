@@ -17,7 +17,7 @@ cmd = "sudo resolvectl revert wlan0"
 # Geofencing - automatic network switching based on location
 [geofencing]
 enabled = true
-privacy_mode = "High"              # Only WiFi networks, hashed for privacy
+privacy_mode = "High"              # "High": WiFi only (secure), "Medium": WiFi+Bluetooth, "Low": All methods+IP geolocation
 scan_interval_seconds = 30         # Check location every 30 seconds
 confidence_threshold = 0.8         # How sure to be before switching (0.0-1.0)
 notifications = true               # Show desktop notifications
