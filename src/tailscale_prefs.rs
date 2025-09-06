@@ -105,9 +105,9 @@ mod tests {
         assert!(prefs.is_some());
 
         let prefs = prefs.unwrap();
-        assert_eq!(prefs.ShieldsUp, false);
-        assert_eq!(prefs.RouteAll, true);
-        assert_eq!(prefs.ExitNodeAllowLANAccess, true);
+        assert!(!prefs.ShieldsUp);
+        assert!(prefs.RouteAll);
+        assert!(prefs.ExitNodeAllowLANAccess);
         assert_eq!(prefs.ExitNodeIP, Some("100.101.102.103".to_string()));
     }
 

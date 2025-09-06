@@ -67,7 +67,6 @@ pub fn wrap_privileged_command(command: &str, use_shell: bool) -> String {
 /// let cmd = wrap_privileged_commands(&cmds);
 /// // Returns appropriate command for pkexec or sudo
 /// ```
-#[allow(dead_code)]
 pub fn wrap_privileged_commands(commands: &[&str]) -> String {
     let priv_cmd = get_privilege_command();
     let joined = commands.join(" && ");
@@ -86,19 +85,16 @@ pub fn wrap_privileged_commands(commands: &[&str]) -> String {
 /// Check if the current user has privilege escalation available
 ///
 /// Returns true if either pkexec or sudo is available and configured
-#[allow(dead_code)]
 pub fn has_privilege_escalation() -> bool {
     which("pkexec").is_ok() || which("sudo").is_ok()
 }
 
 /// Check if GUI privilege escalation (pkexec) is available
-#[allow(dead_code)]
 pub fn has_gui_privilege_escalation() -> bool {
     which("pkexec").is_ok()
 }
 
 /// Get a user-friendly description of the privilege method
-#[allow(dead_code)]
 pub fn get_privilege_method_description() -> &'static str {
     if which("pkexec").is_ok() {
         "GUI authentication (pkexec)"
@@ -137,7 +133,7 @@ mod tests {
     fn test_wrap_multiple_commands() {
         let commands = vec![
             "resolvectl dns wlan0 '1.1.1.1'",
-            "resolvectl dnsovertls wlan0 yes"
+            "resolvectl dnsovertls wlan0 yes",
         ];
         let wrapped = wrap_privileged_commands(&commands);
         assert!(wrapped.contains("&&"));
@@ -158,16 +154,13 @@ mod tests {
     fn test_has_privilege_escalation() {
         // This should be true on most systems with either sudo or pkexec
         let has_priv = has_privilege_escalation();
-        assert!(has_priv || !has_priv); // Always passes, just checking it doesn't panic
+        // Test passed if we reach this point - function doesn't panic
+        let _ = has_priv; // Use the variable to avoid unused variable warning
     }
 
     #[test]
     fn test_privilege_method_description() {
         let desc = get_privilege_method_description();
-        assert!(
-            desc.contains("pkexec") ||
-            desc.contains("sudo") ||
-            desc.contains("No privilege")
-        );
+        assert!(desc.contains("pkexec") || desc.contains("sudo") || desc.contains("No privilege"));
     }
 }

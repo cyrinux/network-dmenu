@@ -1,5 +1,5 @@
 use crate::command::{is_command_installed, CommandRunner};
-use crate::constants::{ICON_CHECK, ICON_LEAF, ICON_STAR, MULLVAD_CONNECTED_API, SUGGESTED_CHECK};
+use crate::constants::{ICON_CHECK, ICON_STAR, MULLVAD_CONNECTED_API, SUGGESTED_CHECK};
 use crate::format_entry;
 use crate::utils::get_flag;
 use log::{debug, error};
@@ -37,8 +37,41 @@ fn extract_country_code_from_hostname(hostname: &str) -> &str {
     "unknown"
 }
 
+/// Extract a city/location identifier from a hostname.
+///
+/// Attempts to extract a meaningful city/location identifier from hostnames like:
+/// - "us-nyc-01.example.com" -> "NYC"
+/// - "eu-amsterdam-02.ts.net" -> "Amsterdam"
+/// - "server-dallas.ts.net" -> "Dallas"
+/// - "random-hostname" -> "Various"
+///
+/// Returns a city name or "Various" if not found.
+fn extract_city_from_hostname(hostname: &str) -> String {
+    // Static regex for hostname city parsing
+    static CITY_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?i)(?:^[a-z]{2}-([a-z]{3,})|([a-z]{3,})-\d|server-([a-z]{3,})|([a-z]{3,})-server)",
+        )
+        .unwrap()
+    });
+
+    if let Some(captures) = CITY_REGEX.captures(hostname) {
+        for i in 1..=4 {
+            if let Some(city_match) = captures.get(i) {
+                let city = city_match.as_str();
+                // Capitalize first letter
+                let mut chars = city.chars();
+                if let Some(first) = chars.next() {
+                    return format!("{}{}", first.to_uppercase(), chars.as_str());
+                }
+            }
+        }
+    }
+
+    "Various".to_string()
+}
+
 /// Structs to represent Tailscale JSON response
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleStatus {
     #[serde(rename = "Version", default)]
@@ -55,7 +88,6 @@ pub struct TailscaleStatus {
     pub peer: HashMap<String, TailscalePeer>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleSelf {
     #[serde(rename = "ID", default)]
@@ -87,7 +119,6 @@ pub struct TailscaleState {
     pub node_signing_key: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscalePeer {
     #[serde(rename = "ID", default)]
@@ -116,24 +147,45 @@ pub struct TailscalePeer {
     pub tags: Vec<String>,
     #[serde(rename = "CapMap", default, skip_serializing_if = "Option::is_none")]
     pub cap_map: Option<HashMap<String, Option<serde_json::Value>>>,
+    // Additional fields for ML predictions
+    #[serde(rename = "LastHandshake", default)]
+    pub last_handshake: Option<String>,
+    #[serde(rename = "LastSeen", default)]
+    pub last_seen: Option<String>,
+    #[serde(rename = "RxBytes", default)]
+    pub rx_bytes: u64,
+    #[serde(rename = "TxBytes", default)]
+    pub tx_bytes: u64,
+    #[serde(rename = "Created", default)]
+    pub created: Option<String>,
+    #[serde(rename = "CurAddr", default)]
+    pub cur_addr: Option<String>,
+    #[serde(rename = "Relay", default)]
+    pub relay: Option<String>,
+    #[serde(rename = "PeerAPIURL", default)]
+    pub peer_api_url: Option<Vec<String>>,
+    #[serde(rename = "Capabilities", default)]
+    pub capabilities: Vec<String>,
+    #[serde(rename = "InNetworkMap", default)]
+    pub in_network_map: bool,
+    #[serde(rename = "InMagicSock", default)]
+    pub in_magic_sock: bool,
+    #[serde(rename = "InEngine", default)]
+    pub in_engine: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TailscaleLocation {
     #[serde(rename = "Country", default)]
     pub country: String,
-    #[allow(dead_code)]
     #[serde(rename = "CountryCode", default)]
     pub country_code: String,
     #[serde(rename = "City", default)]
     pub city: String,
-    #[allow(dead_code)]
     #[serde(rename = "CityCode", default)]
     pub city_code: String,
-    #[allow(dead_code)]
     #[serde(rename = "Latitude", default)]
     pub latitude: f64,
-    #[allow(dead_code)]
     #[serde(rename = "Longitude", default)]
     pub longitude: f64,
     #[serde(rename = "Priority", default)]
@@ -244,6 +296,7 @@ pub enum TailscaleAction {
     SetAcceptRoutes(bool),
     SetEnable(bool),
     SetExitNode(String),
+    SetSuggestedExitNode,
     SetShields(bool),
     ShowLockStatus,
     SignLockedNode(String),
@@ -274,6 +327,28 @@ pub fn get_mullvad_actions(
     let status = &state.status;
 
     log::debug!("Found {} peers in Tailscale status", status.peer.len());
+
+    // Get ML predictions for best exit nodes if ML feature is enabled
+    #[cfg(feature = "ml")]
+    let ml_predictions = {
+        let peers: Vec<crate::tailscale::TailscalePeer> = status
+            .peer
+            .values()
+            .filter(|p| p.exit_node_option && p.dns_name.contains("mullvad.ts.net"))
+            .cloned()
+            .collect();
+
+        if !peers.is_empty() {
+            let predictions = crate::ml_integration::predict_best_exit_nodes(&peers, 5);
+            log::debug!("ML predictions for exit nodes: {:?}", predictions);
+            predictions
+        } else {
+            Vec::new()
+        }
+    };
+
+    #[cfg(not(feature = "ml"))]
+    let ml_predictions: Vec<(String, f32)> = Vec::new();
 
     // Group nodes by country and city
     let mut nodes_by_country: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
@@ -311,25 +386,31 @@ pub fn get_mullvad_actions(
         }
 
         // Get country and city from location data
-        let country = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+        let country = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.country.is_empty() {
-                "Unknown".to_string()
+                "Unknown"
             } else {
-                loc.country.clone()
+                &loc.country
             }
         });
 
-        let city = peer.location.as_ref().map_or("Unknown".to_string(), |loc| {
+        let city = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.city.is_empty() {
-                "Unknown".to_string()
+                "Unknown"
             } else {
-                loc.city.clone()
+                &loc.city
             }
         });
 
         // Add to the country and city groups
-        nodes_by_country.entry(country).or_default().push(peer);
-        nodes_by_city.entry(city).or_default().push(peer);
+        nodes_by_country
+            .entry(country.to_string())
+            .or_default()
+            .push(peer);
+        nodes_by_city
+            .entry(city.to_string())
+            .or_default()
+            .push(peer);
     }
 
     // Function to sort nodes by priority (highest first)
@@ -383,7 +464,25 @@ pub fn get_mullvad_actions(
     // Format the selected nodes for display
     let mut mullvad_actions = Vec::new();
 
-    for (node_name, peer) in selected_nodes {
+    // Helper to get ML score for a node
+    let get_ml_score = |node_name: &str| -> Option<f32> {
+        ml_predictions
+            .iter()
+            .find(|(name, _)| name == node_name || name.trim_end_matches('.') == node_name)
+            .map(|(_, score)| *score)
+    };
+
+    // Sort nodes by ML score if available
+    let mut sorted_nodes: Vec<_> = selected_nodes.into_iter().collect();
+    sorted_nodes.sort_by(|(name_a, _), (name_b, _)| {
+        let score_a = get_ml_score(name_a).unwrap_or(0.0);
+        let score_b = get_ml_score(name_b).unwrap_or(0.0);
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (node_name, peer) in sorted_nodes {
         let country = peer.location.as_ref().map_or("Unknown", |loc| {
             if loc.country.is_empty() {
                 "Unknown"
@@ -400,14 +499,14 @@ pub fn get_mullvad_actions(
             }
         });
 
-        let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+        let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
         let is_active = active_exit_node == &node_name;
         // Store all node information before formatting
         mullvad_actions.push((
             country.to_string(),
             city.to_string(),
             node_name.clone(),
-            node_ip,
+            node_ip.to_string(),
             is_active,
         ));
     }
@@ -427,7 +526,8 @@ pub fn get_mullvad_actions(
         .map(|(country, city, node_name, node_ip, is_active)| {
             let flag = get_flag(&country);
             let display_icon = if is_active { ICON_CHECK } else { &flag };
-            let display = format!("{} ({})\t{}\t{}", country, city, node_ip, node_name);
+            // Include IP address in display for extract_node_ip() to work
+            let display = format!("{} ({})\t{} [{}]", country, city, node_name, node_ip);
             format_entry("mullvad", display_icon, &display)
         })
         .collect();
@@ -446,31 +546,37 @@ pub fn get_mullvad_actions(
         })
         .map(|(_, peer)| {
             let node_name = peer.dns_name.trim_end_matches('.').to_string();
-            let node_short_name = extract_short_name(&node_name);
             let is_active = active_exit_node == &node_name;
-            let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+            let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
 
-            // Get country code and flag
-            let country = peer.location.as_ref().map_or_else(
-                || extract_country_code_from_hostname(&node_name),
+            // Get country and city information
+            let (country, city) = peer.location.as_ref().map_or_else(
+                || {
+                    let country = extract_country_code_from_hostname(&node_name);
+                    let city = extract_city_from_hostname(&node_name);
+                    (country.to_string(), city)
+                },
                 |loc| {
-                    if loc.country.is_empty() {
+                    let country = if loc.country.is_empty() {
                         "unknown"
                     } else {
                         &loc.country
-                    }
+                    };
+                    let city = if loc.city.is_empty() {
+                        extract_city_from_hostname(&node_name)
+                    } else {
+                        loc.city.clone()
+                    };
+                    (country.to_string(), city)
                 },
             );
-            let flag = get_flag(country);
+            let flag = get_flag(&country);
 
-            // Create display text with active check
-            let active_mark = if is_active { ICON_CHECK } else { &flag };
-            let display_text = format!(
-                "{} {} - {} {} [{}]",
-                active_mark, node_short_name, node_ip, node_name, country
-            );
+            // Create display text with name first, then location in parentheses
+            let display_icon = if is_active { ICON_CHECK } else { &flag };
+            let display_text = format!("{} ({}, {}) [{}]", node_name, country, city, node_ip);
 
-            format_entry("exit-node", ICON_LEAF, &display_text)
+            format_entry("exit-node", display_icon, &display_text)
         })
         .collect();
 
@@ -487,7 +593,7 @@ pub fn get_mullvad_actions(
                 // Mark as suggested and move to top
                 let mut existing_action = mullvad_results.remove(pos);
                 if !existing_action.contains(SUGGESTED_CHECK) {
-                    existing_action = format!("{} (suggested {})", existing_action, ICON_STAR);
+                    existing_action = format!("{} (suggested)", existing_action);
                 }
                 mullvad_results.insert(0, existing_action);
             } else if let Some(pos) = other_nodes
@@ -503,16 +609,38 @@ pub fn get_mullvad_actions(
                     .values()
                     .find(|p| p.dns_name.trim_end_matches('.') == suggested_name)
                 {
-                    let node_short_name = extract_short_name(&suggested_name);
-                    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
+                    let node_ip = peer.tailscale_ips.first().map(String::as_str).unwrap_or("");
                     let is_active = active_exit_node == &suggested_name;
+
+                    // Get country and city for consistent formatting
+                    let (country, city) = peer.location.as_ref().map_or_else(
+                        || {
+                            let country = extract_country_code_from_hostname(&suggested_name);
+                            let city = extract_city_from_hostname(&suggested_name);
+                            (country.to_string(), city)
+                        },
+                        |loc| {
+                            let country = if loc.country.is_empty() {
+                                "unknown"
+                            } else {
+                                &loc.country
+                            };
+                            let city = if loc.city.is_empty() {
+                                extract_city_from_hostname(&suggested_name)
+                            } else {
+                                loc.city.clone()
+                            };
+                            (country.to_string(), city)
+                        },
+                    );
+
                     let icon = if is_active { ICON_CHECK } else { ICON_STAR };
                     let suggested_action = format_entry(
                         "exit-node",
                         icon,
                         &format!(
-                            "{} - {} - {} (suggested)",
-                            node_short_name, node_ip, suggested_name
+                            "{} ({}, {}) [{}] (suggested)",
+                            suggested_name, country, city, node_ip
                         ),
                     );
                     mullvad_results.insert(0, suggested_action);
@@ -539,15 +667,28 @@ pub fn get_mullvad_actions(
 
 /// Parse the exit-node suggest output
 fn parse_exit_node_suggest(output: &str) -> Option<String> {
-    output
+    // Try the expected format first
+    if let Some(node) = output
         .lines()
         .find(|line| line.starts_with("Suggested exit node:"))
         .and_then(|line| line.split(':').nth(1))
         .map(|s| s.trim().trim_end_matches('.').to_string())
+    {
+        return Some(node);
+    }
+
+    // If that doesn't work, check if the output is just the node name
+    let trimmed = output.trim();
+    if !trimmed.is_empty() && !trimmed.contains('\n') && trimmed.contains('.') {
+        debug!("Parsing suggested node from plain output: {}", trimmed);
+        return Some(trimmed.trim_end_matches('.').to_string());
+    }
+
+    None
 }
 
 /// Helper function to extract node name from the action line.
-#[allow(dead_code)]
+#[cfg(test)]
 fn extract_node_name(line: &str) -> String {
     let parts: Vec<&str> = line.split_whitespace().collect();
     parts.get(1).unwrap_or(&"").to_string()
@@ -591,121 +732,15 @@ pub async fn check_mullvad() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Parses a Mullvad line from the Tailscale exit-node list output.
-#[allow(dead_code)]
-fn parse_mullvad_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
-    let parts: Vec<&str> = regex.split(line).collect();
-    let node_ip = parts.first().unwrap_or(&"").trim();
-    let node_name = parts.get(1).unwrap_or(&"").trim();
-    let country = parts.get(2).unwrap_or(&"").trim();
-    let city = parts.get(3).unwrap_or(&"").trim();
-    let is_active = active_exit_node == node_name;
-
-    // Get country flag emoji
-    let flag = get_flag(country);
-    // Use check mark instead of flag when node is active
-    let display_icon = if is_active { ICON_CHECK } else { &flag };
-
-    format_entry(
-        "mullvad",
-        display_icon,
-        &format!("{:<15} ({}) - {:<16} {}", country, city, node_ip, node_name),
-    )
-}
-
 /// Extracts the short name from a node name.
+#[allow(dead_code)]
 fn extract_short_name(node_name: &str) -> &str {
     node_name.split('.').next().unwrap_or(node_name)
 }
 
-/// Helper function to process a node and add it to the map
-#[allow(dead_code)]
-fn process_and_add_node(
-    peer: &TailscalePeer,
-    active_exit_node: &str,
-    regex: &Regex,
-    nodes_map: &mut HashMap<String, String>,
-) {
-    let node_name = peer.dns_name.trim_end_matches('.').to_string();
-    let country = peer.location.as_ref().map_or("Unknown", |loc| {
-        if loc.country.is_empty() {
-            "Unknown"
-        } else {
-            &loc.country
-        }
-    });
-    let city = peer.location.as_ref().map_or("", |loc| &loc.city);
-    let _is_active = active_exit_node == node_name;
-
-    // Get the first IP address
-    let node_ip = peer.tailscale_ips.first().unwrap_or(&String::new()).clone();
-
-    let formatted_line = format!(
-        "{}  {}  {}  {}",
-        node_ip,
-        node_name,
-        country,
-        if city.is_empty() { "" } else { city }
-    );
-
-    #[cfg(debug_assertions)]
-    println!("Processing mullvad node: {}", node_name);
-
-    let parsed_line = parse_mullvad_line(&formatted_line, regex, active_exit_node);
-    nodes_map.insert(node_name, parsed_line);
-}
-/// For example, from "fr-par-wg-302.mullvad.ts.net" it extracts "fr-par"
-// Extract the region code from a hostname
-#[allow(dead_code)]
-fn extract_region_code(hostname: &str) -> Option<String> {
-    // Extract the part before the first period
-    let short_name = hostname.split('.').next()?;
-
-    // For Mullvad nodes, the format is usually: <country>-<city>-<type>-<number>
-    // Extract the country-city part
-    let parts: Vec<&str> = short_name.split('-').collect();
-    if parts.len() >= 2 {
-        // Combine country and city codes
-        Some(format!("{}-{}", parts[0], parts[1]))
-    } else {
-        None
-    }
-}
-
-/// For example, from "fr-par-wg-302.mullvad.ts.net" it extracts "fr-par"
-// Helper function to process exit nodes
-#[allow(dead_code)]
-fn process_exit_node(hostname: &str, active_exit_node: &str, node_ip: &str) -> String {
-    let node_short_name = extract_short_name(hostname);
-    let is_active = active_exit_node == hostname;
-    let active_mark = if is_active { ICON_CHECK } else { "" };
-
-    format!(
-        "{} {} - {} {}",
-        active_mark, node_short_name, node_ip, hostname
-    )
-}
-
-/// Parses an exit node line from the Tailscale exit-node list output.
-#[allow(dead_code)]
-fn parse_exit_node_line(line: &str, regex: &Regex, active_exit_node: &str) -> String {
-    let parts: Vec<&str> = regex.split(line).collect();
-    let node_ip = parts.first().unwrap_or(&"").trim();
-    let node_name = parts.get(1).unwrap_or(&"").trim();
-    let node_short_name = extract_short_name(node_name);
-    let is_active = active_exit_node == node_name;
-    // Use check mark instead of leaf icon when node is active
-    let display_icon = if is_active { ICON_CHECK } else { ICON_LEAF };
-
-    format_entry(
-        "exit-node",
-        display_icon,
-        &format!("{:<15} - {:<16} {}", node_short_name, node_ip, node_name),
-    )
-}
-
 /// Get the suggested exit-node
 pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<String> {
+    debug!("Getting suggested exit node from tailscale");
     let output = match command_runner.run_command("tailscale", &["exit-node", "suggest"]) {
         Ok(out) => out,
         Err(e) => {
@@ -715,11 +750,135 @@ pub fn get_exit_node_suggested(command_runner: &dyn CommandRunner) -> Option<Str
     };
 
     if !output.status.success() {
+        debug!(
+            "tailscale exit-node suggest command failed with status: {:?}",
+            output.status
+        );
         return None;
     }
 
     let exit_node = String::from_utf8_lossy(&output.stdout);
-    parse_exit_node_suggest(&exit_node)
+    debug!(
+        "Raw output from tailscale exit-node suggest: {:?}",
+        exit_node
+    );
+    let parsed = parse_exit_node_suggest(&exit_node);
+    debug!("Parsed suggested exit node: {:?}", parsed);
+    parsed
+}
+
+/// Sets the exit node by hostname (for suggested nodes)
+pub async fn set_exit_node_by_hostname(command_runner: &dyn CommandRunner, hostname: &str) -> bool {
+    debug!("Setting exit node by hostname: {}", hostname);
+
+    // Extract just the hostname part (before the first dot)
+    let node_name = hostname.split('.').next().unwrap_or(hostname);
+    debug!("Using node name: {}", node_name);
+
+    // Try to get the IP address from tailscale status
+    let node_ip = if let Ok(output) = command_runner.run_command("tailscale", &["status", "--json"])
+    {
+        if output.status.success() {
+            if let Ok(status) = serde_json::from_slice::<TailscaleStatus>(&output.stdout) {
+                // Look for the peer with matching hostname
+                status
+                    .peer
+                    .values()
+                    .find(|peer| {
+                        peer.dns_name.trim_end_matches('.') == hostname
+                            || peer.hostname == node_name
+                    })
+                    .and_then(|peer| peer.tailscale_ips.first())
+                    .map(|ip| ip.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    debug!("Resolved IP for {}: {:?}", hostname, node_ip);
+
+    // Run the "tailscale up" command
+    match command_runner.run_command("tailscale", &["up"]) {
+        Ok(output) if output.status.success() => {
+            debug!("Tailscale up command succeeded");
+        }
+        _ => return false,
+    }
+
+    // Try with IP address first if we have it
+    if let Some(ip) = &node_ip {
+        debug!("Trying to set exit node using IP: {}", ip);
+        match command_runner.run_command(
+            "tailscale",
+            &[
+                "set",
+                &format!("--exit-node={}", ip),
+                "--exit-node-allow-lan-access=true",
+            ],
+        ) {
+            Ok(output) => {
+                if output.status.success() {
+                    debug!("Successfully set exit node using IP: {}", ip);
+                    return true;
+                }
+            }
+            Err(e) => {
+                error!("Failed to set exit node using IP: {e}");
+            }
+        }
+    }
+
+    // Fall back to trying with just the node name
+    match command_runner.run_command(
+        "tailscale",
+        &[
+            "set",
+            &format!("--exit-node={}", node_name),
+            "--exit-node-allow-lan-access=true",
+        ],
+    ) {
+        Ok(output) => {
+            let success = output.status.success();
+            if success {
+                debug!("Successfully set exit node to: {}", node_name);
+            } else {
+                error!("Failed to set exit node to: {}", node_name);
+                // Try with the full hostname if the short name failed
+                if hostname != node_name {
+                    debug!("Retrying with full hostname: {}", hostname);
+                    match command_runner.run_command(
+                        "tailscale",
+                        &[
+                            "set",
+                            &format!("--exit-node={}", hostname),
+                            "--exit-node-allow-lan-access=true",
+                        ],
+                    ) {
+                        Ok(retry_output) => {
+                            let retry_success = retry_output.status.success();
+                            if retry_success {
+                                debug!("Successfully set exit node using full hostname");
+                            }
+                            return retry_success;
+                        }
+                        Err(e) => {
+                            error!("Retry with full hostname also failed: {e}");
+                        }
+                    }
+                }
+            }
+            success
+        }
+        Err(e) => {
+            error!("Failed to run tailscale set command: {e}");
+            false
+        }
+    }
 }
 
 /// Sets the exit node for Tailscale.
@@ -759,7 +918,7 @@ pub async fn set_exit_node(command_runner: &dyn CommandRunner, action: &str) -> 
             success
         }
         Err(e) => {
-            error!("Error setting exit node: {e}");
+            error!("Failed to run tailscale set command: {e}");
             false
         }
     }
@@ -803,6 +962,7 @@ pub async fn handle_tailscale_action(
         TailscaleAction::DisableExitNode
             | TailscaleAction::ShowLockStatus
             | TailscaleAction::SetExitNode(_)
+            | TailscaleAction::SetSuggestedExitNode
     );
 
     let owned_state;
@@ -847,7 +1007,34 @@ pub async fn handle_tailscale_action(
             Ok(status.success())
         }
         TailscaleAction::SetExitNode(node) => {
+            // Record ML action for learning
+            #[cfg(feature = "ml")]
+            {
+                crate::ml_integration::record_user_action(&format!("Select Exit Node: {}", node));
+            }
+
             let success = set_exit_node(command_runner, node).await;
+
+            // Record performance after connection (simplified - would need actual metrics)
+            #[cfg(feature = "ml")]
+            if success {
+                // Clone the node name for the async task
+                let node_name = node.clone();
+                // In a real implementation, you'd measure actual latency/packet loss
+                // For now, just record that the node was selected
+                tokio::spawn(async move {
+                    // Wait a bit for connection to stabilize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    // Would measure actual metrics here
+                    let simulated_latency = 30.0; // This would be actual measurement
+                    let simulated_packet_loss = 0.01;
+                    crate::ml_integration::record_exit_node_performance(
+                        &node_name,
+                        simulated_latency,
+                        simulated_packet_loss,
+                    );
+                });
+            }
 
             // Log errors from mullvad check in debug mode but continue execution
             if let Err(_e) = check_mullvad().await {
@@ -1092,6 +1279,114 @@ pub async fn handle_tailscale_action(
                 Ok(false)
             }
         },
+        TailscaleAction::SetSuggestedExitNode => {
+            debug!("Handling SetSuggestedExitNode action");
+            // Get the suggested exit node from state
+            let suggested_node = &state_ref.suggested_exit_node;
+            debug!("Suggested node from state: '{}'", suggested_node);
+
+            if suggested_node.is_empty() {
+                debug!("No suggested exit node available in state, trying to fetch it again");
+                // Try to get it directly in case the state is stale
+                let fresh_suggested = get_exit_node_suggested(command_runner);
+
+                if let Some(fresh_node) = fresh_suggested {
+                    debug!("Got fresh suggested node: {}", fresh_node);
+                    // Use the hostname-based function for suggested nodes
+                    let success = set_exit_node_by_hostname(command_runner, &fresh_node).await;
+
+                    if success {
+                        if let Some(sender) = notification_sender {
+                            if let Err(_e) = sender.send_notification(
+                                "Tailscale Exit Node",
+                                &format!("Connected to suggested exit node: {}", fresh_node),
+                                5000,
+                            ) {
+                                error!("Failed to send suggested node notification: {_e}");
+                            }
+                        }
+
+                        #[cfg(feature = "ml")]
+                        {
+                            // Record performance for ML learning
+                            crate::ml_integration::record_exit_node_performance(
+                                &fresh_node,
+                                0.0,
+                                0.0,
+                            );
+                        }
+                    }
+
+                    return Ok(success);
+                } else {
+                    if let Some(sender) = notification_sender {
+                        if let Err(_e) = sender.send_notification(
+                            "Tailscale Error",
+                            "No suggested exit node available",
+                            5000,
+                        ) {
+                            error!("Failed to send 'no suggested node' notification: {_e}");
+                        }
+                    }
+                    return Ok(false);
+                }
+            }
+
+            // Record ML action for learning
+            #[cfg(feature = "ml")]
+            {
+                crate::ml_integration::record_user_action("Use recommended exit node");
+            }
+
+            debug!("Setting exit node to suggested node: {}", suggested_node);
+            // Use the hostname-based function for suggested nodes
+            let success = set_exit_node_by_hostname(command_runner, suggested_node).await;
+
+            if success {
+                if let Some(sender) = notification_sender {
+                    if let Err(_e) = sender.send_notification(
+                        "Tailscale",
+                        &format!(
+                            "Connected to recommended exit node: {}",
+                            extract_short_hostname(suggested_node)
+                        ),
+                        5000,
+                    ) {
+                        #[cfg(debug_assertions)]
+                        error!("Failed to send successful connection notification: {_e}");
+                    }
+                }
+
+                // Record performance after connection
+                #[cfg(feature = "ml")]
+                {
+                    let node_name = suggested_node.clone();
+                    tokio::spawn(async move {
+                        // Wait for connection to stabilize
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        // In a real implementation, this would measure actual metrics
+                        let simulated_latency = 25.0; // Suggested nodes typically perform well
+                        let simulated_packet_loss = 0.005;
+                        crate::ml_integration::record_exit_node_performance(
+                            &node_name,
+                            simulated_latency,
+                            simulated_packet_loss,
+                        );
+                    });
+                }
+            } else if let Some(sender) = notification_sender {
+                if let Err(_e) = sender.send_notification(
+                    "Tailscale Error",
+                    "Failed to connect to recommended exit node",
+                    5000,
+                ) {
+                    #[cfg(debug_assertions)]
+                    error!("Failed to send connection error notification: {_e}");
+                }
+            }
+
+            Ok(success)
+        }
     }
 }
 
@@ -1470,10 +1765,6 @@ impl MockNotificationSender {
             notifications: RefCell::new(Vec::new()),
         }
     }
-
-    // pub fn get_notifications(&self) -> Vec<(String, String, i32)> {
-    //     self.notifications.borrow().clone()
-    // }
 }
 
 #[cfg(test)]
@@ -1620,52 +1911,6 @@ mod tests {
     fn test_get_flag_unknown_country() {
         assert_eq!(get_flag("Unknown Country"), "❓");
         assert_eq!(get_flag(""), "❓");
-    }
-
-    #[test]
-    fn test_parse_mullvad_line() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "192.168.1.1  node.mullvad.ts.net  Germany  offline";
-        let active_exit_node = "";
-
-        let result = parse_mullvad_line(line, &regex, active_exit_node);
-        assert!(result.contains("mullvad"));
-        assert!(result.contains("Germany"));
-        assert!(result.contains("192.168.1.1"));
-        assert!(result.contains("node.mullvad.ts.net"));
-    }
-
-    #[test]
-    fn test_parse_mullvad_line_active() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "192.168.1.1  node.mullvad.ts.net  Germany  active";
-        let active_exit_node = "node.mullvad.ts.net";
-
-        let result = parse_mullvad_line(line, &regex, active_exit_node);
-        assert!(result.contains("✅"));
-    }
-
-    #[test]
-    fn test_parse_exit_node_line() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "10.0.0.1  test-node.ts.net  offline";
-        let active_exit_node = "";
-
-        let result = parse_exit_node_line(line, &regex, active_exit_node);
-        assert!(result.contains("exit-node"));
-        assert!(result.contains("test-node"));
-        assert!(result.contains("10.0.0.1"));
-        assert!(result.contains("🌿"));
-    }
-
-    #[test]
-    fn test_parse_exit_node_line_active() {
-        let regex = Regex::new(r"\s{2,}").unwrap();
-        let line = "10.0.0.1  test-node.ts.net  active";
-        let active_exit_node = "test-node.ts.net";
-
-        let result = parse_exit_node_line(line, &regex, active_exit_node);
-        assert!(result.contains("✅"));
     }
 
     #[test]
@@ -1878,9 +2123,10 @@ mod tests {
         ]);
 
         // Create a TailscaleState with the failed command runner
-        let mut state = TailscaleState::default();
-        // Make sure status is an empty default instance
-        state.status = TailscaleStatus::default();
+        let state = TailscaleState {
+            status: TailscaleStatus::default(),
+            ..Default::default()
+        };
 
         let exclude_nodes = vec![];
 
@@ -2153,10 +2399,13 @@ mod tests {
     #[test]
     fn test_is_tailscale_lock_enabled_with_state() {
         // Create a TailscaleState with a lock_output that indicates lock is enabled
-        let mut state = TailscaleState::default();
-        state.lock_output = Some(
-            "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock.".to_string(),
-        );
+        let state = TailscaleState {
+            lock_output: Some(
+                "Tailnet lock is ENABLED.\n\nThis node is accessible under tailnet lock."
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2177,8 +2426,10 @@ mod tests {
     #[test]
     fn test_is_tailscale_lock_disabled_with_state() {
         // Create a TailscaleState with a lock_output that indicates lock is disabled
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is DISABLED.".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is DISABLED.".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2199,8 +2450,10 @@ mod tests {
     #[test]
     fn test_get_locked_nodes_with_state() {
         // Create a TailscaleState with a lock_output that contains locked nodes
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is ENABLED.\n\nThe following nodes are locked out by tailnet lock and cannot connect to other nodes:\n\tus-atl-wg-302.mullvad.ts.net.\t100.117.10.73,fd7a:115c:a1e0::cc01:a51\tncqp5kyPF311CNTRL\tnodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48\n\tgb-mnc-wg-005.mullvad.ts.net.\t100.119.6.58,fd7a:115c:a1e0::9801:63a\tnFgKB4hfb411CNTRL\tnodekey:91b56549aa87412a677b0427d57d23e51f962a2496d9ed86abe2385d98f70639".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is ENABLED.\n\nThe following nodes are locked out by tailnet lock and cannot connect to other nodes:\n\tus-atl-wg-302.mullvad.ts.net.\t100.117.10.73,fd7a:115c:a1e0::cc01:a51\tncqp5kyPF311CNTRL\tnodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48\n\tgb-mnc-wg-005.mullvad.ts.net.\t100.119.6.58,fd7a:115c:a1e0::9801:63a\tnFgKB4hfb411CNTRL\tnodekey:91b56549aa87412a677b0427d57d23e51f962a2496d9ed86abe2385d98f70639".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2232,8 +2485,10 @@ mod tests {
     #[test]
     fn test_get_locked_nodes_empty_with_state() {
         // Create a TailscaleState with a lock_output that indicates no locked nodes
-        let mut state = TailscaleState::default();
-        state.lock_output = Some("Tailnet lock is ENABLED.\n\nNo locked nodes found.".to_string());
+        let state = TailscaleState {
+            lock_output: Some("Tailnet lock is ENABLED.\n\nNo locked nodes found.".to_string()),
+            ..Default::default()
+        };
 
         // Create a mock runner that would fail if called
         let failing_output = Output {
@@ -2563,6 +2818,49 @@ mod tests {
         );
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("high-priority"));
+    }
+
+    #[test]
+    fn test_parse_exit_node_suggest() {
+        // Test standard format
+        let output = "Suggested exit node: us-nyc-wg-301.mullvad.ts.net.";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("us-nyc-wg-301.mullvad.ts.net".to_string()));
+
+        // Test without trailing dot
+        let output = "Suggested exit node: ca-tor-wg-201.mullvad.ts.net";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("ca-tor-wg-201.mullvad.ts.net".to_string()));
+
+        // Test plain output (just the node name)
+        let output = "us-dal-wg-101.mullvad.ts.net";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("us-dal-wg-101.mullvad.ts.net".to_string()));
+
+        // Test plain output with trailing dot
+        let output = "eu-ams-wg-501.mullvad.ts.net.";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("eu-ams-wg-501.mullvad.ts.net".to_string()));
+
+        // Test empty output
+        let output = "";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test whitespace only
+        let output = "   \n  ";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test multiline output without expected format
+        let output = "Some error message\nAnother line";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, None);
+
+        // Test with extra whitespace
+        let output = "Suggested exit node:    uk-lon-wg-401.mullvad.ts.net  ";
+        let result = parse_exit_node_suggest(output);
+        assert_eq!(result, Some("uk-lon-wg-401.mullvad.ts.net".to_string()));
     }
 
     #[test]
