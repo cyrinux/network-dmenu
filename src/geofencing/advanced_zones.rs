@@ -3,10 +3,8 @@
 //! Provides intelligent zone creation, optimization, hierarchical zone relationships,
 //! automatic zone splitting/merging, and ML-powered zone suggestions.
 
-use crate::geofencing::{
-    GeofenceError, GeofenceZone, LocationFingerprint, Result, ZoneActions
-};
-use chrono::{DateTime, Utc, Timelike, Datelike};
+use crate::geofencing::{GeofenceError, GeofenceZone, LocationFingerprint, Result, ZoneActions};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -374,10 +372,10 @@ pub enum OptimizationType {
 pub trait ZoneOptimizer: Send + Sync {
     /// Analyze zone and suggest optimizations
     fn analyze_zone(&self, zone: &GeofenceZone, analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion>;
-    
+
     /// Apply optimization to a zone
     fn optimize_zone(&self, zone: &mut GeofenceZone, suggestion: &ZoneSuggestion) -> Result<()>;
-    
+
     /// Get optimizer name
     fn name(&self) -> &str;
 }
@@ -432,9 +430,16 @@ impl AdvancedZoneManager {
     }
 
     /// Record a location visit for analysis
-    pub async fn record_visit(&self, fingerprint: LocationFingerprint, matched_zone: Option<String>) -> Result<()> {
-        debug!("Recording visit with {} networks, matched_zone: {:?}", 
-               fingerprint.wifi_networks.len(), matched_zone);
+    pub async fn record_visit(
+        &self,
+        fingerprint: LocationFingerprint,
+        matched_zone: Option<String>,
+    ) -> Result<()> {
+        debug!(
+            "Recording visit with {} networks, matched_zone: {:?}",
+            fingerprint.wifi_networks.len(),
+            matched_zone
+        );
 
         let visit = ZoneVisit {
             fingerprint: fingerprint.clone(),
@@ -451,7 +456,7 @@ impl AdvancedZoneManager {
             let mut analytics = self.analytics.lock().await;
             if matched_zone.is_none() {
                 analytics.unmatched_visits.push_back(visit.clone());
-                
+
                 // Keep only recent unmatched visits
                 while analytics.unmatched_visits.len() > 1000 {
                     analytics.unmatched_visits.pop_front();
@@ -494,14 +499,19 @@ impl AdvancedZoneManager {
         }
 
         // Sort by priority and confidence
-        suggestions.sort_by(|a, b| {
-            match (a.priority.clone(), b.priority.clone()) {
-                (SuggestionPriority::Urgent, _) => std::cmp::Ordering::Less,
-                (_, SuggestionPriority::Urgent) => std::cmp::Ordering::Greater,
-                (SuggestionPriority::High, SuggestionPriority::Low | SuggestionPriority::Medium) => std::cmp::Ordering::Less,
-                (SuggestionPriority::Low | SuggestionPriority::Medium, SuggestionPriority::High) => std::cmp::Ordering::Greater,
-                _ => b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal),
+        suggestions.sort_by(|a, b| match (a.priority.clone(), b.priority.clone()) {
+            (SuggestionPriority::Urgent, _) => std::cmp::Ordering::Less,
+            (_, SuggestionPriority::Urgent) => std::cmp::Ordering::Greater,
+            (SuggestionPriority::High, SuggestionPriority::Low | SuggestionPriority::Medium) => {
+                std::cmp::Ordering::Less
             }
+            (SuggestionPriority::Low | SuggestionPriority::Medium, SuggestionPriority::High) => {
+                std::cmp::Ordering::Greater
+            }
+            _ => b
+                .confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal),
         });
 
         debug!("Generated {} zone suggestions", suggestions.len());
@@ -509,17 +519,26 @@ impl AdvancedZoneManager {
     }
 
     /// Create hierarchical relationship between zones
-    pub async fn create_zone_hierarchy(&mut self, parent_id: String, child_id: String, relationship_type: ZoneRelationshipType) -> Result<()> {
-        debug!("Creating zone hierarchy: {} -> {} ({:?})", parent_id, child_id, relationship_type);
+    pub async fn create_zone_hierarchy(
+        &mut self,
+        parent_id: String,
+        child_id: String,
+        relationship_type: ZoneRelationshipType,
+    ) -> Result<()> {
+        debug!(
+            "Creating zone hierarchy: {} -> {} ({:?})",
+            parent_id, child_id, relationship_type
+        );
 
         if !self.config.enable_hierarchical_zones {
             return Err(GeofenceError::Config(
-                "Hierarchical zones are disabled in configuration".to_string()
+                "Hierarchical zones are disabled in configuration".to_string(),
             ));
         }
 
-        self.hierarchy_manager.create_relationship(parent_id, child_id, relationship_type)?;
-        
+        self.hierarchy_manager
+            .create_relationship(parent_id, child_id, relationship_type)?;
+
         info!("Zone hierarchy created successfully");
         Ok(())
     }
@@ -546,36 +565,40 @@ impl AdvancedZoneManager {
         match &suggestion.suggestion_type {
             SuggestionType::CreateZone => {
                 let zone_id = uuid::Uuid::new_v4().to_string();
-                info!("Creating new zone '{}' based on suggestion", suggestion.suggested_name);
+                info!(
+                    "Creating new zone '{}' based on suggestion",
+                    suggestion.suggested_name
+                );
                 Ok(zone_id)
             }
-            
+
             SuggestionType::MergeZones(zone_ids) => {
                 info!("Merging zones: {:?}", zone_ids);
                 Ok(format!("merged_{}", zone_ids.join("_")))
             }
-            
+
             SuggestionType::SplitZone(zone_id) => {
                 info!("Splitting zone: {}", zone_id);
                 Ok(format!("{}_split", zone_id))
             }
-            
+
             SuggestionType::OptimizeFingerprint(zone_id) => {
                 info!("Optimizing fingerprint for zone: {}", zone_id);
                 Ok(zone_id.clone())
             }
-            
+
             SuggestionType::UpdateActions(zone_id) => {
                 info!("Updating actions for zone: {}", zone_id);
                 Ok(zone_id.clone())
             }
-            
+
             SuggestionType::CreateHierarchy(parent_id, child_id) => {
                 self.create_zone_hierarchy(
-                    parent_id.clone(), 
-                    child_id.clone(), 
-                    ZoneRelationshipType::Geographic
-                ).await?;
+                    parent_id.clone(),
+                    child_id.clone(),
+                    ZoneRelationshipType::Geographic,
+                )
+                .await?;
                 Ok(format!("hierarchy_{}_{}", parent_id, child_id))
             }
 
@@ -622,15 +645,19 @@ impl AdvancedZoneManager {
                 Ok(_) => {
                     results.push(OptimizationResult {
                         zone_id: match &suggestion.suggestion_type {
-                            SuggestionType::OptimizeFingerprint(id) |
-                            SuggestionType::UpdateActions(id) => id.clone(),
+                            SuggestionType::OptimizeFingerprint(id)
+                            | SuggestionType::UpdateActions(id) => id.clone(),
                             _ => "multiple".to_string(),
                         },
                         optimization_type: match suggestion.suggestion_type {
-                            SuggestionType::OptimizeFingerprint(_) => OptimizationType::FingerprintOptimization,
+                            SuggestionType::OptimizeFingerprint(_) => {
+                                OptimizationType::FingerprintOptimization
+                            }
                             SuggestionType::MergeZones(_) => OptimizationType::ZoneMerging,
                             SuggestionType::SplitZone(_) => OptimizationType::ZoneSplitting,
-                            SuggestionType::UpdateActions(_) => OptimizationType::ActionOptimization,
+                            SuggestionType::UpdateActions(_) => {
+                                OptimizationType::ActionOptimization
+                            }
                             _ => OptimizationType::ThresholdOptimization,
                         },
                         improvements: HashMap::new(), // Would contain actual metrics
@@ -644,14 +671,20 @@ impl AdvancedZoneManager {
             }
         }
 
-        info!("Completed automatic optimization: {} successful operations", results.len());
+        info!(
+            "Completed automatic optimization: {} successful operations",
+            results.len()
+        );
         Ok(results)
     }
 
     /// Analyze zone relationships
-    pub fn analyze_zone_relationships(&self, zones: &[GeofenceZone]) -> Vec<ZoneRelationshipSuggestion> {
+    pub fn analyze_zone_relationships(
+        &self,
+        zones: &[GeofenceZone],
+    ) -> Vec<ZoneRelationshipSuggestion> {
         debug!("Analyzing zone relationships for {} zones", zones.len());
-        
+
         self.relationship_analyzer.analyze_relationships(zones)
     }
 }
@@ -678,43 +711,57 @@ impl HierarchyManager {
         }
     }
 
-    fn create_relationship(&mut self, parent_id: String, child_id: String, relationship_type: ZoneRelationshipType) -> Result<()> {
+    fn create_relationship(
+        &mut self,
+        parent_id: String,
+        child_id: String,
+        relationship_type: ZoneRelationshipType,
+    ) -> Result<()> {
         // Validate hierarchy depth
-        let parent_level = self.hierarchies.get(&parent_id)
+        let parent_level = self
+            .hierarchies
+            .get(&parent_id)
             .map(|h| h.level)
             .unwrap_or(0);
 
-        if parent_level >= 2 { // Max depth of 3 (0, 1, 2)
+        if parent_level >= 2 {
+            // Max depth of 3 (0, 1, 2)
             return Err(GeofenceError::Config(
-                "Maximum hierarchy depth exceeded".to_string()
+                "Maximum hierarchy depth exceeded".to_string(),
             ));
         }
 
         // Create or update parent hierarchy
-        let parent_hierarchy = self.hierarchies.entry(parent_id.clone()).or_insert_with(|| ZoneHierarchy {
-            zone_id: parent_id.clone(),
-            parent_id: None,
-            children: Vec::new(),
-            level: parent_level,
-            relationship_type: relationship_type.clone(),
-            inherits_actions: false,
-            action_overrides: None,
-        });
-        
+        let parent_hierarchy = self
+            .hierarchies
+            .entry(parent_id.clone())
+            .or_insert_with(|| ZoneHierarchy {
+                zone_id: parent_id.clone(),
+                parent_id: None,
+                children: Vec::new(),
+                level: parent_level,
+                relationship_type: relationship_type.clone(),
+                inherits_actions: false,
+                action_overrides: None,
+            });
+
         if !parent_hierarchy.children.contains(&child_id) {
             parent_hierarchy.children.push(child_id.clone());
         }
 
         // Create child hierarchy
-        self.hierarchies.insert(child_id.clone(), ZoneHierarchy {
-            zone_id: child_id.clone(),
-            parent_id: Some(parent_id.clone()),
-            children: Vec::new(),
-            level: parent_level + 1,
-            relationship_type,
-            inherits_actions: true,
-            action_overrides: None,
-        });
+        self.hierarchies.insert(
+            child_id.clone(),
+            ZoneHierarchy {
+                zone_id: child_id.clone(),
+                parent_id: Some(parent_id.clone()),
+                children: Vec::new(),
+                level: parent_level + 1,
+                relationship_type,
+                inherits_actions: true,
+                action_overrides: None,
+            },
+        );
 
         // Update root zones
         self.root_zones.insert(parent_id);
@@ -735,7 +782,8 @@ impl HierarchyManager {
     }
 
     fn get_children(&self, parent_id: &str) -> Vec<&str> {
-        self.hierarchies.get(parent_id)
+        self.hierarchies
+            .get(parent_id)
             .map(|h| h.children.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
     }
@@ -769,34 +817,39 @@ impl ZoneSuggestionEngine {
 
     async fn generate_suggestions(&mut self) -> Result<Vec<ZoneSuggestion>> {
         let cache_key = format!("suggestions_{}", Utc::now().format("%Y-%m-%d-%H"));
-        
+
         // Check if we have cached suggestions for this hour
         if let Some(cached_suggestion) = self.suggestion_cache.get(&cache_key) {
             debug!("Returning cached zone suggestions for {}", cache_key);
             return Ok(vec![cached_suggestion.clone()]);
         }
-        
+
         let mut suggestions = Vec::new();
 
         // Collect mature cluster IDs for comparison
         let mature_clusters = self.clusterer.get_mature_clusters();
-        let mature_cluster_ids: Vec<String> = mature_clusters.iter().map(|c| c.cluster_id.clone()).collect();
+        let mature_cluster_ids: Vec<String> = mature_clusters
+            .iter()
+            .map(|c| c.cluster_id.clone())
+            .collect();
 
         // Process mature clusters first
         for cluster in &mature_clusters {
             let suggestion = self.create_zone_suggestion_from_cluster(cluster)?;
-            
+
             // Cache the suggestion
             self.suggestion_cache.insert(
-                format!("cluster_{}", cluster.cluster_id), 
-                suggestion.clone()
+                format!("cluster_{}", cluster.cluster_id),
+                suggestion.clone(),
             );
-            
+
             suggestions.push(suggestion);
         }
 
         // Additional suggestions from significant clusters (high visit count)
-        let significant_clusters = self.clusterer.get_significant_clusters(self.config.min_visits_for_suggestion as usize);
+        let significant_clusters = self
+            .clusterer
+            .get_significant_clusters(self.config.min_visits_for_suggestion as usize);
         for cluster in significant_clusters {
             // Skip if already processed in mature clusters
             if !mature_cluster_ids.contains(&cluster.cluster_id) {
@@ -808,18 +861,18 @@ impl ZoneSuggestionEngine {
         // Pattern-based suggestions from behavior analysis
         let pattern_suggestions = self.pattern_recognizer.suggest_zones(&self.config);
         suggestions.extend(pattern_suggestions);
-        
+
         // Cleanup old cache entries (keep only last 24 hours)
         self.cleanup_suggestion_cache();
 
         Ok(suggestions)
     }
-    
+
     /// Clean up old cached suggestions
     fn cleanup_suggestion_cache(&mut self) {
         let now = Utc::now();
         let cutoff = now - chrono::Duration::hours(24);
-        
+
         let initial_count = self.suggestion_cache.len();
         self.suggestion_cache.retain(|key, suggestion| {
             let is_recent = suggestion.created_at > cutoff;
@@ -828,32 +881,40 @@ impl ZoneSuggestionEngine {
             }
             is_recent
         });
-        
+
         let removed_count = initial_count - self.suggestion_cache.len();
         if removed_count > 0 {
             debug!("Cleaned up {} stale cached suggestions", removed_count);
         }
     }
 
-    fn create_zone_suggestion_from_cluster(&self, cluster: &LocationCluster) -> Result<ZoneSuggestion> {
+    fn create_zone_suggestion_from_cluster(
+        &self,
+        cluster: &LocationCluster,
+    ) -> Result<ZoneSuggestion> {
         let suggested_name = format!("Frequent Location {}", &cluster.cluster_id[..8]);
-        
+
         // Use config for duration estimates
         let estimated_total_time = Duration::from_secs(
-            cluster.visit_count as u64 * self.config.min_time_for_suggestion.as_secs() / self.config.min_visits_for_suggestion as u64
+            cluster.visit_count as u64 * self.config.min_time_for_suggestion.as_secs()
+                / self.config.min_visits_for_suggestion as u64,
         );
-        
+
         let evidence = SuggestionEvidence {
             visit_count: cluster.visit_count,
             total_time: estimated_total_time,
-            average_visit_duration: Duration::from_secs(estimated_total_time.as_secs() / cluster.visit_count as u64),
+            average_visit_duration: Duration::from_secs(
+                estimated_total_time.as_secs() / cluster.visit_count as u64,
+            ),
             common_visit_times: Vec::new(), // Would analyze from visit history
-            common_actions: Vec::new(), // Would analyze from visit history
+            common_actions: Vec::new(),     // Would analyze from visit history
             similar_zones: Vec::new(),
         };
 
         // Use config thresholds for confidence calculation
-        let confidence = (cluster.visit_count as f64 / (self.config.min_visits_for_suggestion as f64 * 2.0)).min(0.9);
+        let confidence = (cluster.visit_count as f64
+            / (self.config.min_visits_for_suggestion as f64 * 2.0))
+            .min(0.9);
         let is_high_priority = cluster.visit_count >= self.config.min_visits_for_suggestion * 3;
 
         Ok(ZoneSuggestion {
@@ -893,10 +954,8 @@ impl LocationClusterer {
         let mut best_similarity = 0.0;
 
         for (idx, cluster) in self.clusters.iter().enumerate() {
-            let similarity = self.calculate_fingerprint_similarity(
-                fingerprint, 
-                &cluster.representative_fingerprint
-            );
+            let similarity = self
+                .calculate_fingerprint_similarity(fingerprint, &cluster.representative_fingerprint);
 
             if similarity > best_similarity && similarity >= self.similarity_threshold {
                 best_similarity = similarity;
@@ -918,7 +977,9 @@ impl LocationClusterer {
                 fingerprints: vec![fingerprint.clone()],
                 center: NetworkSignatureCenter {
                     average_signals: HashMap::new(),
-                    common_networks: fingerprint.wifi_networks.iter()
+                    common_networks: fingerprint
+                        .wifi_networks
+                        .iter()
                         .map(|n| n.ssid_hash.clone())
                         .collect(),
                 },
@@ -928,37 +989,48 @@ impl LocationClusterer {
             };
             self.clusters.push(cluster);
         }
-        
+
         // Cleanup clusters that don't meet minimum size requirement
         self.cleanup_small_clusters();
     }
-    
+
     /// Remove clusters that are too small to be meaningful
     fn cleanup_small_clusters(&mut self) {
         let initial_count = self.clusters.len();
         self.clusters.retain(|cluster| {
-            let meets_size_requirement = cluster.visit_count >= self.min_cluster_size.try_into().unwrap();
+            let meets_size_requirement =
+                cluster.visit_count >= self.min_cluster_size.try_into().unwrap();
             if !meets_size_requirement {
-                debug!("Removing small cluster {} with {} visits (min required: {})", 
-                       cluster.cluster_id, cluster.visit_count, self.min_cluster_size);
+                debug!(
+                    "Removing small cluster {} with {} visits (min required: {})",
+                    cluster.cluster_id, cluster.visit_count, self.min_cluster_size
+                );
             }
             meets_size_requirement
         });
-        
+
         let removed_count = initial_count - self.clusters.len();
         if removed_count > 0 {
             debug!("Cleaned up {} small clusters", removed_count);
         }
     }
-    
+
     /// Get clusters that meet minimum size for zone suggestions  
     fn get_mature_clusters(&self) -> Vec<&LocationCluster> {
-        self.clusters.iter()
-            .filter(|cluster| cluster.visit_count >= self.min_cluster_size.try_into().unwrap() && !cluster.suggested_as_zone)
+        self.clusters
+            .iter()
+            .filter(|cluster| {
+                cluster.visit_count >= self.min_cluster_size.try_into().unwrap()
+                    && !cluster.suggested_as_zone
+            })
             .collect()
     }
 
-    fn calculate_fingerprint_similarity(&self, fp1: &LocationFingerprint, fp2: &LocationFingerprint) -> f64 {
+    fn calculate_fingerprint_similarity(
+        &self,
+        fp1: &LocationFingerprint,
+        fp2: &LocationFingerprint,
+    ) -> f64 {
         let networks1: HashSet<_> = fp1.wifi_networks.iter().map(|n| &n.ssid_hash).collect();
         let networks2: HashSet<_> = fp2.wifi_networks.iter().map(|n| &n.ssid_hash).collect();
 
@@ -984,7 +1056,8 @@ impl LocationClusterer {
     }
 
     fn get_significant_clusters(&self, min_visits: usize) -> Vec<&LocationCluster> {
-        self.clusters.iter()
+        self.clusters
+            .iter()
             .filter(|c| c.visit_count >= min_visits as u32)
             .collect()
     }
@@ -1000,35 +1073,41 @@ impl PatternRecognizer {
     }
 
     fn analyze_visit(&mut self, visit: &ZoneVisit) {
-        debug!("Analyzing visit patterns for zone: {:?}", visit.matched_zone);
-        
+        debug!(
+            "Analyzing visit patterns for zone: {:?}",
+            visit.matched_zone
+        );
+
         // Extract location key for pattern tracking
         let location_key = if let Some(zone) = &visit.matched_zone {
             zone.clone()
         } else {
             // Create a key based on dominant networks
-            visit.fingerprint.wifi_networks.iter()
+            visit
+                .fingerprint
+                .wifi_networks
+                .iter()
                 .take(3)
                 .map(|n| n.ssid_hash.chars().take(8).collect::<String>())
                 .collect::<Vec<_>>()
                 .join("_")
         };
-        
+
         // Analyze temporal patterns
         let hour = visit.start_time.hour() as u8;
         let day_of_week = visit.start_time.weekday().num_days_from_monday() as u8;
-        
+
         let temporal_pattern = TimePattern {
             hour,
             day_of_week,
             frequency: 1.0,
         };
-        
+
         self.temporal_patterns
             .entry(location_key.clone())
             .or_default()
             .push(temporal_pattern);
-        
+
         // Analyze action patterns
         for action in &visit.actions_performed {
             let action_pattern = ActionPattern {
@@ -1037,13 +1116,13 @@ impl PatternRecognizer {
                 frequency: 1.0,
                 success_rate: 1.0, // Assume success for now
             };
-            
+
             self.action_patterns
                 .entry(location_key.clone())
                 .or_default()
                 .push(action_pattern);
         }
-        
+
         // Analyze sequence patterns (if we have previous actions)
         if visit.actions_performed.len() > 1 {
             let sequence_key = format!("{}_sequence", location_key);
@@ -1052,11 +1131,11 @@ impl PatternRecognizer {
                 .or_default()
                 .extend(visit.actions_performed.clone());
         }
-        
+
         // Cleanup old patterns to avoid memory bloat
         self.cleanup_old_patterns();
     }
-    
+
     /// Remove old pattern data to prevent memory growth
     fn cleanup_old_patterns(&mut self) {
         // Keep only the most recent 100 patterns per location
@@ -1065,13 +1144,13 @@ impl PatternRecognizer {
                 patterns.drain(0..patterns.len() - 100);
             }
         }
-        
+
         for patterns in self.action_patterns.values_mut() {
             if patterns.len() > 50 {
                 patterns.drain(0..patterns.len() - 50);
             }
         }
-        
+
         for sequence in self.sequence_patterns.values_mut() {
             if sequence.len() > 200 {
                 sequence.drain(0..sequence.len() - 200);
@@ -1081,12 +1160,12 @@ impl PatternRecognizer {
 
     fn suggest_zones(&self, config: &AdvancedZoneConfig) -> Vec<ZoneSuggestion> {
         let mut suggestions = Vec::new();
-        
+
         // Generate suggestions based on temporal patterns
         for (location_key, patterns) in &self.temporal_patterns {
             // Find patterns with high frequency that might represent regular locations
             let total_frequency: f64 = patterns.iter().map(|p| p.frequency).sum();
-            
+
             if total_frequency >= config.min_visits_for_suggestion as f64 {
                 // Create a zone suggestion based on temporal patterns
                 let evidence = SuggestionEvidence {
@@ -1094,28 +1173,43 @@ impl PatternRecognizer {
                     total_time: Duration::from_secs(3600), // Default estimate
                     average_visit_duration: Duration::from_secs(3600),
                     common_visit_times: patterns.clone(),
-                    common_actions: self.action_patterns.get(location_key)
+                    common_actions: self
+                        .action_patterns
+                        .get(location_key)
                         .cloned()
                         .unwrap_or_default(),
                     similar_zones: vec![],
                 };
-                
+
                 // Determine zone name based on patterns
                 let suggested_name = if patterns.iter().any(|p| p.hour >= 9 && p.hour <= 17) {
-                    format!("Work Location ({})", location_key.chars().take(8).collect::<String>())
+                    format!(
+                        "Work Location ({})",
+                        location_key.chars().take(8).collect::<String>()
+                    )
                 } else if patterns.iter().any(|p| p.hour >= 18 || p.hour <= 8) {
-                    format!("Home Location ({})", location_key.chars().take(8).collect::<String>())
+                    format!(
+                        "Home Location ({})",
+                        location_key.chars().take(8).collect::<String>()
+                    )
                 } else {
-                    format!("Frequent Location ({})", location_key.chars().take(8).collect::<String>())
+                    format!(
+                        "Frequent Location ({})",
+                        location_key.chars().take(8).collect::<String>()
+                    )
                 };
-                
+
                 suggestions.push(ZoneSuggestion {
                     suggested_name,
-                    confidence: (total_frequency / (config.min_visits_for_suggestion as f64 * 2.0)).min(0.95),
+                    confidence: (total_frequency / (config.min_visits_for_suggestion as f64 * 2.0))
+                        .min(0.95),
                     suggested_fingerprint: LocationFingerprint::default(), // Would be derived from visits
                     suggested_actions: ZoneActions::default(), // Would be derived from action patterns
-                    reasoning: format!("Detected regular visits with {} total frequency across {} time patterns", 
-                                     total_frequency, patterns.len()),
+                    reasoning: format!(
+                        "Detected regular visits with {} total frequency across {} time patterns",
+                        total_frequency,
+                        patterns.len()
+                    ),
                     evidence,
                     suggestion_type: SuggestionType::CreateZone,
                     created_at: Utc::now(),
@@ -1127,7 +1221,7 @@ impl PatternRecognizer {
                 });
             }
         }
-        
+
         suggestions
     }
 }
@@ -1151,7 +1245,9 @@ impl OptimizationEngine {
         for (zone_name, usage_stats) in &analytics.zone_usage_stats {
             if usage_stats.total_visits < 5 && usage_stats.total_time.as_secs() < 3600 {
                 // Suggest zone removal or merging for rarely used zones
-                if let Some(suggestion) = self.create_underutilized_zone_suggestion(zone_name, usage_stats) {
+                if let Some(suggestion) =
+                    self.create_underutilized_zone_suggestion(zone_name, usage_stats)
+                {
                     suggestions.push(suggestion);
                 }
             }
@@ -1183,9 +1279,13 @@ impl OptimizationEngine {
 
         // Run algorithmic optimizations using real data
         for algorithm in &self.algorithms {
-            debug!("Running optimization algorithm: {} with real analytics data", algorithm.name());
-            
-            let optimization_results = self.run_algorithm_with_analytics(algorithm.as_ref(), analytics);
+            debug!(
+                "Running optimization algorithm: {} with real analytics data",
+                algorithm.name()
+            );
+
+            let optimization_results =
+                self.run_algorithm_with_analytics(algorithm.as_ref(), analytics);
             for result in optimization_results {
                 self.optimization_history.push(result.clone());
                 if let Some(suggestion) = self.convert_result_to_suggestion(result) {
@@ -1194,7 +1294,10 @@ impl OptimizationEngine {
             }
         }
 
-        info!("Generated {} optimization suggestions from analytics data", suggestions.len());
+        info!(
+            "Generated {} optimization suggestions from analytics data",
+            suggestions.len()
+        );
         suggestions
     }
 
@@ -1202,7 +1305,7 @@ impl OptimizationEngine {
     fn convert_result_to_suggestion(&self, result: OptimizationResult) -> Option<ZoneSuggestion> {
         let accuracy_improvement = result.improvements.get("accuracy").unwrap_or(&0.0);
         let performance_improvement = result.improvements.get("performance").unwrap_or(&0.0);
-        
+
         // Create default evidence structure
         let evidence = SuggestionEvidence {
             visit_count: 1,
@@ -1212,51 +1315,47 @@ impl OptimizationEngine {
             common_actions: vec![],
             similar_zones: vec![],
         };
-        
+
         // Create default location fingerprint
         let suggested_fingerprint = LocationFingerprint::default();
-        
+
         match result.optimization_type {
-            OptimizationType::FingerprintOptimization => {
-                Some(ZoneSuggestion {
-                    suggested_name: format!("Optimized {}", result.zone_id),
-                    confidence: (*accuracy_improvement).max(0.8),
-                    suggested_fingerprint: suggested_fingerprint.clone(),
-                    suggested_actions: ZoneActions::default(),
-                    reasoning: format!("Fingerprint optimization improved accuracy by {:.1}%", 
-                                     accuracy_improvement * 100.0),
-                    evidence: evidence.clone(),
-                    suggestion_type: SuggestionType::OptimizeFingerprint(result.zone_id.clone()),
-                    created_at: Utc::now(),
-                    priority: SuggestionPriority::Medium,
-                })
-            }
-            OptimizationType::ActionOptimization => {
-                Some(ZoneSuggestion {
-                    suggested_name: format!("Action-optimized {}", result.zone_id),
-                    confidence: (*performance_improvement).max(0.7),
-                    suggested_fingerprint: suggested_fingerprint.clone(),
-                    suggested_actions: ZoneActions::default(),
-                    reasoning: "Actions optimized for better performance".to_string(),
-                    evidence: evidence.clone(),
-                    suggestion_type: SuggestionType::UpdateActions(result.zone_id.clone()),
-                    created_at: Utc::now(),
-                    priority: SuggestionPriority::Medium,
-                })
-            }
-            OptimizationType::ZoneMerging => {
-                Some(ZoneSuggestion {
-                    suggested_name: format!("Merged zone for {}", result.zone_id),
-                    confidence: 0.85,
-                    suggested_fingerprint,
-                    suggested_actions: ZoneActions::default(),
-                    reasoning: "Zones merged to reduce redundancy".to_string(),
-                    evidence,
-                    suggestion_type: SuggestionType::MergeZones(vec![result.zone_id.clone()]),
-                    created_at: Utc::now(),
-                    priority: SuggestionPriority::High,
-                })
-            }
+            OptimizationType::FingerprintOptimization => Some(ZoneSuggestion {
+                suggested_name: format!("Optimized {}", result.zone_id),
+                confidence: (*accuracy_improvement).max(0.8),
+                suggested_fingerprint: suggested_fingerprint.clone(),
+                suggested_actions: ZoneActions::default(),
+                reasoning: format!(
+                    "Fingerprint optimization improved accuracy by {:.1}%",
+                    accuracy_improvement * 100.0
+                ),
+                evidence: evidence.clone(),
+                suggestion_type: SuggestionType::OptimizeFingerprint(result.zone_id.clone()),
+                created_at: Utc::now(),
+                priority: SuggestionPriority::Medium,
+            }),
+            OptimizationType::ActionOptimization => Some(ZoneSuggestion {
+                suggested_name: format!("Action-optimized {}", result.zone_id),
+                confidence: (*performance_improvement).max(0.7),
+                suggested_fingerprint: suggested_fingerprint.clone(),
+                suggested_actions: ZoneActions::default(),
+                reasoning: "Actions optimized for better performance".to_string(),
+                evidence: evidence.clone(),
+                suggestion_type: SuggestionType::UpdateActions(result.zone_id.clone()),
+                created_at: Utc::now(),
+                priority: SuggestionPriority::Medium,
+            }),
+            OptimizationType::ZoneMerging => Some(ZoneSuggestion {
+                suggested_name: format!("Merged zone for {}", result.zone_id),
+                confidence: 0.85,
+                suggested_fingerprint,
+                suggested_actions: ZoneActions::default(),
+                reasoning: "Zones merged to reduce redundancy".to_string(),
+                evidence,
+                suggestion_type: SuggestionType::MergeZones(vec![result.zone_id.clone()]),
+                created_at: Utc::now(),
+                priority: SuggestionPriority::High,
+            }),
             _ => None,
         }
     }
@@ -1279,23 +1378,28 @@ impl OptimizationEngine {
         if self.optimization_history.len() > max_entries {
             let keep_from = self.optimization_history.len() - max_entries;
             self.optimization_history.drain(..keep_from);
-            debug!("Cleaned up optimization history, keeping {} recent entries", max_entries);
+            debug!(
+                "Cleaned up optimization history, keeping {} recent entries",
+                max_entries
+            );
         }
     }
 
     /// Get optimization statistics
     pub fn get_optimization_stats(&self) -> OptimizationStats {
         let total_optimizations = self.optimization_history.len();
-        let success_count = self.optimization_history
+        let success_count = self
+            .optimization_history
             .iter()
             .filter(|result| result.success)
             .count();
-        
+
         let avg_accuracy_improvement = if !self.optimization_history.is_empty() {
             self.optimization_history
                 .iter()
                 .filter_map(|result| result.improvements.get("accuracy"))
-                .sum::<f64>() / self.optimization_history.len() as f64
+                .sum::<f64>()
+                / self.optimization_history.len() as f64
         } else {
             0.0
         };
@@ -1303,17 +1407,21 @@ impl OptimizationEngine {
         OptimizationStats {
             total_optimizations,
             successful_optimizations: success_count,
-            success_rate: if total_optimizations > 0 { 
-                success_count as f64 / total_optimizations as f64 
-            } else { 
-                0.0 
+            success_rate: if total_optimizations > 0 {
+                success_count as f64 / total_optimizations as f64
+            } else {
+                0.0
             },
             average_accuracy_improvement: avg_accuracy_improvement,
         }
     }
 
     /// Create suggestion for underutilized zone
-    fn create_underutilized_zone_suggestion(&self, zone_name: &str, usage_stats: &ZoneUsageStats) -> Option<ZoneSuggestion> {
+    fn create_underutilized_zone_suggestion(
+        &self,
+        zone_name: &str,
+        usage_stats: &ZoneUsageStats,
+    ) -> Option<ZoneSuggestion> {
         let suggested_fingerprint = LocationFingerprint {
             wifi_networks: BTreeSet::new(),
             bluetooth_devices: BTreeSet::new(),
@@ -1336,9 +1444,10 @@ impl OptimizationEngine {
             confidence: 0.8,
             suggested_fingerprint,
             suggested_actions: ZoneActions::default(),
-            reasoning: format!("Zone '{}' has only {} visits and {} total time - consider removal or merging", 
-                             zone_name, usage_stats.total_visits, 
-                             format!("{:?}", usage_stats.total_time)),
+            reasoning: format!(
+                "Zone '{}' has only {} visits and {:?} total time - consider removal or merging",
+                zone_name, usage_stats.total_visits, usage_stats.total_time
+            ),
             evidence,
             suggestion_type: SuggestionType::RemoveZone(zone_name.to_string()),
             created_at: Utc::now(),
@@ -1347,7 +1456,10 @@ impl OptimizationEngine {
     }
 
     /// Analyze unmatched visits to identify potential zones
-    fn analyze_unmatched_visits(&self, unmatched_visits: &VecDeque<ZoneVisit>) -> Vec<LocationCluster> {
+    fn analyze_unmatched_visits(
+        &self,
+        unmatched_visits: &VecDeque<ZoneVisit>,
+    ) -> Vec<LocationCluster> {
         let mut clusters = Vec::new();
         let mut processed_visits = HashSet::new();
 
@@ -1379,7 +1491,10 @@ impl OptimizationEngine {
                 let cluster = LocationCluster {
                     cluster_id: format!("cluster_{}", clusters.len()),
                     representative_fingerprint: centroid.clone(),
-                    fingerprints: cluster_visits.iter().map(|v| v.fingerprint.clone()).collect(),
+                    fingerprints: cluster_visits
+                        .iter()
+                        .map(|v| v.fingerprint.clone())
+                        .collect(),
                     center: NetworkSignatureCenter {
                         average_signals: HashMap::new(),
                         common_networks: BTreeSet::new(),
@@ -1399,14 +1514,14 @@ impl OptimizationEngine {
     fn calculate_visit_similarity(&self, visit1: &ZoneVisit, visit2: &ZoneVisit) -> f64 {
         let networks1: HashSet<_> = visit1.fingerprint.wifi_networks.iter().collect();
         let networks2: HashSet<_> = visit2.fingerprint.wifi_networks.iter().collect();
-        
+
         if networks1.is_empty() && networks2.is_empty() {
             return 0.0;
         }
 
         let intersection = networks1.intersection(&networks2).count();
         let union = networks1.union(&networks2).count();
-        
+
         intersection as f64 / union as f64
     }
 
@@ -1436,7 +1551,7 @@ impl OptimizationEngine {
             return None;
         }
 
-        let total_visits = cluster.visit_count as u32;
+        let total_visits = cluster.visit_count;
         let total_time = Duration::from_secs(3600 * total_visits as u64); // Estimate 1 hour per visit
         let avg_duration = total_time / total_visits;
 
@@ -1445,7 +1560,7 @@ impl OptimizationEngine {
             total_time,
             average_visit_duration: avg_duration,
             common_visit_times: vec![], // Not available from cluster
-            common_actions: vec![], // Not available from cluster
+            common_actions: vec![],     // Not available from cluster
             similar_zones: vec![],
         };
 
@@ -1454,8 +1569,10 @@ impl OptimizationEngine {
             confidence: cluster.radius,
             suggested_fingerprint: cluster.representative_fingerprint.clone(),
             suggested_actions: ZoneActions::default(),
-            reasoning: format!("Detected {} frequent visits to unmatched location - suggests new zone", 
-                             total_visits),
+            reasoning: format!(
+                "Detected {} frequent visits to unmatched location - suggests new zone",
+                total_visits
+            ),
             evidence,
             suggestion_type: SuggestionType::CreateZone,
             created_at: Utc::now(),
@@ -1464,10 +1581,20 @@ impl OptimizationEngine {
     }
 
     /// Analyze temporal patterns for schedule-based optimizations
-    fn analyze_temporal_optimization(&self, location_key: &str, patterns: &[TimePattern]) -> Option<ZoneSuggestion> {
+    fn analyze_temporal_optimization(
+        &self,
+        location_key: &str,
+        patterns: &[TimePattern],
+    ) -> Option<ZoneSuggestion> {
         // Look for strong temporal patterns
-        let work_hours_count = patterns.iter().filter(|p| p.hour >= 9 && p.hour <= 17).count();
-        let evening_count = patterns.iter().filter(|p| p.hour >= 18 && p.hour <= 22).count();
+        let work_hours_count = patterns
+            .iter()
+            .filter(|p| p.hour >= 9 && p.hour <= 17)
+            .count();
+        let evening_count = patterns
+            .iter()
+            .filter(|p| p.hour >= 18 && p.hour <= 22)
+            .count();
 
         if work_hours_count > 5 || evening_count > 5 {
             let suggested_fingerprint = LocationFingerprint {
@@ -1492,8 +1619,10 @@ impl OptimizationEngine {
                 confidence: 0.85,
                 suggested_fingerprint,
                 suggested_actions: ZoneActions::default(),
-                reasoning: format!("Strong temporal pattern detected - {} work hour visits, {} evening visits", 
-                                 work_hours_count, evening_count),
+                reasoning: format!(
+                    "Strong temporal pattern detected - {} work hour visits, {} evening visits",
+                    work_hours_count, evening_count
+                ),
                 evidence,
                 suggestion_type: SuggestionType::OptimizeSchedule,
                 created_at: Utc::now(),
@@ -1505,14 +1634,19 @@ impl OptimizationEngine {
     }
 
     /// Analyze action patterns for automation suggestions
-    fn analyze_action_automation(&self, zone_id: &str, actions: &[ActionPattern]) -> Option<ZoneSuggestion> {
+    fn analyze_action_automation(
+        &self,
+        zone_id: &str,
+        actions: &[ActionPattern],
+    ) -> Option<ZoneSuggestion> {
         // Look for frequently repeated actions
         let mut action_counts = HashMap::new();
         for action in actions {
             *action_counts.entry(&action.action_type).or_insert(0) += 1;
         }
 
-        let frequent_actions: Vec<_> = action_counts.iter()
+        let frequent_actions: Vec<_> = action_counts
+            .iter()
             .filter(|(_, &count)| count >= 3)
             .collect();
 
@@ -1539,8 +1673,10 @@ impl OptimizationEngine {
                 confidence: 0.9,
                 suggested_fingerprint,
                 suggested_actions: ZoneActions::default(),
-                reasoning: format!("Detected {} frequently repeated actions - suggest automation", 
-                                 frequent_actions.len()),
+                reasoning: format!(
+                    "Detected {} frequently repeated actions - suggest automation",
+                    frequent_actions.len()
+                ),
                 evidence,
                 suggestion_type: SuggestionType::AutomateActions(zone_id.to_string()),
                 created_at: Utc::now(),
@@ -1552,7 +1688,11 @@ impl OptimizationEngine {
     }
 
     /// Run optimization algorithm with real analytics data
-    fn run_algorithm_with_analytics(&self, _algorithm: &dyn ZoneOptimizer, analytics: &ZoneAnalytics) -> Vec<OptimizationResult> {
+    fn run_algorithm_with_analytics(
+        &self,
+        _algorithm: &dyn ZoneOptimizer,
+        analytics: &ZoneAnalytics,
+    ) -> Vec<OptimizationResult> {
         let mut results = Vec::new();
 
         // For each zone with usage statistics, run optimization
@@ -1576,8 +1716,17 @@ impl OptimizationEngine {
             };
 
             // Calculate optimization metrics based on real usage
-            let accuracy_improvement = if usage_stats.total_visits > 10 { 0.15 } else { 0.05 };
-            let performance_improvement = if usage_stats.average_duration > Duration::from_secs(1800) { 0.20 } else { 0.10 };
+            let accuracy_improvement = if usage_stats.total_visits > 10 {
+                0.15
+            } else {
+                0.05
+            };
+            let performance_improvement =
+                if usage_stats.average_duration > Duration::from_secs(1800) {
+                    0.20
+                } else {
+                    0.10
+                };
 
             let result = OptimizationResult {
                 zone_id: zone_id.clone(),
@@ -1629,8 +1778,10 @@ impl RelationshipAnalyzer {
 
     /// Get current temporal configuration for diagnostics
     pub fn get_temporal_config(&self) -> (Duration, f64) {
-        (self.temporal_analyzer.get_time_window(), 
-         self.temporal_analyzer.get_sequence_threshold())
+        (
+            self.temporal_analyzer.get_time_window(),
+            self.temporal_analyzer.get_sequence_threshold(),
+        )
     }
 
     fn analyze_relationships(&self, zones: &[GeofenceZone]) -> Vec<ZoneRelationshipSuggestion> {
@@ -1663,7 +1814,10 @@ impl RelationshipAnalyzer {
                 }
 
                 // Check for functional relationships
-                if self.functional_analyzer.are_functionally_related(zone1, zone2) {
+                if self
+                    .functional_analyzer
+                    .are_functionally_related(zone1, zone2)
+                {
                     suggestions.push(ZoneRelationshipSuggestion {
                         zones: vec![zone1.id.clone(), zone2.id.clone()],
                         relationship_type: ZoneRelationshipType::Functional,
@@ -1742,13 +1896,13 @@ impl SpatialAnalyzer {
     /// Extract WiFi network hashes from fingerprints
     fn extract_wifi_networks(&self, fingerprints: &[LocationFingerprint]) -> HashSet<String> {
         let mut networks = HashSet::new();
-        
+
         for fingerprint in fingerprints {
             for network in &fingerprint.wifi_networks {
                 networks.insert(network.ssid_hash.clone());
             }
         }
-        
+
         networks
     }
 }
@@ -1765,26 +1919,32 @@ impl TemporalAnalyzer {
     fn calculate_temporal_correlation(&self, zone1: &GeofenceZone, zone2: &GeofenceZone) -> f64 {
         // This would typically use visit history data, but for now we'll use zone metadata
         // In a real implementation, this would analyze historical visit patterns
-        
+
         // Use time window to determine recency bonus
-        let recency_bonus = if let (Some(last1), Some(last2)) = (&zone1.last_matched, &zone2.last_matched) {
-            let time_diff = if last1 > last2 { *last1 - *last2 } else { *last2 - *last1 };
-            let time_diff_seconds = time_diff.num_seconds() as u64;
-            
-            // Higher correlation if zones were visited within the time window
-            if time_diff_seconds <= self.time_window.as_secs() {
-                0.3 // Bonus for zones visited within time window
+        let recency_bonus =
+            if let (Some(last1), Some(last2)) = (&zone1.last_matched, &zone2.last_matched) {
+                let time_diff = if last1 > last2 {
+                    *last1 - *last2
+                } else {
+                    *last2 - *last1
+                };
+                let time_diff_seconds = time_diff.num_seconds() as u64;
+
+                // Higher correlation if zones were visited within the time window
+                if time_diff_seconds <= self.time_window.as_secs() {
+                    0.3 // Bonus for zones visited within time window
+                } else {
+                    0.0
+                }
             } else {
                 0.0
-            }
-        } else {
-            0.0
-        };
-        
+            };
+
         // Estimate temporal correlation based on zone names and actions
         let name_similarity = self.calculate_name_based_temporal_hint(&zone1.name, &zone2.name);
-        let action_temporal_hint = self.calculate_action_temporal_hint(&zone1.actions, &zone2.actions);
-        
+        let action_temporal_hint =
+            self.calculate_action_temporal_hint(&zone1.actions, &zone2.actions);
+
         let base_correlation = (name_similarity + action_temporal_hint) / 2.0;
         (base_correlation + recency_bonus).min(1.0)
     }
@@ -1794,46 +1954,56 @@ impl TemporalAnalyzer {
         // Look for sequential patterns in names
         let name1_lower = name1.to_lowercase();
         let name2_lower = name2.to_lowercase();
-        
+
         // Check for common sequential patterns
         let sequential_keywords = [
-            ("home", "work"), ("work", "home"),
-            ("office", "home"), ("home", "office"),
-            ("morning", "evening"), ("day", "night"),
-            ("arrival", "departure"), ("entry", "exit"),
+            ("home", "work"),
+            ("work", "home"),
+            ("office", "home"),
+            ("home", "office"),
+            ("morning", "evening"),
+            ("day", "night"),
+            ("arrival", "departure"),
+            ("entry", "exit"),
         ];
-        
+
         for (first, second) in sequential_keywords.iter() {
-            if (name1_lower.contains(first) && name2_lower.contains(second)) ||
-               (name1_lower.contains(second) && name2_lower.contains(first)) {
+            if (name1_lower.contains(first) && name2_lower.contains(second))
+                || (name1_lower.contains(second) && name2_lower.contains(first))
+            {
                 return 0.8;
             }
         }
-        
+
         0.2 // Default low correlation
     }
 
     /// Calculate temporal hints based on action patterns
-    fn calculate_action_temporal_hint(&self, actions1: &ZoneActions, actions2: &ZoneActions) -> f64 {
+    fn calculate_action_temporal_hint(
+        &self,
+        actions1: &ZoneActions,
+        actions2: &ZoneActions,
+    ) -> f64 {
         // Analyze if actions suggest temporal relationship
         let mut temporal_score: f64 = 0.0;
-        
+
         // VPN patterns: work zones often have different VPN configs than home
         if actions1.vpn != actions2.vpn {
             temporal_score += 0.3; // Different VPN suggests different contexts
         }
-        
+
         // WiFi patterns: different WiFi configs often suggest different locations visited in sequence
         if actions1.wifi != actions2.wifi {
             temporal_score += 0.2;
         }
-        
+
         // Bluetooth patterns: different devices suggest different contexts/times
-        let bluetooth_overlap = self.calculate_bluetooth_overlap(&actions1.bluetooth, &actions2.bluetooth);
+        let bluetooth_overlap =
+            self.calculate_bluetooth_overlap(&actions1.bluetooth, &actions2.bluetooth);
         if bluetooth_overlap < 0.5 {
             temporal_score += 0.3;
         }
-        
+
         temporal_score.min(1.0)
     }
 
@@ -1842,12 +2012,12 @@ impl TemporalAnalyzer {
         if bluetooth1.is_empty() && bluetooth2.is_empty() {
             return 1.0;
         }
-        
+
         let set1: HashSet<_> = bluetooth1.iter().collect();
         let set2: HashSet<_> = bluetooth2.iter().collect();
         let intersection: HashSet<_> = set1.intersection(&set2).collect();
         let union: HashSet<_> = set1.union(&set2).collect();
-        
+
         if union.is_empty() {
             0.0
         } else {
@@ -1871,26 +2041,31 @@ impl FunctionalAnalyzer {
         // Analyze if zones have similar actions/purposes
         let action_similarity = self.calculate_action_similarity(&zone1.actions, &zone2.actions);
         let pattern_correlation = self.calculate_pattern_correlation(zone1, zone2);
-        
+
         // Zones are functionally related if either they have similar actions OR similar usage patterns
-        action_similarity > self.action_similarity_threshold || 
-        pattern_correlation > self.pattern_correlation_threshold
+        action_similarity > self.action_similarity_threshold
+            || pattern_correlation > self.pattern_correlation_threshold
     }
 
     /// Calculate usage pattern correlation between zones
     fn calculate_pattern_correlation(&self, zone1: &GeofenceZone, zone2: &GeofenceZone) -> f64 {
         // Analyze WiFi network patterns for correlation
         let network_pattern_score = self.calculate_network_pattern_correlation(zone1, zone2);
-        
+
         // Analyze naming patterns for functional correlation
-        let naming_pattern_score = self.calculate_naming_pattern_correlation(&zone1.name, &zone2.name);
-        
+        let naming_pattern_score =
+            self.calculate_naming_pattern_correlation(&zone1.name, &zone2.name);
+
         // Combine scores
         (network_pattern_score + naming_pattern_score) / 2.0
     }
 
     /// Calculate network pattern correlation
-    fn calculate_network_pattern_correlation(&self, zone1: &GeofenceZone, zone2: &GeofenceZone) -> f64 {
+    fn calculate_network_pattern_correlation(
+        &self,
+        zone1: &GeofenceZone,
+        zone2: &GeofenceZone,
+    ) -> f64 {
         // Look for similar network environments that suggest similar functions
         let zone1_networks = self.extract_wifi_networks(&zone1.fingerprints);
         let zone2_networks = self.extract_wifi_networks(&zone2.fingerprints);
@@ -1901,34 +2076,48 @@ impl FunctionalAnalyzer {
 
         // Calculate network overlap
         let intersection: HashSet<_> = zone1_networks.intersection(&zone2_networks).collect();
-        let overlap_ratio = intersection.len() as f64 / zone1_networks.len().min(zone2_networks.len()) as f64;
+        let overlap_ratio =
+            intersection.len() as f64 / zone1_networks.len().min(zone2_networks.len()) as f64;
 
         // Convert network sets to vectors for the environment detection
         let zone1_networks_vec: Vec<String> = zone1_networks.into_iter().collect();
         let zone2_networks_vec: Vec<String> = zone2_networks.into_iter().collect();
-        
+
         // Boost score if networks suggest similar environments (e.g., corporate networks)
-        let environment_boost = self.detect_similar_network_environment(&zone1_networks_vec, &zone2_networks_vec);
-        
+        let environment_boost =
+            self.detect_similar_network_environment(&zone1_networks_vec, &zone2_networks_vec);
+
         (overlap_ratio + environment_boost).min(1.0)
     }
 
     /// Detect if networks suggest similar environments
-    fn detect_similar_network_environment(&self, networks1: &[String], networks2: &[String]) -> f64 {
-        let corporate_keywords = ["corp", "office", "work", "company", "enterprise", "wifi", "guest"];
+    fn detect_similar_network_environment(
+        &self,
+        networks1: &[String],
+        networks2: &[String],
+    ) -> f64 {
+        let corporate_keywords = [
+            "corp",
+            "office",
+            "work",
+            "company",
+            "enterprise",
+            "wifi",
+            "guest",
+        ];
         let home_keywords = ["home", "house", "family", "personal", "wifi"];
-        
+
         let net1_text = networks1.join(" ").to_lowercase();
         let net2_text = networks2.join(" ").to_lowercase();
-        
+
         // Check for corporate environment
         let net1_corporate = corporate_keywords.iter().any(|&kw| net1_text.contains(kw));
         let net2_corporate = corporate_keywords.iter().any(|&kw| net2_text.contains(kw));
-        
+
         // Check for home environment
         let net1_home = home_keywords.iter().any(|&kw| net1_text.contains(kw));
         let net2_home = home_keywords.iter().any(|&kw| net2_text.contains(kw));
-        
+
         if (net1_corporate && net2_corporate) || (net1_home && net2_home) {
             0.3 // Similar environment boost
         } else {
@@ -1940,44 +2129,62 @@ impl FunctionalAnalyzer {
     fn calculate_naming_pattern_correlation(&self, name1: &str, name2: &str) -> f64 {
         let name1_lower = name1.to_lowercase();
         let name2_lower = name2.to_lowercase();
-        
+
         // Look for functional similarity indicators
         let functional_keywords = [
-            "work", "office", "meeting", "conference",
-            "home", "house", "bedroom", "kitchen", "living",
-            "coffee", "restaurant", "store", "shop",
-            "station", "airport", "transport", "travel",
-            "gym", "fitness", "health", "medical",
+            "work",
+            "office",
+            "meeting",
+            "conference",
+            "home",
+            "house",
+            "bedroom",
+            "kitchen",
+            "living",
+            "coffee",
+            "restaurant",
+            "store",
+            "shop",
+            "station",
+            "airport",
+            "transport",
+            "travel",
+            "gym",
+            "fitness",
+            "health",
+            "medical",
         ];
-        
-        let name1_functions: HashSet<_> = functional_keywords.iter()
+
+        let name1_functions: HashSet<_> = functional_keywords
+            .iter()
             .filter(|&&kw| name1_lower.contains(kw))
             .collect();
-        
-        let name2_functions: HashSet<_> = functional_keywords.iter()
+
+        let name2_functions: HashSet<_> = functional_keywords
+            .iter()
             .filter(|&&kw| name2_lower.contains(kw))
             .collect();
-        
+
         if name1_functions.is_empty() || name2_functions.is_empty() {
             return 0.1; // Low default correlation
         }
-        
+
         let intersection = name1_functions.intersection(&name2_functions).count();
         let union = name1_functions.union(&name2_functions).count();
-        
+
         intersection as f64 / union as f64
     }
 
     /// Extract WiFi network hashes from fingerprints
     fn extract_wifi_networks(&self, fingerprints: &[LocationFingerprint]) -> HashSet<String> {
         let mut networks = HashSet::new();
-        
+
         for fingerprint in fingerprints {
             for network in &fingerprint.wifi_networks {
                 networks.insert(network.ssid_hash.clone());
             }
         }
-        
+
         networks
     }
 
@@ -1999,7 +2206,8 @@ impl FunctionalAnalyzer {
 
         // Compare Bluetooth actions
         total_comparisons += 1;
-        let bluetooth_similarity = self.calculate_list_similarity(&actions1.bluetooth, &actions2.bluetooth);
+        let bluetooth_similarity =
+            self.calculate_list_similarity(&actions1.bluetooth, &actions2.bluetooth);
         similarity_score += bluetooth_similarity;
 
         similarity_score / total_comparisons as f64
@@ -2016,7 +2224,11 @@ impl FunctionalAnalyzer {
         let intersection = set1.intersection(&set2).count();
         let union = set1.union(&set2).count();
 
-        if union == 0 { 1.0 } else { intersection as f64 / union as f64 }
+        if union == 0 {
+            1.0
+        } else {
+            intersection as f64 / union as f64
+        }
     }
 }
 
@@ -2044,7 +2256,11 @@ impl FingerprintOptimizer {
 }
 
 impl ZoneOptimizer for FingerprintOptimizer {
-    fn analyze_zone(&self, _zone: &GeofenceZone, _analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion> {
+    fn analyze_zone(
+        &self,
+        _zone: &GeofenceZone,
+        _analytics: &ZoneAnalytics,
+    ) -> Vec<ZoneSuggestion> {
         Vec::new() // Placeholder
     }
 
@@ -2067,7 +2283,11 @@ impl ActionOptimizer {
 }
 
 impl ZoneOptimizer for ActionOptimizer {
-    fn analyze_zone(&self, _zone: &GeofenceZone, _analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion> {
+    fn analyze_zone(
+        &self,
+        _zone: &GeofenceZone,
+        _analytics: &ZoneAnalytics,
+    ) -> Vec<ZoneSuggestion> {
         Vec::new() // Placeholder
     }
 
@@ -2090,7 +2310,11 @@ impl ZoneMergeOptimizer {
 }
 
 impl ZoneOptimizer for ZoneMergeOptimizer {
-    fn analyze_zone(&self, _zone: &GeofenceZone, _analytics: &ZoneAnalytics) -> Vec<ZoneSuggestion> {
+    fn analyze_zone(
+        &self,
+        _zone: &GeofenceZone,
+        _analytics: &ZoneAnalytics,
+    ) -> Vec<ZoneSuggestion> {
         Vec::new() // Placeholder
     }
 
@@ -2109,7 +2333,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn create_test_fingerprint(networks: Vec<&str>) -> LocationFingerprint {
-        let wifi_networks = networks.into_iter()
+        let wifi_networks = networks
+            .into_iter()
             .enumerate()
             .map(|(i, ssid)| NetworkSignature {
                 ssid_hash: ssid.to_string(),
@@ -2132,7 +2357,7 @@ mod tests {
     async fn test_advanced_zone_manager_creation() {
         let config = AdvancedZoneConfig::default();
         let manager = AdvancedZoneManager::new(config).await;
-        
+
         assert!(manager.config.enable_ml_suggestions);
         assert!(manager.config.enable_hierarchical_zones);
     }
@@ -2141,10 +2366,10 @@ mod tests {
     async fn test_visit_recording() {
         let config = AdvancedZoneConfig::default();
         let manager = AdvancedZoneManager::new(config).await;
-        
+
         let fingerprint = create_test_fingerprint(vec!["network1", "network2"]);
         let result = manager.record_visit(fingerprint, None).await;
-        
+
         assert!(result.is_ok());
     }
 
@@ -2152,7 +2377,7 @@ mod tests {
     async fn test_suggestion_generation() {
         let config = AdvancedZoneConfig::default();
         let manager = AdvancedZoneManager::new(config).await;
-        
+
         let suggestions = manager.generate_suggestions().await.unwrap();
         // Initially should have no suggestions
         assert!(suggestions.is_empty());
@@ -2162,15 +2387,17 @@ mod tests {
     async fn test_hierarchy_creation() {
         let config = AdvancedZoneConfig::default();
         let mut manager = AdvancedZoneManager::new(config).await;
-        
-        let result = manager.create_zone_hierarchy(
-            "office".to_string(),
-            "meeting_room".to_string(),
-            ZoneRelationshipType::Geographic
-        ).await;
-        
+
+        let result = manager
+            .create_zone_hierarchy(
+                "office".to_string(),
+                "meeting_room".to_string(),
+                ZoneRelationshipType::Geographic,
+            )
+            .await;
+
         assert!(result.is_ok());
-        
+
         let hierarchy = manager.get_zone_hierarchy("meeting_room");
         assert!(hierarchy.is_some());
         assert_eq!(hierarchy.unwrap().parent_id, Some("office".to_string()));
@@ -2179,15 +2406,15 @@ mod tests {
     #[test]
     fn test_location_clusterer() {
         let mut clusterer = LocationClusterer::new();
-        
+
         let fp1 = create_test_fingerprint(vec!["network1", "network2"]);
         let fp2 = create_test_fingerprint(vec!["network1", "network2"]);
         let fp3 = create_test_fingerprint(vec!["network3", "network4"]);
-        
+
         clusterer.add_location(&fp1);
         clusterer.add_location(&fp2);
         clusterer.add_location(&fp3);
-        
+
         assert_eq!(clusterer.clusters.len(), 2); // Should create 2 clusters
     }
 
@@ -2232,12 +2459,13 @@ mod tests {
             },
         ];
 
-        suggestions.sort_by(|a, b| {
-            match (a.priority.clone(), b.priority.clone()) {
-                (SuggestionPriority::High, SuggestionPriority::Low) => std::cmp::Ordering::Less,
-                (SuggestionPriority::Low, SuggestionPriority::High) => std::cmp::Ordering::Greater,
-                _ => b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal),
-            }
+        suggestions.sort_by(|a, b| match (a.priority.clone(), b.priority.clone()) {
+            (SuggestionPriority::High, SuggestionPriority::Low) => std::cmp::Ordering::Less,
+            (SuggestionPriority::Low, SuggestionPriority::High) => std::cmp::Ordering::Greater,
+            _ => b
+                .confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal),
         });
 
         assert_eq!(suggestions[0].suggested_name, "High");
@@ -2248,7 +2476,7 @@ mod tests {
     fn test_relationship_analysis() {
         let analyzer = RelationshipAnalyzer::new();
         let zones = Vec::new(); // Empty for test
-        
+
         let relationships = analyzer.analyze_relationships(&zones);
         assert!(relationships.is_empty());
     }
@@ -2256,7 +2484,7 @@ mod tests {
     #[test]
     fn test_advanced_zone_config_default() {
         let config = AdvancedZoneConfig::default();
-        
+
         assert!(config.enable_ml_suggestions);
         assert!(config.enable_hierarchical_zones);
         assert_eq!(config.min_visits_for_suggestion, 3);

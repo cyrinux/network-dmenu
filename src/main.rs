@@ -124,11 +124,17 @@ struct Args {
     daemon_status: bool,
 
     #[cfg(feature = "geofencing")]
-    #[arg(long, help = "Create geofence zone from current location (or add fingerprint if zone exists)")]
+    #[arg(
+        long,
+        help = "Create geofence zone from current location (or add fingerprint if zone exists)"
+    )]
     create_zone: Option<String>,
 
     #[cfg(feature = "geofencing")]
-    #[arg(long, help = "Add fingerprint to existing zone (for large areas with multiple rooms)")]
+    #[arg(
+        long,
+        help = "Add fingerprint to existing zone (for large areas with multiple rooms)"
+    )]
     add_fingerprint: Option<String>,
 
     #[cfg(feature = "geofencing")]
@@ -333,14 +339,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let config_path = args
             .config
             .clone()
-            .or_else(|| {
-                config_dir().map(|dir| dir.join("config.toml"))
-            })
-            .unwrap_or_else(|| dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("config.toml"));
+            .or_else(|| config_dir().map(|dir| dir.join("config.toml")))
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("config.toml")
+            });
 
-        debug!("📋 Validating configuration file: {}", config_path.display());
+        debug!(
+            "📋 Validating configuration file: {}",
+            config_path.display()
+        );
 
         match validate_config_file(&config_path).await {
             Ok(()) => {
@@ -1960,8 +1969,11 @@ mod tests {
 
 /// Validate configuration file syntax and structure
 async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<dyn Error>> {
-    debug!("🔍 Checking if config file exists: {}", config_path.display());
-    
+    debug!(
+        "🔍 Checking if config file exists: {}",
+        config_path.display()
+    );
+
     if !config_path.exists() {
         return Err(format!("Configuration file not found: {}", config_path.display()).into());
     }
@@ -1976,8 +1988,8 @@ async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<d
 
     debug!("🔍 Parsing TOML syntax");
     // First check basic TOML syntax
-    let parsed_toml: toml::Value = toml::from_str(&config_content)
-        .map_err(|e| format!("Invalid TOML syntax: {}", e))?;
+    let parsed_toml: toml::Value =
+        toml::from_str(&config_content).map_err(|e| format!("Invalid TOML syntax: {}", e))?;
 
     debug!("✅ TOML syntax is valid");
 
@@ -1993,7 +2005,7 @@ async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<d
     {
         if let Some(geofencing_table) = parsed_toml.get("geofencing") {
             debug!("🔍 Validating geofencing configuration");
-            
+
             // Check if zones are present
             if let Some(zones) = geofencing_table.get("zones") {
                 if let Some(zones_array) = zones.as_array() {
@@ -2005,7 +2017,7 @@ async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<d
                     return Err("geofencing.zones must be an array".into());
                 }
             }
-            
+
             debug!("✅ Geofencing configuration is valid");
         }
     }
@@ -2029,7 +2041,8 @@ async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<d
 /// Validate a single geofencing zone configuration
 #[cfg(feature = "geofencing")]
 fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
-    let zone_table = zone.as_table()
+    let zone_table = zone
+        .as_table()
         .ok_or_else(|| format!("Zone {} must be a table", index))?;
 
     // Check required fields
@@ -2039,7 +2052,8 @@ fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn 
 
     // Validate actions if present
     if let Some(actions) = zone_table.get("actions") {
-        let actions_table = actions.as_table()
+        let actions_table = actions
+            .as_table()
             .ok_or_else(|| format!("Zone {} actions must be a table", index))?;
 
         // Validate bluetooth field if present
@@ -2049,10 +2063,12 @@ fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn 
             }
         }
 
-        // Validate custom_commands field if present  
+        // Validate custom_commands field if present
         if let Some(custom_commands) = actions_table.get("custom_commands") {
             if !custom_commands.is_array() {
-                return Err(format!("Zone {} custom_commands field must be an array", index).into());
+                return Err(
+                    format!("Zone {} custom_commands field must be an array", index).into(),
+                );
             }
         }
     }
@@ -2063,14 +2079,15 @@ fn validate_zone_config(zone: &toml::Value, index: usize) -> Result<(), Box<dyn 
 
 /// Validate a single custom action configuration
 fn validate_custom_action(action: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
-    let action_table = action.as_table()
+    let action_table = action
+        .as_table()
         .ok_or_else(|| format!("Action {} must be a table", index))?;
 
     // Check required fields
     if !action_table.contains_key("display") {
         return Err(format!("Action {} missing required 'display' field", index).into());
     }
-    
+
     if !action_table.contains_key("cmd") {
         return Err(format!("Action {} missing required 'cmd' field", index).into());
     }
@@ -2202,7 +2219,10 @@ async fn handle_geofencing_commands(
             .find(|zone| zone.name == *zone_name || zone.id == *zone_name)
             .map(|zone| zone.actions.clone())
             .unwrap_or_else(|| {
-                debug!("No zone actions found in config for '{}', using defaults", zone_name);
+                debug!(
+                    "No zone actions found in config for '{}', using defaults",
+                    zone_name
+                );
                 ZoneActions {
                     notifications: true,
                     ..Default::default()
@@ -2210,9 +2230,12 @@ async fn handle_geofencing_commands(
             });
 
         // Check if actions are configured for user feedback
-        let has_configured_actions = actions.wifi.is_some() || actions.vpn.is_some() || 
-               actions.tailscale_exit_node.is_some() || actions.tailscale_shields.is_some() ||
-               !actions.bluetooth.is_empty() || !actions.custom_commands.is_empty();
+        let has_configured_actions = actions.wifi.is_some()
+            || actions.vpn.is_some()
+            || actions.tailscale_exit_node.is_some()
+            || actions.tailscale_shields.is_some()
+            || !actions.bluetooth.is_empty()
+            || !actions.custom_commands.is_empty();
 
         debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}", 
                zone_name, 
@@ -2227,13 +2250,16 @@ async fn handle_geofencing_commands(
             Ok(zone) => {
                 // Check if this was a new zone or updated existing zone
                 let is_new_zone = zone.fingerprints.len() == 1 && zone.match_count == 0;
-                
+
                 if is_new_zone {
                     println!("✅ Created new zone '{}' with ID: {}", zone.name, zone.id);
                 } else {
-                    println!("✅ Updated existing zone '{}' with ID: {}", zone.name, zone.id);
+                    println!(
+                        "✅ Updated existing zone '{}' with ID: {}",
+                        zone.name, zone.id
+                    );
                 }
-                
+
                 if let Some(first_fingerprint) = zone.fingerprints.first() {
                     println!(
                         "📊 Confidence score: {:.2}",
@@ -2241,7 +2267,7 @@ async fn handle_geofencing_commands(
                     );
                 }
                 println!("📍 Fingerprints: {}", zone.fingerprints.len());
-                
+
                 // Show zone actions
                 if has_configured_actions {
                     println!("🎯 Zone actions configured from config file");

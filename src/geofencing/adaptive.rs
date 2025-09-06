@@ -367,11 +367,7 @@ impl AdaptiveScanner {
 
     /// Check if interval should be updated (avoid thrashing)
     fn should_update_interval(&self, new_interval: Duration) -> bool {
-        let diff = if new_interval > self.current_interval {
-            new_interval - self.current_interval
-        } else {
-            self.current_interval - new_interval
-        };
+        let diff = new_interval.abs_diff(self.current_interval);
 
         // Only update if difference is significant (> 20% or > 10 seconds)
         let threshold = (self.current_interval.as_secs_f64() * 0.2).max(10.0);

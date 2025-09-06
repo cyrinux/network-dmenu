@@ -3,7 +3,7 @@
 //! Provides metrics collection, health checks, distributed tracing,
 //! structured logging, and integration with monitoring systems.
 
-use crate::geofencing::{GeofenceError, Result, LocationChange};
+use crate::geofencing::{GeofenceError, LocationChange, Result};
 use chrono::{DateTime, Utc};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -412,7 +412,9 @@ impl ObservabilityManager {
 
         let metrics_collector = Arc::new(Mutex::new(MetricsCollector::new()));
         let health_checker = Arc::new(HealthChecker::new());
-        let tracer = Arc::new(Mutex::new(DistributedTracer::new(config.trace_sampling_rate)));
+        let tracer = Arc::new(Mutex::new(DistributedTracer::new(
+            config.trace_sampling_rate,
+        )));
         let event_logger = Arc::new(Mutex::new(EventLogger::new()));
 
         let manager = Self {
@@ -449,32 +451,57 @@ impl ObservabilityManager {
 
     /// Record zone change event
     pub async fn record_zone_change(&self, change: &LocationChange) {
-        debug!("Recording zone change event: {} -> {}", 
-               change.from.as_ref().map(|z| z.name.as_str()).unwrap_or("None"),
-               change.to.name);
+        debug!(
+            "Recording zone change event: {} -> {}",
+            change
+                .from
+                .as_ref()
+                .map(|z| z.name.as_str())
+                .unwrap_or("None"),
+            change.to.name
+        );
 
         // Update metrics
         {
             let mut collector = self.metrics_collector.lock().await;
             collector.current_metrics.zone_metrics.total_zone_changes += 1;
-            collector.current_metrics.zone_metrics.zone_changes_last_hour += 1;
-            
-            *collector.current_metrics.zone_metrics.zone_change_frequency
+            collector
+                .current_metrics
+                .zone_metrics
+                .zone_changes_last_hour += 1;
+
+            *collector
+                .current_metrics
+                .zone_metrics
+                .zone_change_frequency
                 .entry(change.to.name.clone())
                 .or_insert(0) += 1;
         }
 
         // Create trace span
         if self.config.tracing_enabled {
-            let span_id = self.start_trace_span(
-                "zone_change",
-                Some([
-                    ("from_zone", change.from.as_ref().map(|z| z.name.as_str()).unwrap_or("none")),
-                    ("to_zone", &change.to.name),
-                    ("confidence", &change.confidence.to_string()),
-                ].into_iter().collect())
-            ).await;
-            
+            let span_id = self
+                .start_trace_span(
+                    "zone_change",
+                    Some(
+                        [
+                            (
+                                "from_zone",
+                                change
+                                    .from
+                                    .as_ref()
+                                    .map(|z| z.name.as_str())
+                                    .unwrap_or("none"),
+                            ),
+                            ("to_zone", &change.to.name),
+                            ("confidence", &change.confidence.to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ),
+                )
+                .await;
+
             // End span immediately for zone change events
             self.end_trace_span(&span_id).await;
         }
@@ -484,16 +511,35 @@ impl ObservabilityManager {
             "info",
             "Zone change detected",
             [
-                ("event_type".to_string(), serde_json::Value::String("zone_change".to_string())),
-                ("from_zone".to_string(), serde_json::Value::String(
-                    change.from.as_ref().map(|z| z.name.clone()).unwrap_or("none".to_string())
-                )),
-                ("to_zone".to_string(), serde_json::Value::String(change.to.name.clone())),
-                ("confidence".to_string(), serde_json::Value::Number(
-                    serde_json::Number::from_f64(change.confidence).unwrap()
-                )),
-            ].into_iter().collect()
-        ).await;
+                (
+                    "event_type".to_string(),
+                    serde_json::Value::String("zone_change".to_string()),
+                ),
+                (
+                    "from_zone".to_string(),
+                    serde_json::Value::String(
+                        change
+                            .from
+                            .as_ref()
+                            .map(|z| z.name.clone())
+                            .unwrap_or("none".to_string()),
+                    ),
+                ),
+                (
+                    "to_zone".to_string(),
+                    serde_json::Value::String(change.to.name.clone()),
+                ),
+                (
+                    "confidence".to_string(),
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(change.confidence).unwrap(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .await;
     }
 
     /// Record action execution
@@ -504,52 +550,79 @@ impl ObservabilityManager {
         duration: Duration,
         error: Option<&str>,
     ) {
-        debug!("Recording action execution: {} (success: {}, duration: {:?})", 
-               action_type, success, duration);
+        debug!(
+            "Recording action execution: {} (success: {}, duration: {:?})",
+            action_type, success, duration
+        );
 
         // Update metrics
         {
             let mut collector = self.metrics_collector.lock().await;
             collector.current_metrics.action_metrics.total_actions += 1;
-            
+
             if success {
                 collector.current_metrics.action_metrics.successful_actions += 1;
             } else {
                 collector.current_metrics.action_metrics.failed_actions += 1;
-                
+
                 if let Some(error) = error {
-                    *collector.current_metrics.action_metrics.failure_reasons
+                    *collector
+                        .current_metrics
+                        .action_metrics
+                        .failure_reasons
                         .entry(error.to_string())
                         .or_insert(0) += 1;
                 }
             }
-            
-            *collector.current_metrics.action_metrics.actions_by_type
+
+            *collector
+                .current_metrics
+                .action_metrics
+                .actions_by_type
                 .entry(action_type.to_string())
                 .or_insert(0) += 1;
         }
 
         // Log structured event
         let mut fields = HashMap::new();
-        fields.insert("event_type".to_string(), serde_json::Value::String("action_execution".to_string()));
-        fields.insert("action_type".to_string(), serde_json::Value::String(action_type.to_string()));
+        fields.insert(
+            "event_type".to_string(),
+            serde_json::Value::String("action_execution".to_string()),
+        );
+        fields.insert(
+            "action_type".to_string(),
+            serde_json::Value::String(action_type.to_string()),
+        );
         fields.insert("success".to_string(), serde_json::Value::Bool(success));
-        fields.insert("duration_ms".to_string(), 
-                     serde_json::Value::Number(serde_json::Number::from(duration.as_millis() as u64)));
-        
+        fields.insert(
+            "duration_ms".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(duration.as_millis() as u64)),
+        );
+
         if let Some(error) = error {
-            fields.insert("error".to_string(), serde_json::Value::String(error.to_string()));
+            fields.insert(
+                "error".to_string(),
+                serde_json::Value::String(error.to_string()),
+            );
         }
 
         self.log_structured_event(
             if success { "info" } else { "warn" },
-            &format!("Action execution {}", if success { "completed" } else { "failed" }),
-            fields
-        ).await;
+            &format!(
+                "Action execution {}",
+                if success { "completed" } else { "failed" }
+            ),
+            fields,
+        )
+        .await;
     }
 
     /// Start a distributed trace span
-    pub async fn start_trace_span(&self, operation: &str, tags: Option<HashMap<&str, &str>>) -> String {
+    pub async fn start_trace_span(
+        &self,
+        operation: &str,
+        tags: Option<HashMap<&str, &str>>,
+    ) -> String {
         if !self.config.tracing_enabled {
             return String::new();
         }
@@ -606,16 +679,14 @@ impl ObservabilityManager {
             "json" => {
                 if self.config.export_config.export_to_file {
                     if let Some(ref file_path) = self.config.export_config.file_path {
-                        let json_data = serde_json::to_string_pretty(&metrics)
-                            .map_err(|e| GeofenceError::Config(format!(
-                                "Failed to serialize metrics: {}", e
-                            )))?;
-                        
-                        fs::write(file_path, json_data).await
-                            .map_err(|e| GeofenceError::Config(format!(
-                                "Failed to write metrics file: {}", e
-                            )))?;
-                        
+                        let json_data = serde_json::to_string_pretty(&metrics).map_err(|e| {
+                            GeofenceError::Config(format!("Failed to serialize metrics: {}", e))
+                        })?;
+
+                        fs::write(file_path, json_data).await.map_err(|e| {
+                            GeofenceError::Config(format!("Failed to write metrics file: {}", e))
+                        })?;
+
                         debug!("Metrics exported to file: {}", file_path);
                     }
                 }
@@ -625,7 +696,10 @@ impl ObservabilityManager {
                 debug!("Prometheus export not yet implemented");
             }
             _ => {
-                warn!("Unknown metrics export format: {}", self.config.export_config.format);
+                warn!(
+                    "Unknown metrics export format: {}",
+                    self.config.export_config.format
+                );
             }
         }
 
@@ -642,7 +716,7 @@ impl ObservabilityManager {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
-                
+
                 let mut collector_guard = collector.lock().await;
                 collector_guard.collect_metrics().await;
                 drop(collector_guard);
@@ -662,7 +736,7 @@ impl ObservabilityManager {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
-                
+
                 health_checker.perform_health_checks().await;
             }
         });
@@ -695,7 +769,10 @@ impl ObservabilityManager {
         metrics_collector: Arc<Mutex<MetricsCollector>>,
         health_checker: Arc<HealthChecker>,
     ) {
-        debug!("Metrics export loop started with interval: {:?}", config.interval);
+        debug!(
+            "Metrics export loop started with interval: {:?}",
+            config.interval
+        );
 
         let mut interval = tokio::time::interval(config.interval);
 
@@ -716,17 +793,23 @@ impl ObservabilityManager {
             // Export metrics based on configured format
             match config.format.as_str() {
                 "json" => {
-                    if let Err(e) = Self::export_metrics_json(&metrics, &health_summary, &config).await {
+                    if let Err(e) =
+                        Self::export_metrics_json(&metrics, &health_summary, &config).await
+                    {
                         warn!("Failed to export metrics as JSON: {}", e);
                     }
                 }
                 "prometheus" => {
-                    if let Err(e) = Self::export_metrics_prometheus(&metrics, &health_summary, &config).await {
+                    if let Err(e) =
+                        Self::export_metrics_prometheus(&metrics, &health_summary, &config).await
+                    {
                         warn!("Failed to export metrics as Prometheus: {}", e);
                     }
                 }
                 "influxdb" => {
-                    if let Err(e) = Self::export_metrics_influxdb(&metrics, &health_summary, &config).await {
+                    if let Err(e) =
+                        Self::export_metrics_influxdb(&metrics, &health_summary, &config).await
+                    {
                         warn!("Failed to export metrics to InfluxDB: {}", e);
                     }
                 }
@@ -752,23 +835,26 @@ impl ObservabilityManager {
         // Export to file if configured
         if config.export_to_file {
             if let Some(ref file_path) = config.file_path {
-                let file_path = format!("{}/metrics-{}.json", 
-                                      file_path, 
-                                      chrono::Utc::now().format("%Y%m%d-%H%M%S"));
-                
+                let file_path = format!(
+                    "{}/metrics-{}.json",
+                    file_path,
+                    chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                );
+
                 if let Some(parent) = std::path::Path::new(&file_path).parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         GeofenceError::Config(format!("Failed to create export directory: {}", e))
                     })?;
                 }
 
-                let json_data = serde_json::to_string_pretty(&export_data)
-                    .map_err(|e| GeofenceError::Config(format!("Failed to serialize metrics: {}", e)))?;
-                
-                tokio::fs::write(&file_path, json_data)
-                    .await
-                    .map_err(|e| GeofenceError::Config(format!("Failed to write metrics file: {}", e)))?;
-                
+                let json_data = serde_json::to_string_pretty(&export_data).map_err(|e| {
+                    GeofenceError::Config(format!("Failed to serialize metrics: {}", e))
+                })?;
+
+                tokio::fs::write(&file_path, json_data).await.map_err(|e| {
+                    GeofenceError::Config(format!("Failed to write metrics file: {}", e))
+                })?;
+
                 debug!("Exported metrics to JSON file: {}", file_path);
             }
         }
@@ -794,7 +880,7 @@ impl ObservabilityManager {
         if config.export_to_file {
             if let Some(ref file_path) = config.file_path {
                 let file_path = format!("{}/metrics.prom", file_path);
-                
+
                 if let Some(parent) = std::path::Path::new(&file_path).parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         GeofenceError::Config(format!("Failed to create export directory: {}", e))
@@ -803,8 +889,10 @@ impl ObservabilityManager {
 
                 tokio::fs::write(&file_path, prometheus_data)
                     .await
-                    .map_err(|e| GeofenceError::Config(format!("Failed to write Prometheus file: {}", e)))?;
-                
+                    .map_err(|e| {
+                        GeofenceError::Config(format!("Failed to write Prometheus file: {}", e))
+                    })?;
+
                 debug!("Exported metrics to Prometheus file: {}", file_path);
             }
         }
@@ -837,47 +925,106 @@ impl ObservabilityManager {
     /// Format metrics for Prometheus
     fn format_prometheus_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
         let mut output = String::new();
-        
+
         // Performance metrics
-        output.push_str(&format!("geofence_daemon_memory_usage_mb {}\n", metrics.performance_metrics.memory_usage_mb));
-        output.push_str(&format!("geofence_daemon_cpu_usage_percent {}\n", metrics.performance_metrics.cpu_usage_percent));
-        
+        output.push_str(&format!(
+            "geofence_daemon_memory_usage_mb {}\n",
+            metrics.performance_metrics.memory_usage_mb
+        ));
+        output.push_str(&format!(
+            "geofence_daemon_cpu_usage_percent {}\n",
+            metrics.performance_metrics.cpu_usage_percent
+        ));
+
         // Zone metrics
-        output.push_str(&format!("geofence_zone_changes_total {}\n", metrics.zone_metrics.total_zone_changes));
-        output.push_str(&format!("geofence_zone_changes_last_hour {}\n", metrics.zone_metrics.zone_changes_last_hour));
-        output.push_str(&format!("geofence_zone_average_confidence {}\n", metrics.zone_metrics.average_confidence));
-        
+        output.push_str(&format!(
+            "geofence_zone_changes_total {}\n",
+            metrics.zone_metrics.total_zone_changes
+        ));
+        output.push_str(&format!(
+            "geofence_zone_changes_last_hour {}\n",
+            metrics.zone_metrics.zone_changes_last_hour
+        ));
+        output.push_str(&format!(
+            "geofence_zone_average_confidence {}\n",
+            metrics.zone_metrics.average_confidence
+        ));
+
         // Location metrics
-        output.push_str(&format!("geofence_location_scans_total {}\n", metrics.location_metrics.total_scans));
-        output.push_str(&format!("geofence_location_scans_successful {}\n", metrics.location_metrics.successful_scans));
-        output.push_str(&format!("geofence_location_scans_failed {}\n", metrics.location_metrics.failed_scans));
-        output.push_str(&format!("geofence_location_scan_duration_ms {}\n", metrics.location_metrics.average_scan_duration.as_millis()));
-        
+        output.push_str(&format!(
+            "geofence_location_scans_total {}\n",
+            metrics.location_metrics.total_scans
+        ));
+        output.push_str(&format!(
+            "geofence_location_scans_successful {}\n",
+            metrics.location_metrics.successful_scans
+        ));
+        output.push_str(&format!(
+            "geofence_location_scans_failed {}\n",
+            metrics.location_metrics.failed_scans
+        ));
+        output.push_str(&format!(
+            "geofence_location_scan_duration_ms {}\n",
+            metrics.location_metrics.average_scan_duration.as_millis()
+        ));
+
         // Action metrics
-        output.push_str(&format!("geofence_actions_total {}\n", metrics.action_metrics.total_actions));
-        output.push_str(&format!("geofence_action_successes_total {}\n", metrics.action_metrics.successful_actions));
-        output.push_str(&format!("geofence_action_failures_total {}\n", metrics.action_metrics.failed_actions));
-        
+        output.push_str(&format!(
+            "geofence_actions_total {}\n",
+            metrics.action_metrics.total_actions
+        ));
+        output.push_str(&format!(
+            "geofence_action_successes_total {}\n",
+            metrics.action_metrics.successful_actions
+        ));
+        output.push_str(&format!(
+            "geofence_action_failures_total {}\n",
+            metrics.action_metrics.failed_actions
+        ));
+
         // Error metrics
-        output.push_str(&format!("geofence_errors_total {}\n", metrics.error_metrics.total_errors));
-        
+        output.push_str(&format!(
+            "geofence_errors_total {}\n",
+            metrics.error_metrics.total_errors
+        ));
+
         // Network metrics
-        output.push_str(&format!("geofence_wifi_scan_success_rate {}\n", metrics.network_metrics.wifi_scan_success_rate));
-        output.push_str(&format!("geofence_vpn_connection_success_rate {}\n", metrics.network_metrics.vpn_connection_success_rate));
-        output.push_str(&format!("geofence_dns_resolution_time_ms {}\n", metrics.network_metrics.dns_resolution_time.as_millis()));
-        output.push_str(&format!("geofence_internet_connectivity {}\n", if metrics.network_metrics.internet_connectivity { 1 } else { 0 }));
-        
+        output.push_str(&format!(
+            "geofence_wifi_scan_success_rate {}\n",
+            metrics.network_metrics.wifi_scan_success_rate
+        ));
+        output.push_str(&format!(
+            "geofence_vpn_connection_success_rate {}\n",
+            metrics.network_metrics.vpn_connection_success_rate
+        ));
+        output.push_str(&format!(
+            "geofence_dns_resolution_time_ms {}\n",
+            metrics.network_metrics.dns_resolution_time.as_millis()
+        ));
+        output.push_str(&format!(
+            "geofence_internet_connectivity {}\n",
+            if metrics.network_metrics.internet_connectivity {
+                1
+            } else {
+                0
+            }
+        ));
+
         // Health status (1 for healthy, 0 for unhealthy)
-        let health_value = if health.overall_status == "Healthy" { 1 } else { 0 };
+        let health_value = if health.overall_status == "Healthy" {
+            1
+        } else {
+            0
+        };
         output.push_str(&format!("geofence_daemon_healthy {}\n", health_value));
-        
+
         output
     }
 
     /// Format metrics for InfluxDB line protocol
     fn format_influxdb_metrics(metrics: &DaemonMetrics, health: &HealthSummary) -> String {
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-        
+
         // Convert health status to numeric value for InfluxDB
         let overall_health_score = match health.overall_status.as_str() {
             "healthy" | "Healthy" => 100,
@@ -885,18 +1032,20 @@ impl ObservabilityManager {
             "critical" | "Critical" => 0,
             _ => 25, // Unknown status
         };
-        
-        let healthy_components = health.component_statuses.values()
+
+        let healthy_components = health
+            .component_statuses
+            .values()
             .filter(|status| matches!(status, HealthStatus::Healthy))
             .count();
-        
+
         let total_components = health.component_statuses.len();
         let component_health_ratio = if total_components > 0 {
             (healthy_components as f64 / total_components as f64) * 100.0
         } else {
             0.0
         };
-        
+
         format!(
             "geofence_daemon memory_mb={},cpu_percent={},zone_changes={},zone_confidence={},total_actions={},wifi_success_rate={},errors_total={},health_score={},healthy_components={},total_components={},component_health_ratio={:.1} {}",
             metrics.performance_metrics.memory_usage_mb,
@@ -942,15 +1091,16 @@ impl MetricsCollector {
 
         // Update performance metrics
         self.current_metrics.performance_metrics.uptime = self.start_time.elapsed();
-        
+
         // This would collect actual system metrics
         // For now, update with placeholder values
         self.current_metrics.performance_metrics.memory_usage_mb = 128.0;
         self.current_metrics.performance_metrics.cpu_usage_percent = 5.0;
-        
+
         // Store historical metrics (keep last 24 hours)
-        self.historical_metrics.push_back((Utc::now(), self.current_metrics.clone()));
-        
+        self.historical_metrics
+            .push_back((Utc::now(), self.current_metrics.clone()));
+
         // Keep only last 24 hours (assuming collection every 30 seconds)
         let max_entries = 24 * 60 * 2; // 2 entries per minute
         while self.historical_metrics.len() > max_entries {
@@ -961,7 +1111,6 @@ impl MetricsCollector {
         debug!("Metrics collection completed");
     }
 }
-
 
 impl Default for ZoneMetrics {
     fn default() -> Self {
@@ -1058,52 +1207,75 @@ impl Default for NetworkMetrics {
 
 impl HealthChecker {
     fn new() -> Self {
-        let mut health_checks: HashMap<String, Box<dyn Fn() -> HealthStatus + Send + Sync>> = HashMap::new();
-        
+        let mut health_checks: HashMap<String, Box<dyn Fn() -> HealthStatus + Send + Sync>> =
+            HashMap::new();
+
         // Add critical health checks for geofencing system
-        health_checks.insert("wifi_interface".to_string(), Box::new(|| {
-            // Check if WiFi interface is available
-            if std::path::Path::new("/sys/class/net/wlan0/operstate").exists() 
-                || std::path::Path::new("/sys/class/net/wlp0s20f3/operstate").exists() {
-                HealthStatus::Healthy
-            } else {
-                HealthStatus::Critical { error: "No WiFi interface found".to_string() }
-            }
-        }));
-        
-        health_checks.insert("network_manager".to_string(), Box::new(|| {
-            // Check if NetworkManager is running
-            match std::process::Command::new("systemctl")
-                .args(["is-active", "NetworkManager"])
-                .output() 
-            {
-                Ok(output) if output.status.success() => HealthStatus::Healthy,
-                _ => HealthStatus::Degraded { issues: vec![] }
-            }
-        }));
-        
-        health_checks.insert("memory_usage".to_string(), Box::new(|| {
-            // Check system memory usage
-            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-                if let (Some(total_line), Some(available_line)) = (
-                    content.lines().find(|l| l.starts_with("MemTotal:")),
-                    content.lines().find(|l| l.starts_with("MemAvailable:"))
-                ) {
-                    if let (Ok(total), Ok(available)) = (
-                        total_line.split_whitespace().nth(1).unwrap_or("0").parse::<u64>(),
-                        available_line.split_whitespace().nth(1).unwrap_or("0").parse::<u64>()
+        health_checks.insert(
+            "wifi_interface".to_string(),
+            Box::new(|| {
+                // Check if WiFi interface is available
+                if std::path::Path::new("/sys/class/net/wlan0/operstate").exists()
+                    || std::path::Path::new("/sys/class/net/wlp0s20f3/operstate").exists()
+                {
+                    HealthStatus::Healthy
+                } else {
+                    HealthStatus::Critical {
+                        error: "No WiFi interface found".to_string(),
+                    }
+                }
+            }),
+        );
+
+        health_checks.insert(
+            "network_manager".to_string(),
+            Box::new(|| {
+                // Check if NetworkManager is running
+                match std::process::Command::new("systemctl")
+                    .args(["is-active", "NetworkManager"])
+                    .output()
+                {
+                    Ok(output) if output.status.success() => HealthStatus::Healthy,
+                    _ => HealthStatus::Degraded { issues: vec![] },
+                }
+            }),
+        );
+
+        health_checks.insert(
+            "memory_usage".to_string(),
+            Box::new(|| {
+                // Check system memory usage
+                if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+                    if let (Some(total_line), Some(available_line)) = (
+                        content.lines().find(|l| l.starts_with("MemTotal:")),
+                        content.lines().find(|l| l.starts_with("MemAvailable:")),
                     ) {
-                        let usage_percent = ((total - available) as f64 / total as f64) * 100.0;
-                        if usage_percent > 90.0 {
-                            return HealthStatus::Critical { error: format!("High memory usage: {:.1}%", usage_percent) };
-                        } else if usage_percent > 75.0 {
-                            return HealthStatus::Degraded { issues: vec![] };
+                        if let (Ok(total), Ok(available)) = (
+                            total_line
+                                .split_whitespace()
+                                .nth(1)
+                                .unwrap_or("0")
+                                .parse::<u64>(),
+                            available_line
+                                .split_whitespace()
+                                .nth(1)
+                                .unwrap_or("0")
+                                .parse::<u64>(),
+                        ) {
+                            let usage_percent = ((total - available) as f64 / total as f64) * 100.0;
+                            if usage_percent > 90.0 {
+                                return HealthStatus::Critical {
+                                    error: format!("High memory usage: {:.1}%", usage_percent),
+                                };
+                            } else if usage_percent > 75.0 {
+                                return HealthStatus::Degraded { issues: vec![] };
+                            }
                         }
                     }
                 }
-            }
-            HealthStatus::Healthy
-        }));
+                HealthStatus::Healthy
+            }),
+        );
 
         Self {
             component_health: Arc::new(RwLock::new(HashMap::new())),
@@ -1119,10 +1291,16 @@ impl HealthChecker {
 
         // Perform basic health checks
         results.insert("daemon".to_string(), self.check_daemon_health().await);
-        results.insert("location_detection".to_string(), self.check_location_detection_health().await);
-        results.insert("network_connectivity".to_string(), self.check_network_health().await);
+        results.insert(
+            "location_detection".to_string(),
+            self.check_location_detection_health().await,
+        );
+        results.insert(
+            "network_connectivity".to_string(),
+            self.check_network_health().await,
+        );
         results.insert("storage".to_string(), self.check_storage_health().await);
-        
+
         // Execute registered health checks
         for (name, check_fn) in &self.health_checks {
             let status = check_fn();
@@ -1140,9 +1318,10 @@ impl HealthChecker {
         {
             let mut history = self.health_history.lock().await;
             history.push_back((Utc::now(), results));
-            
+
             // Keep only last 24 hours
-            while history.len() > 1440 { // 1 entry per minute
+            while history.len() > 1440 {
+                // 1 entry per minute
                 history.pop_front();
             }
         }
@@ -1176,11 +1355,11 @@ impl HealthChecker {
     pub async fn get_health_summary(&self) -> HealthSummary {
         let component_statuses = self.get_overall_health().await;
         let mut active_issues = Vec::new();
-        
+
         // Determine overall status and collect issues
         let mut has_critical = false;
         let mut has_degraded = false;
-        
+
         for (component, status) in &component_statuses {
             match status {
                 HealthStatus::Critical { error } => {
@@ -1190,7 +1369,10 @@ impl HealthChecker {
                         severity: IssueSeverity::Critical,
                         description: error.clone(),
                         detected_at: Utc::now(),
-                        remediation: Some(format!("Check {} configuration and connectivity", component)),
+                        remediation: Some(format!(
+                            "Check {} configuration and connectivity",
+                            component
+                        )),
                     });
                 }
                 HealthStatus::Degraded { issues } => {
@@ -1202,7 +1384,7 @@ impl HealthChecker {
                 _ => {}
             }
         }
-        
+
         let overall_status = if has_critical {
             "Critical".to_string()
         } else if has_degraded {
@@ -1210,7 +1392,7 @@ impl HealthChecker {
         } else {
             "Healthy".to_string()
         };
-        
+
         HealthSummary {
             overall_status,
             component_statuses,
@@ -1269,20 +1451,25 @@ impl DistributedTracer {
             let end_time = Utc::now();
             span.end_time = Some(end_time);
             span.duration = Some(Duration::from_millis(
-                end_time.signed_duration_since(span.start_time).num_milliseconds() as u64
+                end_time
+                    .signed_duration_since(span.start_time)
+                    .num_milliseconds() as u64,
             ));
 
-            debug!("Ended trace span: {} (duration: {:?})", span.operation_name, span.duration);
+            debug!(
+                "Ended trace span: {} (duration: {:?})",
+                span.operation_name, span.duration
+            );
 
             // Store in both completed traces and export buffer
             self.completed_traces.push_back(span.clone());
             self.export_buffer.push_back(span);
-            
+
             // Keep only recent traces
             while self.completed_traces.len() > 1000 {
                 self.completed_traces.pop_front();
             }
-            
+
             // Keep export buffer size reasonable
             while self.export_buffer.len() > 500 {
                 self.export_buffer.pop_front();
@@ -1324,7 +1511,12 @@ impl EventLogger {
         }
     }
 
-    fn log_event(&mut self, level: &str, message: &str, fields: HashMap<String, serde_json::Value>) {
+    fn log_event(
+        &mut self,
+        level: &str,
+        message: &str,
+        fields: HashMap<String, serde_json::Value>,
+    ) {
         let event = LogEvent {
             timestamp: Utc::now(),
             level: level.to_string(),
@@ -1372,7 +1564,7 @@ mod tests {
     async fn test_metrics_collector() {
         let mut collector = MetricsCollector::new();
         collector.collect_metrics().await;
-        
+
         assert!(collector.current_metrics.performance_metrics.uptime > Duration::from_secs(0));
     }
 

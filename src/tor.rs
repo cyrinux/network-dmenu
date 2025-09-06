@@ -104,7 +104,6 @@ impl TorManager {
         result
     }
 
-
     /// Start Tor daemon
     pub fn start_tor(&self, command_runner: &dyn CommandRunner) -> Result<(), String> {
         if self.is_tor_running() {

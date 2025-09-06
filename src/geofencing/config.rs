@@ -4,12 +4,8 @@
 //! environment variable overrides, and configuration profiles.
 
 use crate::geofencing::{
-    GeofenceError, GeofencingConfig, Result,
-    adaptive::ScanFrequency,
-    performance::CacheConfig,
-    security::SecurityPolicy,
-    observability::ObservabilityConfig,
-    retry::RetryConfig,
+    adaptive::ScanFrequency, observability::ObservabilityConfig, performance::CacheConfig,
+    retry::RetryConfig, security::SecurityPolicy, GeofenceError, GeofencingConfig, Result,
 };
 use chrono::{DateTime, Utc};
 use log::{debug, error, info, warn};
@@ -198,7 +194,7 @@ pub struct ConfigManager {
 pub trait ConfigValidator: Send + Sync {
     /// Validate configuration
     fn validate(&self, config: &EnhancedConfig) -> Vec<ValidationIssue>;
-    
+
     /// Get validator name
     fn name(&self) -> &str;
 }
@@ -242,65 +238,99 @@ impl EnhancedConfig {
         let mut profiles = HashMap::new();
 
         // Development profile
-        profiles.insert("development".to_string(), ConfigProfile {
-            name: "development".to_string(),
-            description: "Development environment settings".to_string(),
-            overrides: {
-                let mut overrides = HashMap::new();
-                overrides.insert("geofencing.scan_interval_seconds".to_string(), 
-                               serde_json::Value::Number(serde_json::Number::from(10)));
-                overrides.insert("observability.metrics_interval".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from(15)));
-                overrides.insert("observability.trace_sampling_rate".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from_f64(1.0).unwrap()));
-                overrides
+        profiles.insert(
+            "development".to_string(),
+            ConfigProfile {
+                name: "development".to_string(),
+                description: "Development environment settings".to_string(),
+                overrides: {
+                    let mut overrides = HashMap::new();
+                    overrides.insert(
+                        "geofencing.scan_interval_seconds".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(10)),
+                    );
+                    overrides.insert(
+                        "observability.metrics_interval".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(15)),
+                    );
+                    overrides.insert(
+                        "observability.trace_sampling_rate".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from_f64(1.0).unwrap()),
+                    );
+                    overrides
+                },
+                active: false,
             },
-            active: false,
-        });
+        );
 
         // Production profile
-        profiles.insert("production".to_string(), ConfigProfile {
-            name: "production".to_string(),
-            description: "Production environment settings".to_string(),
-            overrides: {
-                let mut overrides = HashMap::new();
-                overrides.insert("geofencing.scan_interval_seconds".to_string(), 
-                               serde_json::Value::Number(serde_json::Number::from(60)));
-                overrides.insert("observability.metrics_interval".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from(300)));
-                overrides.insert("observability.trace_sampling_rate".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from_f64(0.01).unwrap()));
-                overrides.insert("retry.max_retries".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from(5)));
-                overrides
+        profiles.insert(
+            "production".to_string(),
+            ConfigProfile {
+                name: "production".to_string(),
+                description: "Production environment settings".to_string(),
+                overrides: {
+                    let mut overrides = HashMap::new();
+                    overrides.insert(
+                        "geofencing.scan_interval_seconds".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(60)),
+                    );
+                    overrides.insert(
+                        "observability.metrics_interval".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(300)),
+                    );
+                    overrides.insert(
+                        "observability.trace_sampling_rate".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from_f64(0.01).unwrap()),
+                    );
+                    overrides.insert(
+                        "retry.max_retries".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(5)),
+                    );
+                    overrides
+                },
+                active: false,
             },
-            active: false,
-        });
+        );
 
         // Battery saver profile
-        profiles.insert("battery_saver".to_string(), ConfigProfile {
-            name: "battery_saver".to_string(),
-            description: "Battery conservation settings".to_string(),
-            overrides: {
-                let mut overrides = HashMap::new();
-                overrides.insert("geofencing.scan_interval_seconds".to_string(), 
-                               serde_json::Value::Number(serde_json::Number::from(120)));
-                overrides.insert("observability.metrics_enabled".to_string(),
-                               serde_json::Value::Bool(false));
-                overrides.insert("observability.tracing_enabled".to_string(),
-                               serde_json::Value::Bool(false));
-                overrides.insert("cache.cleanup_interval".to_string(),
-                               serde_json::Value::Number(serde_json::Number::from(600)));
-                overrides
+        profiles.insert(
+            "battery_saver".to_string(),
+            ConfigProfile {
+                name: "battery_saver".to_string(),
+                description: "Battery conservation settings".to_string(),
+                overrides: {
+                    let mut overrides = HashMap::new();
+                    overrides.insert(
+                        "geofencing.scan_interval_seconds".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(120)),
+                    );
+                    overrides.insert(
+                        "observability.metrics_enabled".to_string(),
+                        serde_json::Value::Bool(false),
+                    );
+                    overrides.insert(
+                        "observability.tracing_enabled".to_string(),
+                        serde_json::Value::Bool(false),
+                    );
+                    overrides.insert(
+                        "cache.cleanup_interval".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(600)),
+                    );
+                    overrides
+                },
+                active: false,
             },
-            active: false,
-        });
+        );
 
         profiles
     }
 
     /// Apply environment variable overrides
-    pub fn apply_environment_overrides(&mut self, env_provider: &EnvVariableProvider) -> Result<()> {
+    pub fn apply_environment_overrides(
+        &mut self,
+        env_provider: &EnvVariableProvider,
+    ) -> Result<()> {
         debug!("Applying environment variable overrides");
 
         for (key, value) in &env_provider.overrides {
@@ -364,23 +394,27 @@ impl EnhancedConfig {
             profile.active = true;
             profile.overrides.clone()
         } else {
-            return Err(GeofenceError::Config(format!("Profile '{}' not found", profile_name)));
+            return Err(GeofenceError::Config(format!(
+                "Profile '{}' not found",
+                profile_name
+            )));
         };
-        
+
         // Apply profile overrides
         for (key, value) in &overrides {
             if let serde_json::Value::String(str_value) = value {
                 self.apply_override(key, str_value)?;
             }
         }
-        
+
         info!("Configuration profile '{}' activated", profile_name);
         Ok(())
     }
 
     /// Get active profile name
     pub fn get_active_profile(&self) -> Option<&str> {
-        self.profiles.iter()
+        self.profiles
+            .iter()
             .find(|(_, profile)| profile.active)
             .map(|(name, _)| name.as_str())
     }
@@ -441,7 +475,9 @@ impl EnhancedConfig {
         }
 
         // Validate observability settings
-        if self.observability.trace_sampling_rate < 0.0 || self.observability.trace_sampling_rate > 1.0 {
+        if self.observability.trace_sampling_rate < 0.0
+            || self.observability.trace_sampling_rate > 1.0
+        {
             errors.push(ConfigError {
                 path: "observability.trace_sampling_rate".to_string(),
                 message: "Trace sampling rate must be between 0.0 and 1.0".to_string(),
@@ -460,7 +496,9 @@ impl EnhancedConfig {
         }
 
         // Performance suggestions
-        if self.observability.metrics_enabled && self.observability.metrics_interval < Duration::from_secs(30) {
+        if self.observability.metrics_enabled
+            && self.observability.metrics_interval < Duration::from_secs(30)
+        {
             suggestions.push(ConfigSuggestion {
                 description: "Frequent metrics collection may impact performance".to_string(),
                 suggestion: "Consider increasing metrics_interval to >= 30 seconds".to_string(),
@@ -494,7 +532,10 @@ impl ConfigManager {
     /// Create new configuration manager
     pub async fn new<P: AsRef<Path>>(config_file_path: P) -> Result<Self> {
         let config_path = config_file_path.as_ref().to_path_buf();
-        debug!("Creating configuration manager with path: {}", config_path.display());
+        debug!(
+            "Creating configuration manager with path: {}",
+            config_path.display()
+        );
 
         // Load configuration
         let config = Self::load_config(&config_path).await?;
@@ -512,19 +553,27 @@ impl ConfigManager {
         manager.register_default_validators();
 
         // Apply environment overrides
-        manager.current_config.apply_environment_overrides(&manager.env_provider)?;
+        manager
+            .current_config
+            .apply_environment_overrides(&manager.env_provider)?;
 
         // Validate configuration
         let validation_result = manager.current_config.validate();
         if !validation_result.valid {
-            warn!("Configuration validation failed with {} errors", validation_result.errors.len());
+            warn!(
+                "Configuration validation failed with {} errors",
+                validation_result.errors.len()
+            );
             for error in &validation_result.errors {
                 error!("Config error at {}: {}", error.path, error.message);
             }
         }
 
         if !validation_result.warnings.is_empty() {
-            info!("Configuration has {} warnings", validation_result.warnings.len());
+            info!(
+                "Configuration has {} warnings",
+                validation_result.warnings.len()
+            );
             for warning in &validation_result.warnings {
                 warn!("Config warning at {}: {}", warning.path, warning.message);
             }
@@ -542,7 +591,10 @@ impl ConfigManager {
         let handle = tokio::spawn(async move {
             // This would implement actual file watching
             // For now, just log that it would be watching
-            info!("Would start watching config file: {}", config_path.display());
+            info!(
+                "Would start watching config file: {}",
+                config_path.display()
+            );
         });
 
         self._file_watcher = Some(handle);
@@ -559,7 +611,7 @@ impl ConfigManager {
         let validation_result = new_config.validate();
         if !validation_result.valid {
             return Err(GeofenceError::Config(format!(
-                "Configuration validation failed: {} errors", 
+                "Configuration validation failed: {} errors",
                 validation_result.errors.len()
             )));
         }
@@ -570,8 +622,7 @@ impl ConfigManager {
             change_type: ConfigChangeType::Reloaded,
             path: "root".to_string(),
             old_value: None,
-            new_value: serde_json::to_value(&new_config)
-                .unwrap_or(serde_json::Value::Null),
+            new_value: serde_json::to_value(&new_config).unwrap_or(serde_json::Value::Null),
             changed_by: "file_watcher".to_string(),
         });
 
@@ -581,7 +632,11 @@ impl ConfigManager {
     }
 
     /// Update configuration value
-    pub async fn update_config_value(&mut self, path: &str, value: serde_json::Value) -> Result<()> {
+    pub async fn update_config_value(
+        &mut self,
+        path: &str,
+        value: serde_json::Value,
+    ) -> Result<()> {
         debug!("Updating configuration value: {} = {:?}", path, value);
 
         // Store old value for change tracking
@@ -601,7 +656,8 @@ impl ConfigManager {
             }
             _ => {
                 return Err(GeofenceError::Config(format!(
-                    "Unknown configuration path: {}", path
+                    "Unknown configuration path: {}",
+                    path
                 )));
             }
         }
@@ -610,7 +666,7 @@ impl ConfigManager {
         let validation_result = self.current_config.validate();
         if !validation_result.valid {
             return Err(GeofenceError::Config(format!(
-                "Configuration update would cause validation errors: {}", 
+                "Configuration update would cause validation errors: {}",
                 validation_result.errors.len()
             )));
         }
@@ -641,17 +697,13 @@ impl ConfigManager {
     pub fn get_config_value(&self, path: &str) -> Option<serde_json::Value> {
         // Simplified implementation - would need proper path traversal
         match path {
-            "geofencing.scan_interval_seconds" => {
-                Some(serde_json::Value::Number(serde_json::Number::from(
-                    self.current_config.geofencing.scan_interval_seconds
-                )))
-            }
-            "geofencing.confidence_threshold" => {
-                Some(serde_json::Value::Number(
-                    serde_json::Number::from_f64(self.current_config.geofencing.confidence_threshold)
-                        .unwrap_or(serde_json::Number::from(0))
-                ))
-            }
+            "geofencing.scan_interval_seconds" => Some(serde_json::Value::Number(
+                serde_json::Number::from(self.current_config.geofencing.scan_interval_seconds),
+            )),
+            "geofencing.confidence_threshold" => Some(serde_json::Value::Number(
+                serde_json::Number::from_f64(self.current_config.geofencing.confidence_threshold)
+                    .unwrap_or(serde_json::Number::from(0)),
+            )),
             _ => None,
         }
     }
@@ -659,7 +711,7 @@ impl ConfigManager {
     /// Validate current configuration
     pub fn validate_config(&self) -> ValidationResult {
         debug!("Validating current configuration");
-        
+
         let mut result = self.current_config.validate();
 
         // Run additional validators
@@ -677,8 +729,12 @@ impl ConfigManager {
         // Update validation result
         result.valid = result.errors.is_empty();
 
-        debug!("Configuration validation completed: {} errors, {} warnings, {} suggestions",
-               result.errors.len(), result.warnings.len(), result.suggestions.len());
+        debug!(
+            "Configuration validation completed: {} errors, {} warnings, {} suggestions",
+            result.errors.len(),
+            result.warnings.len(),
+            result.suggestions.len()
+        );
 
         result
     }
@@ -687,8 +743,11 @@ impl ConfigManager {
     pub async fn activate_profile(&mut self, profile_name: &str) -> Result<()> {
         info!("Activating configuration profile: {}", profile_name);
 
-        let old_profile = self.current_config.get_active_profile().map(|p| p.to_string());
-        
+        let old_profile = self
+            .current_config
+            .get_active_profile()
+            .map(|p| p.to_string());
+
         self.current_config.activate_profile(profile_name)?;
 
         // Record the change
@@ -704,14 +763,22 @@ impl ConfigManager {
         // Save configuration
         self.save_config().await?;
 
-        info!("Configuration profile '{}' activated successfully", profile_name);
+        info!(
+            "Configuration profile '{}' activated successfully",
+            profile_name
+        );
         Ok(())
     }
 
     /// Get configuration change history
     pub fn get_change_history(&self, limit: Option<usize>) -> Vec<ConfigChangeEvent> {
         if let Some(limit) = limit {
-            self.change_history.iter().rev().take(limit).cloned().collect()
+            self.change_history
+                .iter()
+                .rev()
+                .take(limit)
+                .cloned()
+                .collect()
         } else {
             self.change_history.clone()
         }
@@ -722,15 +789,13 @@ impl ConfigManager {
         let export_path = export_path.as_ref();
         debug!("Exporting configuration to: {}", export_path.display());
 
-        let config_json = serde_json::to_string_pretty(&self.current_config)
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to serialize configuration: {}", e
-            )))?;
+        let config_json = serde_json::to_string_pretty(&self.current_config).map_err(|e| {
+            GeofenceError::Config(format!("Failed to serialize configuration: {}", e))
+        })?;
 
-        fs::write(export_path, config_json).await
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to write configuration file: {}", e
-            )))?;
+        fs::write(export_path, config_json).await.map_err(|e| {
+            GeofenceError::Config(format!("Failed to write configuration file: {}", e))
+        })?;
 
         info!("Configuration exported to: {}", export_path.display());
         Ok(())
@@ -743,59 +808,63 @@ impl ConfigManager {
         if !config_path.exists() {
             info!("Configuration file does not exist, creating default configuration");
             let default_config = EnhancedConfig::default();
-            
+
             // Create directory if it doesn't exist
             if let Some(parent) = config_path.parent() {
-                fs::create_dir_all(parent).await
-                    .map_err(|e| GeofenceError::Config(format!(
-                        "Failed to create configuration directory: {}", e
-                    )))?;
+                fs::create_dir_all(parent).await.map_err(|e| {
+                    GeofenceError::Config(format!(
+                        "Failed to create configuration directory: {}",
+                        e
+                    ))
+                })?;
             }
 
             // Write default configuration
-            let config_json = serde_json::to_string_pretty(&default_config)
-                .map_err(|e| GeofenceError::Config(format!(
-                    "Failed to serialize default configuration: {}", e
-                )))?;
+            let config_json = serde_json::to_string_pretty(&default_config).map_err(|e| {
+                GeofenceError::Config(format!("Failed to serialize default configuration: {}", e))
+            })?;
 
-            fs::write(config_path, config_json).await
-                .map_err(|e| GeofenceError::Config(format!(
-                    "Failed to write default configuration: {}", e
-                )))?;
+            fs::write(config_path, config_json).await.map_err(|e| {
+                GeofenceError::Config(format!("Failed to write default configuration: {}", e))
+            })?;
 
             return Ok(default_config);
         }
 
-        let config_content = fs::read_to_string(config_path).await
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to read configuration file: {}", e
-            )))?;
+        let config_content = fs::read_to_string(config_path).await.map_err(|e| {
+            GeofenceError::Config(format!("Failed to read configuration file: {}", e))
+        })?;
 
-        let config: EnhancedConfig = serde_json::from_str(&config_content)
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to parse configuration file: {}", e
-            )))?;
+        let config: EnhancedConfig = serde_json::from_str(&config_content).map_err(|e| {
+            GeofenceError::Config(format!("Failed to parse configuration file: {}", e))
+        })?;
 
-        debug!("Configuration loaded successfully from: {}", config_path.display());
+        debug!(
+            "Configuration loaded successfully from: {}",
+            config_path.display()
+        );
         Ok(config)
     }
 
     /// Save configuration to file
     async fn save_config(&self) -> Result<()> {
-        debug!("Saving configuration to: {}", self.config_file_path.display());
+        debug!(
+            "Saving configuration to: {}",
+            self.config_file_path.display()
+        );
 
         let mut config = self.current_config.clone();
         config.metadata.last_modified = Utc::now();
 
-        let config_json = serde_json::to_string_pretty(&config)
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to serialize configuration: {}", e
-            )))?;
+        let config_json = serde_json::to_string_pretty(&config).map_err(|e| {
+            GeofenceError::Config(format!("Failed to serialize configuration: {}", e))
+        })?;
 
-        fs::write(&self.config_file_path, config_json).await
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to write configuration file: {}", e
-            )))?;
+        fs::write(&self.config_file_path, config_json)
+            .await
+            .map_err(|e| {
+                GeofenceError::Config(format!("Failed to write configuration file: {}", e))
+            })?;
 
         debug!("Configuration saved successfully");
         Ok(())
@@ -804,7 +873,7 @@ impl ConfigManager {
     /// Record a configuration change
     fn record_change(&mut self, change: ConfigChangeEvent) {
         debug!("Recording configuration change: {:?}", change.change_type);
-        
+
         self.change_history.push(change);
 
         // Keep only last 1000 changes
@@ -816,7 +885,7 @@ impl ConfigManager {
     /// Register default configuration validators
     fn register_default_validators(&mut self) {
         debug!("Registering default configuration validators");
-        
+
         // Would register actual validators
         // For now, just log that they would be registered
         info!("Default configuration validators registered");
@@ -826,18 +895,19 @@ impl ConfigManager {
 impl EnvVariableProvider {
     /// Create new environment variable provider
     pub fn new(prefix: &str) -> Self {
-        debug!("Creating environment variable provider with prefix: {}", prefix);
-        
+        debug!(
+            "Creating environment variable provider with prefix: {}",
+            prefix
+        );
+
         let mut overrides = HashMap::new();
-        
+
         // Load environment variables with the specified prefix
         for (key, value) in std::env::vars() {
             if key.starts_with(&format!("{}_", prefix)) {
                 // Convert environment variable name to config path
-                let config_key = key[prefix.len() + 1..]
-                    .to_lowercase()
-                    .replace('_', ".");
-                
+                let config_key = key[prefix.len() + 1..].to_lowercase().replace('_', ".");
+
                 overrides.insert(config_key, value);
             }
         }
@@ -854,7 +924,7 @@ impl EnvVariableProvider {
     pub fn refresh_environment_variables(&mut self) -> usize {
         let old_count = self.overrides.len();
         self.overrides.clear();
-        
+
         // Reload environment variables with the current prefix
         for (key, value) in std::env::vars() {
             if key.starts_with(&format!("{}_", self.prefix)) {
@@ -862,15 +932,17 @@ impl EnvVariableProvider {
                 let config_key = key[self.prefix.len() + 1..]
                     .to_lowercase()
                     .replace('_', ".");
-                
+
                 self.overrides.insert(config_key, value);
             }
         }
 
         let new_count = self.overrides.len();
-        debug!("Refreshed environment variables: {} -> {} overrides (prefix: {})", 
-               old_count, new_count, self.prefix);
-        
+        debug!(
+            "Refreshed environment variables: {} -> {} overrides (prefix: {})",
+            old_count, new_count, self.prefix
+        );
+
         new_count
     }
 
@@ -881,7 +953,10 @@ impl EnvVariableProvider {
 
     /// Change the prefix and reload environment variables
     pub fn change_prefix(&mut self, new_prefix: &str) -> usize {
-        debug!("Changing environment variable prefix from '{}' to '{}'", self.prefix, new_prefix);
+        debug!(
+            "Changing environment variable prefix from '{}' to '{}'",
+            self.prefix, new_prefix
+        );
         self.prefix = new_prefix.to_string();
         self.refresh_environment_variables()
     }
@@ -910,7 +985,9 @@ impl ConfigValidator for NetworkConfigValidator {
 
         // Check if any zones have network actions but no WiFi networks configured
         for zone in &config.geofencing.zones {
-            if (zone.actions.wifi.is_some() || zone.actions.vpn.is_some()) && zone.fingerprints.is_empty() {
+            if (zone.actions.wifi.is_some() || zone.actions.vpn.is_some())
+                && zone.fingerprints.is_empty()
+            {
                 issues.push(ValidationIssue::Warning(ConfigWarning {
                     path: format!("geofencing.zones.{}.fingerprints", zone.name),
                     message: "Zone has network actions but no location fingerprints".to_string(),
@@ -936,12 +1013,16 @@ impl ConfigValidator for PerformanceConfigValidator {
         let mut issues = Vec::new();
 
         // Check for performance-impacting combinations
-        if config.geofencing.scan_interval_seconds < 15 
-           && config.observability.metrics_enabled 
-           && config.observability.tracing_enabled {
+        if config.geofencing.scan_interval_seconds < 15
+            && config.observability.metrics_enabled
+            && config.observability.tracing_enabled
+        {
             issues.push(ValidationIssue::Suggestion(ConfigSuggestion {
-                description: "High-frequency scanning with full observability may impact performance".to_string(),
-                suggestion: "Consider increasing scan_interval or reducing observability features".to_string(),
+                description:
+                    "High-frequency scanning with full observability may impact performance"
+                        .to_string(),
+                suggestion: "Consider increasing scan_interval or reducing observability features"
+                    .to_string(),
                 priority: SuggestionPriority::Medium,
             }));
         }
@@ -972,7 +1053,7 @@ mod tests {
     async fn test_config_manager_creation() {
         let temp_file = NamedTempFile::new().unwrap();
         let config_path = temp_file.path().to_path_buf();
-        
+
         let manager = ConfigManager::new(config_path).await;
         assert!(manager.is_ok());
     }
@@ -981,7 +1062,7 @@ mod tests {
     fn test_config_validation() {
         let config = EnhancedConfig::default();
         let result = config.validate();
-        
+
         // Default config should have warnings about no zones but no errors
         assert!(result.valid);
         assert!(!result.warnings.is_empty()); // Should warn about no zones
@@ -990,12 +1071,12 @@ mod tests {
     #[test]
     fn test_profile_activation() {
         let mut config = EnhancedConfig::default();
-        
+
         // Test activating development profile
         let result = config.activate_profile("development");
         assert!(result.is_ok());
         assert_eq!(config.get_active_profile(), Some("development"));
-        
+
         // Test activating non-existent profile
         let result = config.activate_profile("nonexistent");
         assert!(result.is_err());
@@ -1031,10 +1112,10 @@ mod tests {
     fn test_network_config_validator() {
         let validator = NetworkConfigValidator;
         let config = EnhancedConfig::default();
-        
+
         let issues = validator.validate(&config);
         assert_eq!(validator.name(), "NetworkConfigValidator");
-        
+
         // Default config with no zones should have no network validation issues
         assert!(issues.is_empty());
     }

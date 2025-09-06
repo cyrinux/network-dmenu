@@ -182,74 +182,86 @@ impl SecurityPolicy {
         let mut commands = HashMap::new();
 
         // systemctl --user commands
-        commands.insert("systemctl".to_string(), CommandPolicy {
-            allowed_args: vec![
-                r"^--user$".to_string(),
-                r"^(start|stop|restart|reload|enable|disable)$".to_string(),
-                r"^[a-zA-Z0-9\-_.@]+\.service$".to_string(),
-            ],
-            forbidden_args: vec![
-                r"^--system$".to_string(),
-                r"^--root$".to_string(),
-                r"^(poweroff|reboot|halt)$".to_string(),
-            ],
-            max_execution_time: Duration::from_secs(30),
-            allowed_working_dirs: vec!["/home".to_string()],
-            env_restrictions: EnvRestrictions::safe_defaults(),
-            network_access: false,
-            resource_limits: Some(ResourceLimits::minimal()),
-        });
-
-        // notify-send
-        commands.insert("notify-send".to_string(), CommandPolicy {
-            allowed_args: vec![
-                r"^[^`$;&|<>]+$".to_string(), // No shell metacharacters
-            ],
-            forbidden_args: vec![],
-            max_execution_time: Duration::from_secs(10),
-            allowed_working_dirs: vec!["/home".to_string()],
-            env_restrictions: EnvRestrictions::safe_defaults(),
-            network_access: false,
-            resource_limits: Some(ResourceLimits::minimal()),
-        });
-
-        // gsettings (GNOME settings)
-        commands.insert("gsettings".to_string(), CommandPolicy {
-            allowed_args: vec![
-                r"^set$".to_string(),
-                r"^[a-zA-Z0-9\-_.]+$".to_string(), // Schema names
-                r"^[a-zA-Z0-9\-_]+$".to_string(), // Key names
-                r"^'[^']*'$".to_string(), // Quoted values
-            ],
-            forbidden_args: vec![],
-            max_execution_time: Duration::from_secs(15),
-            allowed_working_dirs: vec!["/home".to_string()],
-            env_restrictions: EnvRestrictions::safe_defaults(),
-            network_access: false,
-            resource_limits: Some(ResourceLimits::minimal()),
-        });
-
-        // Application launchers
-        for app in &["firefox", "chromium", "google-chrome", "code", "alacritty"] {
-            commands.insert(app.to_string(), CommandPolicy {
+        commands.insert(
+            "systemctl".to_string(),
+            CommandPolicy {
                 allowed_args: vec![
-                    r"^--new-window$".to_string(),
-                    r"^--private-window$".to_string(),
-                    r"^--incognito$".to_string(),
-                    r"^-e$".to_string(),
-                    r"^[a-zA-Z0-9\-_./:]+$".to_string(), // URLs or file paths
+                    r"^--user$".to_string(),
+                    r"^(start|stop|restart|reload|enable|disable)$".to_string(),
+                    r"^[a-zA-Z0-9\-_.@]+\.service$".to_string(),
                 ],
                 forbidden_args: vec![
-                    r"^--remote-debugging".to_string(),
-                    r"^--disable-web-security".to_string(),
-                    r"^--allow-running-insecure-content".to_string(),
+                    r"^--system$".to_string(),
+                    r"^--root$".to_string(),
+                    r"^(poweroff|reboot|halt)$".to_string(),
                 ],
                 max_execution_time: Duration::from_secs(30),
                 allowed_working_dirs: vec!["/home".to_string()],
                 env_restrictions: EnvRestrictions::safe_defaults(),
-                network_access: true, // Browsers need network access
-                resource_limits: Some(ResourceLimits::moderate()),
-            });
+                network_access: false,
+                resource_limits: Some(ResourceLimits::minimal()),
+            },
+        );
+
+        // notify-send
+        commands.insert(
+            "notify-send".to_string(),
+            CommandPolicy {
+                allowed_args: vec![
+                    r"^[^`$;&|<>]+$".to_string(), // No shell metacharacters
+                ],
+                forbidden_args: vec![],
+                max_execution_time: Duration::from_secs(10),
+                allowed_working_dirs: vec!["/home".to_string()],
+                env_restrictions: EnvRestrictions::safe_defaults(),
+                network_access: false,
+                resource_limits: Some(ResourceLimits::minimal()),
+            },
+        );
+
+        // gsettings (GNOME settings)
+        commands.insert(
+            "gsettings".to_string(),
+            CommandPolicy {
+                allowed_args: vec![
+                    r"^set$".to_string(),
+                    r"^[a-zA-Z0-9\-_.]+$".to_string(), // Schema names
+                    r"^[a-zA-Z0-9\-_]+$".to_string(),  // Key names
+                    r"^'[^']*'$".to_string(),          // Quoted values
+                ],
+                forbidden_args: vec![],
+                max_execution_time: Duration::from_secs(15),
+                allowed_working_dirs: vec!["/home".to_string()],
+                env_restrictions: EnvRestrictions::safe_defaults(),
+                network_access: false,
+                resource_limits: Some(ResourceLimits::minimal()),
+            },
+        );
+
+        // Application launchers
+        for app in &["firefox", "chromium", "google-chrome", "code", "alacritty"] {
+            commands.insert(
+                app.to_string(),
+                CommandPolicy {
+                    allowed_args: vec![
+                        r"^--new-window$".to_string(),
+                        r"^--private-window$".to_string(),
+                        r"^--incognito$".to_string(),
+                        r"^-e$".to_string(),
+                        r"^[a-zA-Z0-9\-_./:]+$".to_string(), // URLs or file paths
+                    ],
+                    forbidden_args: vec![
+                        r"^--remote-debugging".to_string(),
+                        r"^--disable-web-security".to_string(),
+                        r"^--allow-running-insecure-content".to_string(),
+                    ],
+                    max_execution_time: Duration::from_secs(30),
+                    allowed_working_dirs: vec!["/home".to_string()],
+                    env_restrictions: EnvRestrictions::safe_defaults(),
+                    network_access: true, // Browsers need network access
+                    resource_limits: Some(ResourceLimits::moderate()),
+                },
+            );
         }
 
         commands
@@ -259,8 +271,8 @@ impl SecurityPolicy {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_memory_mb: Some(512),    // 512MB limit
-            max_cpu_seconds: Some(60),   // 1 minute CPU time
+            max_memory_mb: Some(512),  // 512MB limit
+            max_cpu_seconds: Some(60), // 1 minute CPU time
             max_file_descriptors: Some(64),
             max_processes: Some(16),
             max_file_size_mb: Some(100), // 100MB file size limit
@@ -272,19 +284,19 @@ impl ResourceLimits {
     /// Minimal resource limits for simple commands
     pub fn minimal() -> Self {
         Self {
-            max_memory_mb: Some(64),     // 64MB
-            max_cpu_seconds: Some(10),   // 10 seconds
+            max_memory_mb: Some(64),   // 64MB
+            max_cpu_seconds: Some(10), // 10 seconds
             max_file_descriptors: Some(16),
             max_processes: Some(4),
-            max_file_size_mb: Some(10),  // 10MB
+            max_file_size_mb: Some(10), // 10MB
         }
     }
 
     /// Moderate resource limits for applications
     pub fn moderate() -> Self {
         Self {
-            max_memory_mb: Some(1024),   // 1GB
-            max_cpu_seconds: Some(300),  // 5 minutes
+            max_memory_mb: Some(1024),  // 1GB
+            max_cpu_seconds: Some(300), // 5 minutes
             max_file_descriptors: Some(256),
             max_processes: Some(64),
             max_file_size_mb: Some(1024), // 1GB
@@ -298,11 +310,11 @@ impl Default for NetworkRestrictions {
             block_network_by_default: true,
             allowed_destinations: vec![],
             blocked_destinations: vec![
-                "169.254.0.0/16".to_string(),  // Link-local
-                "127.0.0.1".to_string(),       // Localhost
-                "::1".to_string(),             // IPv6 localhost
+                "169.254.0.0/16".to_string(), // Link-local
+                "127.0.0.1".to_string(),      // Localhost
+                "::1".to_string(),            // IPv6 localhost
             ],
-            allowed_ports: vec![80, 443, 53],   // HTTP, HTTPS, DNS
+            allowed_ports: vec![80, 443, 53], // HTTP, HTTPS, DNS
             blocked_ports: vec![22, 23, 135, 139, 445], // SSH, Telnet, Windows ports
         }
     }
@@ -342,7 +354,7 @@ impl Default for SandboxConfig {
 impl SandboxConfig {
     fn default_systemd_properties() -> HashMap<String, String> {
         let mut props = HashMap::new();
-        
+
         // Security restrictions
         props.insert("NoNewPrivileges".to_string(), "true".to_string());
         props.insert("ProtectSystem".to_string(), "strict".to_string());
@@ -356,16 +368,16 @@ impl SandboxConfig {
         props.insert("RestrictSUIDSGID".to_string(), "true".to_string());
         props.insert("LockPersonality".to_string(), "true".to_string());
         props.insert("MemoryDenyWriteExecute".to_string(), "true".to_string());
-        
+
         // Network restrictions
         props.insert("PrivateNetwork".to_string(), "true".to_string()); // Default: no network
         props.insert("IPAddressDeny".to_string(), "any".to_string());
-        
+
         // Resource limits
         props.insert("TasksMax".to_string(), "16".to_string());
         props.insert("CPUQuota".to_string(), "50%".to_string());
         props.insert("MemoryMax".to_string(), "512M".to_string());
-        
+
         props
     }
 }
@@ -444,15 +456,14 @@ impl SecureCommandExecutor {
 
         // Security validation
         self.validate_command_security(command, args).await?;
-        
-        // Initialize resource monitoring for this command  
+
+        // Initialize resource monitoring for this command
         let monitoring_enabled = true; // Enable monitoring by default
 
         // Get command policy
-        let policy = self.policy.allowed_commands.get(command)
-            .ok_or_else(|| GeofenceError::ActionExecution(
-                format!("Command '{}' not in allowed commands", command)
-            ))?;
+        let policy = self.policy.allowed_commands.get(command).ok_or_else(|| {
+            GeofenceError::ActionExecution(format!("Command '{}' not in allowed commands", command))
+        })?;
 
         // Execute with sandbox if enabled
         let result = if self.policy.sandbox_config.enabled {
@@ -469,7 +480,7 @@ impl SecureCommandExecutor {
                     let pid = std::process::id();
                     let resource_usage = self.resource_monitor.monitor_execution(pid).await;
                     debug!("Command resource usage: {:?}", resource_usage);
-                    
+
                     // Check if resource limits were exceeded using the centralized method
                     if !self.resource_monitor.check_resource_limits(&resource_usage) {
                         warn!("Command '{}' violated resource limits", command);
@@ -484,11 +495,11 @@ impl SecureCommandExecutor {
         let command_result = match &result {
             Ok(output) => {
                 if output.status.success() {
-                    CommandResult::Success { 
-                        exit_code: output.status.code().unwrap_or(0) 
+                    CommandResult::Success {
+                        exit_code: output.status.code().unwrap_or(0),
                     }
                 } else {
-                    CommandResult::Failed { 
+                    CommandResult::Failed {
                         exit_code: output.status.code().unwrap_or(-1),
                         error: String::from_utf8_lossy(&output.stderr).to_string(),
                     }
@@ -529,15 +540,17 @@ impl SecureCommandExecutor {
         debug!("Validating command security: {} {:?}", command, args);
 
         // Check if command is in allowed list
-        let policy = self.policy.allowed_commands.get(command)
-            .ok_or_else(|| GeofenceError::ActionExecution(
-                format!("Command '{}' not allowed by security policy", command)
-            ))?;
+        let policy = self.policy.allowed_commands.get(command).ok_or_else(|| {
+            GeofenceError::ActionExecution(format!(
+                "Command '{}' not allowed by security policy",
+                command
+            ))
+        })?;
 
         // Validate arguments against allowed patterns
         for arg in args {
             let mut allowed = false;
-            
+
             for pattern in &policy.allowed_args {
                 if let Ok(regex) = regex::Regex::new(pattern) {
                     if regex.is_match(arg) {
@@ -548,18 +561,20 @@ impl SecureCommandExecutor {
             }
 
             if !allowed {
-                return Err(GeofenceError::ActionExecution(
-                    format!("Argument '{}' not allowed for command '{}'", arg, command)
-                ));
+                return Err(GeofenceError::ActionExecution(format!(
+                    "Argument '{}' not allowed for command '{}'",
+                    arg, command
+                )));
             }
 
             // Check forbidden patterns
             for pattern in &policy.forbidden_args {
                 if let Ok(regex) = regex::Regex::new(pattern) {
                     if regex.is_match(arg) {
-                        return Err(GeofenceError::ActionExecution(
-                            format!("Argument '{}' forbidden for command '{}'", arg, command)
-                        ));
+                        return Err(GeofenceError::ActionExecution(format!(
+                            "Argument '{}' forbidden for command '{}'",
+                            arg, command
+                        )));
                     }
                 }
             }
@@ -576,7 +591,10 @@ impl SecureCommandExecutor {
         args: &[&str],
         policy: &CommandPolicy,
     ) -> Result<std::process::Output> {
-        debug!("Executing command in systemd sandbox: {} {:?}", command, args);
+        debug!(
+            "Executing command in systemd sandbox: {} {:?}",
+            command, args
+        );
 
         let mut systemd_run_args = vec!["--user", "--scope"];
 
@@ -608,8 +626,11 @@ impl SecureCommandExecutor {
         }
 
         // Add timeout
-        limit_strings.push(format!("TimeoutStopSec={}s", policy.max_execution_time.as_secs()));
-        
+        limit_strings.push(format!(
+            "TimeoutStopSec={}s",
+            policy.max_execution_time.as_secs()
+        ));
+
         // Add all limit strings to args
         for limit_string in &limit_strings {
             systemd_run_args.push("--property");
@@ -631,9 +652,11 @@ impl SecureCommandExecutor {
         if !policy.allowed_working_dirs.is_empty() {
             if let Ok(current_dir) = std::env::current_dir() {
                 let current_path = current_dir.to_string_lossy();
-                let allowed = policy.allowed_working_dirs.iter()
+                let allowed = policy
+                    .allowed_working_dirs
+                    .iter()
                     .any(|allowed_dir| current_path.starts_with(allowed_dir));
-                
+
                 if !allowed {
                     cmd.current_dir(&policy.allowed_working_dirs[0]);
                 }
@@ -642,7 +665,7 @@ impl SecureCommandExecutor {
 
         // Execute command with timeout
         let timeout_duration = policy.max_execution_time + Duration::from_secs(5); // Extra time for cleanup
-        
+
         match tokio::time::timeout(timeout_duration, cmd.output()).await {
             Ok(Ok(output)) => {
                 debug!("Sandboxed command completed successfully");
@@ -651,13 +674,15 @@ impl SecureCommandExecutor {
             Ok(Err(e)) => {
                 error!("Sandboxed command execution failed: {}", e);
                 Err(GeofenceError::ActionExecution(format!(
-                    "Sandboxed command execution failed: {}", e
+                    "Sandboxed command execution failed: {}",
+                    e
                 )))
             }
             Err(_) => {
                 error!("Sandboxed command timed out after {:?}", timeout_duration);
                 Err(GeofenceError::ActionExecution(format!(
-                    "Command timed out after {:?}", timeout_duration
+                    "Command timed out after {:?}",
+                    timeout_duration
                 )))
             }
         }
@@ -690,13 +715,18 @@ impl SecureCommandExecutor {
             Ok(Err(e)) => {
                 error!("Direct command execution failed: {}", e);
                 Err(GeofenceError::ActionExecution(format!(
-                    "Direct command execution failed: {}", e
+                    "Direct command execution failed: {}",
+                    e
                 )))
             }
             Err(_) => {
-                error!("Direct command timed out after {:?}", policy.max_execution_time);
+                error!(
+                    "Direct command timed out after {:?}",
+                    policy.max_execution_time
+                );
                 Err(GeofenceError::ActionExecution(format!(
-                    "Command timed out after {:?}", policy.max_execution_time
+                    "Command timed out after {:?}",
+                    policy.max_execution_time
                 )))
             }
         }
@@ -719,8 +749,10 @@ impl SecureCommandExecutor {
             cmd.env(key, value);
         }
 
-        debug!("Applied environment restrictions: preserve={:?}, set={:?}", 
-               env_restrictions.preserve_env, env_restrictions.set_env);
+        debug!(
+            "Applied environment restrictions: preserve={:?}, set={:?}",
+            env_restrictions.preserve_env, env_restrictions.set_env
+        );
     }
 
     /// Update security policy
@@ -748,7 +780,8 @@ impl AuditLogger {
         if let Some(parent) = config.log_file.parent() {
             if let Err(e) = fs::create_dir_all(parent).await {
                 return Err(GeofenceError::Config(format!(
-                    "Failed to create audit log directory: {}", e
+                    "Failed to create audit log directory: {}",
+                    e
                 )));
             }
         }
@@ -763,10 +796,9 @@ impl AuditLogger {
 
         debug!("Logging audit entry for command: {}", entry.command);
 
-        let log_line = serde_json::to_string(entry)
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to serialize audit log entry: {}", e
-            )))?;
+        let log_line = serde_json::to_string(entry).map_err(|e| {
+            GeofenceError::Config(format!("Failed to serialize audit log entry: {}", e))
+        })?;
 
         // Check if log rotation is needed
         if let Ok(metadata) = fs::metadata(&self.config.log_file).await {
@@ -778,10 +810,9 @@ impl AuditLogger {
 
         // Append to log file
         let log_line_with_newline = format!("{}\n", log_line);
-        fs::write(&self.config.log_file, log_line_with_newline).await
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to write audit log: {}", e
-            )))?;
+        fs::write(&self.config.log_file, log_line_with_newline)
+            .await
+            .map_err(|e| GeofenceError::Config(format!("Failed to write audit log: {}", e)))?;
 
         debug!("Audit log entry written successfully");
         Ok(())
@@ -797,7 +828,10 @@ impl AuditLogger {
 
             if PathBuf::from(&old_path).exists() {
                 if let Err(e) = fs::rename(&old_path, &new_path).await {
-                    warn!("Failed to rotate log file {} to {}: {}", old_path, new_path, e);
+                    warn!(
+                        "Failed to rotate log file {} to {}: {}",
+                        old_path, new_path, e
+                    );
                 }
             }
         }
@@ -819,10 +853,9 @@ impl AuditLogger {
             return Ok(Vec::new());
         }
 
-        let content = fs::read_to_string(&self.config.log_file).await
-            .map_err(|e| GeofenceError::Config(format!(
-                "Failed to read audit log: {}", e
-            )))?;
+        let content = fs::read_to_string(&self.config.log_file)
+            .await
+            .map_err(|e| GeofenceError::Config(format!("Failed to read audit log: {}", e)))?;
 
         let mut entries = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
@@ -858,38 +891,44 @@ impl ResourceMonitor {
     async fn monitor_execution(&self, _pid: u32) -> ResourceUsage {
         // In a real implementation, this would monitor the actual process
         // For now, we'll simulate resource monitoring with limits checking
-        
+
         debug!("Monitoring resource usage with limits: max_memory_mb={:?}, max_cpu_seconds={:?}, max_file_descriptors={:?}", 
                self.limits.max_memory_mb, self.limits.max_cpu_seconds, self.limits.max_file_descriptors);
-        
+
         // Simulate some resource usage for demonstration
         let simulated_memory = 50u64; // 50 MB
         let simulated_cpu_time = 1000u64; // 1 second
         let simulated_fds = 10u32; // 10 file descriptors
-        
+
         // Check against limits and warn if approaching
         if let Some(max_memory) = self.limits.max_memory_mb {
             if simulated_memory > max_memory / 2 {
-                warn!("Command approaching memory limit: {}MB used, limit: {}MB", 
-                      simulated_memory, max_memory);
+                warn!(
+                    "Command approaching memory limit: {}MB used, limit: {}MB",
+                    simulated_memory, max_memory
+                );
             }
         }
-        
+
         if let Some(max_cpu_seconds) = self.limits.max_cpu_seconds {
             let simulated_cpu_seconds = simulated_cpu_time / 1000; // Convert ms to seconds
             if simulated_cpu_seconds > max_cpu_seconds / 2 {
-                warn!("Command approaching CPU time limit: {}s used, limit: {}s", 
-                      simulated_cpu_seconds, max_cpu_seconds);
+                warn!(
+                    "Command approaching CPU time limit: {}s used, limit: {}s",
+                    simulated_cpu_seconds, max_cpu_seconds
+                );
             }
         }
-        
+
         if let Some(max_fds) = self.limits.max_file_descriptors {
             if (simulated_fds as u64) > max_fds / 2 {
-                warn!("Command approaching FD limit: {} FDs used, limit: {}", 
-                      simulated_fds, max_fds);
+                warn!(
+                    "Command approaching FD limit: {} FDs used, limit: {}",
+                    simulated_fds, max_fds
+                );
             }
         }
-        
+
         ResourceUsage {
             memory_mb: Some(simulated_memory),
             cpu_time_ms: Some(simulated_cpu_time),
@@ -905,22 +944,29 @@ impl ResourceMonitor {
                 return false;
             }
         }
-        
-        if let (Some(cpu_time_ms), Some(max_cpu_seconds)) = (usage.cpu_time_ms, self.limits.max_cpu_seconds) {
+
+        if let (Some(cpu_time_ms), Some(max_cpu_seconds)) =
+            (usage.cpu_time_ms, self.limits.max_cpu_seconds)
+        {
             let cpu_time_seconds = cpu_time_ms / 1000; // Convert ms to seconds
             if cpu_time_seconds > max_cpu_seconds {
-                warn!("CPU time limit exceeded: {}s > {}s", cpu_time_seconds, max_cpu_seconds);
+                warn!(
+                    "CPU time limit exceeded: {}s > {}s",
+                    cpu_time_seconds, max_cpu_seconds
+                );
                 return false;
             }
         }
-        
-        if let (Some(fds), Some(max_fds)) = (usage.file_descriptors, self.limits.max_file_descriptors) {
+
+        if let (Some(fds), Some(max_fds)) =
+            (usage.file_descriptors, self.limits.max_file_descriptors)
+        {
             if (fds as u64) > max_fds {
                 warn!("File descriptor limit exceeded: {} > {}", fds, max_fds);
                 return false;
             }
         }
-        
+
         true
     }
 }
@@ -978,7 +1024,10 @@ mod tests {
     fn test_command_result_serialization() {
         let results = vec![
             CommandResult::Success { exit_code: 0 },
-            CommandResult::Failed { exit_code: 1, error: "Test error".to_string() },
+            CommandResult::Failed {
+                exit_code: 1,
+                error: "Test error".to_string(),
+            },
             CommandResult::Timeout,
             CommandResult::SecurityViolation("Test violation".to_string()),
         ];

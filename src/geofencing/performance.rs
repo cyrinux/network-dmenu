@@ -3,8 +3,8 @@
 //! Includes connection pooling, batch operations, intelligent caching,
 //! and asynchronous processing for improved daemon performance.
 
-use crate::geofencing::{GeofenceError, Result, LocationFingerprint};
 use crate::command::CommandRunner;
+use crate::geofencing::{GeofenceError, LocationFingerprint, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -129,7 +129,7 @@ pub enum WiFiOperationType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BluetoothOperationType {
     Scan,
-    Connect(String), // Device address
+    Connect(String),    // Device address
     Disconnect(String), // Device address
     GetDevices,
 }
@@ -219,11 +219,11 @@ mod duration_seconds {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            fingerprint_ttl: Duration::from_secs(60),        // 1 minute
-            network_state_ttl: Duration::from_secs(30),      // 30 seconds
-            zone_match_ttl: Duration::from_secs(120),        // 2 minutes
+            fingerprint_ttl: Duration::from_secs(60),   // 1 minute
+            network_state_ttl: Duration::from_secs(30), // 30 seconds
+            zone_match_ttl: Duration::from_secs(120),   // 2 minutes
             max_entries: 1000,
-            cleanup_interval: Duration::from_secs(300),      // 5 minutes
+            cleanup_interval: Duration::from_secs(300), // 5 minutes
         }
     }
 }
@@ -316,14 +316,20 @@ impl NetworkStateCache {
 
     /// Update Bluetooth device state
     pub fn update_bluetooth_device(&mut self, device_name: String, state: BluetoothDeviceState) {
-        debug!("Updating Bluetooth device '{}' state: {:?}", device_name, state);
+        debug!(
+            "Updating Bluetooth device '{}' state: {:?}",
+            device_name, state
+        );
         self.bluetooth_devices.insert(device_name, state);
         self.cache_time = Utc::now();
     }
 
     /// Update network interface state
     pub fn update_interface_state(&mut self, interface: String, state: NetworkInterfaceState) {
-        debug!("Updating network interface '{}' state: {:?}", interface, state);
+        debug!(
+            "Updating network interface '{}' state: {:?}",
+            interface, state
+        );
         self.interface_states.insert(interface, state);
         self.cache_time = Utc::now();
     }
@@ -403,8 +409,11 @@ impl NetworkStateCache {
 impl ConnectionPool {
     /// Create new connection pool
     pub fn new(max_concurrent: usize) -> Self {
-        debug!("Creating connection pool with max_concurrent: {}", max_concurrent);
-        
+        debug!(
+            "Creating connection pool with max_concurrent: {}",
+            max_concurrent
+        );
+
         Self {
             max_concurrent,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
@@ -418,14 +427,17 @@ impl ConnectionPool {
     where
         F: std::future::Future<Output = Result<T>>,
     {
-        debug!("Executing operation '{}' with connection pool", operation_type);
+        debug!(
+            "Executing operation '{}' with connection pool",
+            operation_type
+        );
 
         // Acquire semaphore permit
         let _permit = match timeout(Duration::from_secs(30), self.semaphore.acquire()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => {
                 return Err(GeofenceError::ActionExecution(
-                    "Connection pool semaphore closed".to_string()
+                    "Connection pool semaphore closed".to_string(),
                 ));
             }
             Err(_) => {
@@ -434,9 +446,9 @@ impl ConnectionPool {
                     let mut metrics = self.active_connections.write().await;
                     metrics.connection_timeouts += 1;
                 }
-                
+
                 return Err(GeofenceError::ActionExecution(
-                    "Connection pool timeout waiting for available slot".to_string()
+                    "Connection pool timeout waiting for available slot".to_string(),
                 ));
             }
         };
@@ -445,59 +457,78 @@ impl ConnectionPool {
         let connection_key = format!("{}_{}", operation_type, std::process::id());
         let reuse_info = {
             let mut reuse_pool = self.reuse_pool.lock().await;
-            
+
             // Clean up expired connections first
             let now = Instant::now();
             let before_cleanup_count = reuse_pool.len();
             reuse_pool.retain(|key, connection| {
                 let connection_age = now.duration_since(connection.created_at);
                 let max_age = match connection.connection_type.as_str() {
-                    "wifi_scan" => Duration::from_secs(30),      // WiFi connections expire faster
+                    "wifi_scan" => Duration::from_secs(30), // WiFi connections expire faster
                     "bluetooth_scan" => Duration::from_secs(20), // Bluetooth even faster
                     "system_command" => Duration::from_secs(60), // System commands can be reused longer
                     _ => Duration::from_secs(45),                // Default expiration
                 };
-                
+
                 if connection_age > max_age {
-                    debug!("Expiring {} connection '{}' after {:?} (max: {:?})", 
-                           connection.connection_type, key, connection_age, max_age);
+                    debug!(
+                        "Expiring {} connection '{}' after {:?} (max: {:?})",
+                        connection.connection_type, key, connection_age, max_age
+                    );
                     false
                 } else {
                     true
                 }
             });
-            
+
             if reuse_pool.len() < before_cleanup_count {
-                debug!("Cleaned up {} expired connections", before_cleanup_count - reuse_pool.len());
+                debug!(
+                    "Cleaned up {} expired connections",
+                    before_cleanup_count - reuse_pool.len()
+                );
             }
-            
+
             if let Some(connection) = reuse_pool.get_mut(&connection_key) {
                 // Check if connection is still valid based on type and age
                 let connection_age = now.duration_since(connection.created_at);
                 let is_valid = match connection.connection_type.as_str() {
-                    "wifi_scan" => connection_age < Duration::from_secs(30) && connection.usage_count < 10,
-                    "bluetooth_scan" => connection_age < Duration::from_secs(20) && connection.usage_count < 5,
-                    "system_command" => connection_age < Duration::from_secs(60) && connection.usage_count < 20,
+                    "wifi_scan" => {
+                        connection_age < Duration::from_secs(30) && connection.usage_count < 10
+                    }
+                    "bluetooth_scan" => {
+                        connection_age < Duration::from_secs(20) && connection.usage_count < 5
+                    }
+                    "system_command" => {
+                        connection_age < Duration::from_secs(60) && connection.usage_count < 20
+                    }
                     _ => connection_age < Duration::from_secs(45) && connection.usage_count < 15,
                 };
-                
+
                 if is_valid {
                     // Update existing connection usage
                     connection.last_used = now;
                     connection.usage_count += 1;
-                    debug!("Reusing {} connection for '{}', usage count: {}, age: {:?}", 
-                           connection.connection_type, operation_type, connection.usage_count, connection_age);
+                    debug!(
+                        "Reusing {} connection for '{}', usage count: {}, age: {:?}",
+                        connection.connection_type,
+                        operation_type,
+                        connection.usage_count,
+                        connection_age
+                    );
                     Some(("reused", connection.usage_count))
                 } else {
                     // Connection is too old or overused, remove and create new one
-                    debug!("Connection '{}' too old ({:?}) or overused ({}), creating new one", 
-                           operation_type, connection_age, connection.usage_count);
+                    debug!(
+                        "Connection '{}' too old ({:?}) or overused ({}), creating new one",
+                        operation_type, connection_age, connection.usage_count
+                    );
                     reuse_pool.remove(&connection_key);
                     None
                 }
             } else {
                 None
-            }.or_else(|| {
+            }
+            .or_else(|| {
                 // Create new pooled connection with type-specific configuration
                 let new_connection = PooledConnection {
                     connection_type: operation_type.to_string(),
@@ -506,7 +537,10 @@ impl ConnectionPool {
                     usage_count: 1,
                 };
                 reuse_pool.insert(connection_key.clone(), new_connection);
-                debug!("Created new {} pooled connection for '{}'", operation_type, operation_type);
+                debug!(
+                    "Created new {} pooled connection for '{}'",
+                    operation_type, operation_type
+                );
                 Some(("new", 1))
             })
         };
@@ -525,25 +559,31 @@ impl ConnectionPool {
         let start_time = Instant::now();
         let result = operation.await;
         let duration = start_time.elapsed();
-        
+
         // Log connection performance
         if let Some((reuse_type, usage_count)) = reuse_info {
-            debug!("Operation '{}' completed in {:?} (connection: {}, usage: {})", 
-                   operation_type, duration, reuse_type, usage_count);
+            debug!(
+                "Operation '{}' completed in {:?} (connection: {}, usage: {})",
+                operation_type, duration, reuse_type, usage_count
+            );
         }
 
         // Update metrics
         {
             let mut metrics = self.active_connections.write().await;
             metrics.active_connections -= 1;
-            
+
             if result.is_err() {
                 metrics.connection_errors += 1;
             }
         }
 
-        debug!("Operation '{}' completed in {:?} with result: {}", 
-               operation_type, duration, if result.is_ok() { "success" } else { "error" });
+        debug!(
+            "Operation '{}' completed in {:?} with result: {}",
+            operation_type,
+            duration,
+            if result.is_ok() { "success" } else { "error" }
+        );
 
         result
     }
@@ -564,20 +604,26 @@ impl ConnectionPool {
         let mut reuse_pool = self.reuse_pool.lock().await;
         let now = Instant::now();
         let stale_threshold = Duration::from_secs(300); // 5 minutes
-        
+
         let initial_count = reuse_pool.len();
         reuse_pool.retain(|connection_key, connection| {
             let is_stale = now.duration_since(connection.last_used) > stale_threshold;
             if is_stale {
-                debug!("Removing stale connection: {} (unused for {:?})", 
-                       connection_key, now.duration_since(connection.last_used));
+                debug!(
+                    "Removing stale connection: {} (unused for {:?})",
+                    connection_key,
+                    now.duration_since(connection.last_used)
+                );
             }
             !is_stale
         });
-        
+
         let removed_count = initial_count - reuse_pool.len();
         if removed_count > 0 {
-            debug!("Cleaned up {} stale connections from reuse pool", removed_count);
+            debug!(
+                "Cleaned up {} stale connections from reuse pool",
+                removed_count
+            );
         }
     }
 }
@@ -603,7 +649,7 @@ impl BatchProcessor {
     /// Add WiFi operation to batch queue
     pub async fn queue_wifi_operation(&self, operation: WiFiOperation) {
         debug!("Queuing WiFi operation: {:?}", operation.operation_type);
-        
+
         let mut pending_ops = self.pending_wifi_ops.lock().await;
         pending_ops.push(operation);
 
@@ -611,15 +657,18 @@ impl BatchProcessor {
         if pending_ops.len() >= self.wifi_batch_size {
             let batch = pending_ops.drain(..).collect();
             drop(pending_ops);
-            
+
             tokio::spawn(Self::process_wifi_batch(batch));
         }
     }
 
     /// Add Bluetooth operation to batch queue
     pub async fn queue_bluetooth_operation(&self, operation: BluetoothOperation) {
-        debug!("Queuing Bluetooth operation: {:?}", operation.operation_type);
-        
+        debug!(
+            "Queuing Bluetooth operation: {:?}",
+            operation.operation_type
+        );
+
         let mut pending_ops = self.pending_bluetooth_ops.lock().await;
         pending_ops.push(operation);
 
@@ -627,7 +676,7 @@ impl BatchProcessor {
         if pending_ops.len() >= self.bluetooth_batch_size {
             let batch = pending_ops.drain(..).collect();
             drop(pending_ops);
-            
+
             tokio::spawn(Self::process_bluetooth_batch(batch));
         }
     }
@@ -660,7 +709,7 @@ impl BatchProcessor {
     /// Process a batch of WiFi operations
     async fn process_wifi_batch(operations: Vec<WiFiOperation>) {
         debug!("Processing WiFi batch with {} operations", operations.len());
-        
+
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
 
@@ -698,15 +747,22 @@ impl BatchProcessor {
 
         // Execute status checks (can be batched into single call)
         if !status_ops.is_empty() {
-            debug!("Executing batch WiFi status check for {} requests", status_ops.len());
-            let _ = command_runner.run_command("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi"]);
+            debug!(
+                "Executing batch WiFi status check for {} requests",
+                status_ops.len()
+            );
+            let _ =
+                command_runner.run_command("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi"]);
         }
     }
 
     /// Process a batch of Bluetooth operations
     async fn process_bluetooth_batch(operations: Vec<BluetoothOperation>) {
-        debug!("Processing Bluetooth batch with {} operations", operations.len());
-        
+        debug!(
+            "Processing Bluetooth batch with {} operations",
+            operations.len()
+        );
+
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
 
@@ -726,7 +782,10 @@ impl BatchProcessor {
 
         // Execute device list first (single call serves all device requests)
         if !device_ops.is_empty() {
-            debug!("Executing batch Bluetooth device list for {} requests", device_ops.len());
+            debug!(
+                "Executing batch Bluetooth device list for {} requests",
+                device_ops.len()
+            );
             let _ = command_runner.run_command("bluetoothctl", &["devices"]);
         }
 
@@ -750,7 +809,7 @@ impl BatchProcessor {
         tokio::spawn(async move {
             loop {
                 sleep(max_wait).await;
-                
+
                 // Process WiFi batch if it has operations waiting too long
                 {
                     let mut pending_wifi = wifi_ops.lock().await;
@@ -789,7 +848,8 @@ impl CacheManager {
         Self {
             fingerprint_cache: Arc::new(RwLock::new(HashMap::new())),
             network_state_cache: Arc::new(RwLock::new(NetworkStateCache::new(
-                ChronoDuration::from_std(config.network_state_ttl).unwrap_or(ChronoDuration::seconds(30))
+                ChronoDuration::from_std(config.network_state_ttl)
+                    .unwrap_or(ChronoDuration::seconds(30)),
             ))),
             zone_match_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_stats: Arc::new(RwLock::new(CacheStatistics::default())),
@@ -812,7 +872,7 @@ impl CacheManager {
                 None
             }
         };
-        
+
         if let Some(fingerprint) = cache_hit {
             // Update access tracking with write lock (only if we found a valid entry)
             {
@@ -820,17 +880,19 @@ impl CacheManager {
                 if let Some(cached) = cache.get_mut(cache_key) {
                     cached.access_count += 1;
                     cached.last_accessed = Instant::now();
-                    debug!("Cache hit for fingerprint '{}' (access count: {})", 
-                           cache_key, cached.access_count);
+                    debug!(
+                        "Cache hit for fingerprint '{}' (access count: {})",
+                        cache_key, cached.access_count
+                    );
                 }
             }
-            
+
             // Update cache hit statistics
             {
                 let mut stats = self.cache_stats.write().await;
                 stats.fingerprint_hits += 1;
             }
-            
+
             return Some(fingerprint);
         }
 
@@ -839,7 +901,7 @@ impl CacheManager {
             let mut stats = self.cache_stats.write().await;
             stats.fingerprint_misses += 1;
         }
-        
+
         debug!("Cache miss for fingerprint key: {}", cache_key);
         None
     }
@@ -847,7 +909,7 @@ impl CacheManager {
     /// Cache location fingerprint
     pub async fn cache_fingerprint(&self, cache_key: String, fingerprint: LocationFingerprint) {
         debug!("Caching fingerprint for key: {}", cache_key);
-        
+
         let cached_fp = CachedFingerprint {
             fingerprint,
             created_at: Instant::now(),
@@ -865,28 +927,36 @@ impl CacheManager {
     }
 
     /// Get cached zone match result
-    pub async fn get_cached_zone_match(&self, fingerprint_hash: &str) -> Option<(Option<String>, f64)> {
+    pub async fn get_cached_zone_match(
+        &self,
+        fingerprint_hash: &str,
+    ) -> Option<(Option<String>, f64)> {
         let cache = self.zone_match_cache.read().await;
-        
+
         if let Some(cached) = cache.get(fingerprint_hash) {
             if cached.created_at.elapsed() < self.config.zone_match_ttl {
                 // Validate cache integrity - ensure stored hash matches requested hash
                 if cached.fingerprint_hash != fingerprint_hash {
-                    warn!("Cache integrity violation: stored hash '{}' != requested hash '{}'", 
-                          cached.fingerprint_hash, fingerprint_hash);
+                    warn!(
+                        "Cache integrity violation: stored hash '{}' != requested hash '{}'",
+                        cached.fingerprint_hash, fingerprint_hash
+                    );
                     return None;
                 }
-                
+
                 {
                     let mut stats = self.cache_stats.write().await;
                     stats.zone_match_hits += 1;
                 }
-                
+
                 debug!("Cache hit for zone match: {} (validated)", fingerprint_hash);
                 return Some((cached.zone_id.clone(), cached.confidence));
             } else {
-                debug!("Cache entry expired for zone match: {} (age: {:?})", 
-                       cached.fingerprint_hash, cached.created_at.elapsed());
+                debug!(
+                    "Cache entry expired for zone match: {} (age: {:?})",
+                    cached.fingerprint_hash,
+                    cached.created_at.elapsed()
+                );
             }
         }
 
@@ -894,15 +964,23 @@ impl CacheManager {
             let mut stats = self.cache_stats.write().await;
             stats.zone_match_misses += 1;
         }
-        
+
         debug!("Cache miss for zone match: {}", fingerprint_hash);
         None
     }
 
     /// Cache zone match result
-    pub async fn cache_zone_match(&self, fingerprint_hash: String, zone_id: Option<String>, confidence: f64) {
-        debug!("Caching zone match for fingerprint: {} -> {:?}", fingerprint_hash, zone_id);
-        
+    pub async fn cache_zone_match(
+        &self,
+        fingerprint_hash: String,
+        zone_id: Option<String>,
+        confidence: f64,
+    ) {
+        debug!(
+            "Caching zone match for fingerprint: {} -> {:?}",
+            fingerprint_hash, zone_id
+        );
+
         let cached_match = CachedZoneMatch {
             zone_id,
             confidence,
@@ -931,21 +1009,24 @@ impl CacheManager {
     /// Refresh network interface states in cache
     pub async fn refresh_interface_states(&self) -> Result<()> {
         debug!("Refreshing network interface states");
-        
+
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
+
         let mut interface_states = HashMap::new();
-        
+
         // Get interface list using ip command
         if crate::command::is_command_installed("ip") {
             match command_runner.run_command("ip", &["addr", "show"]) {
                 Ok(output) if output.status.success() => {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    
+
                     for line in stdout.lines() {
                         if let Some(interface_name) = self.parse_interface_name(line) {
-                            if let Some(state) = self.get_interface_details(&interface_name, &command_runner).await {
+                            if let Some(state) = self
+                                .get_interface_details(&interface_name, &command_runner)
+                                .await
+                            {
                                 interface_states.insert(interface_name, state);
                             }
                         }
@@ -957,13 +1038,13 @@ impl CacheManager {
                 _ => {}
             }
         }
-        
+
         // Update cache with new interface states
         {
             let mut cache = self.network_state_cache.write().await;
             cache.update_interface_states(interface_states);
         }
-        
+
         debug!("Network interface states refreshed successfully");
         Ok(())
     }
@@ -984,7 +1065,11 @@ impl CacheManager {
     }
 
     /// Get detailed state for specific interface
-    async fn get_interface_details(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<NetworkInterfaceState> {
+    async fn get_interface_details(
+        &self,
+        interface: &str,
+        command_runner: &crate::command::RealCommandRunner,
+    ) -> Option<NetworkInterfaceState> {
         // Check if interface is up
         let is_up = match command_runner.run_command("ip", &["link", "show", interface]) {
             Ok(output) if output.status.success() => {
@@ -1028,7 +1113,7 @@ impl CacheManager {
     /// Extract IP addresses from ip addr output
     fn extract_ip_addresses(&self, output: &str) -> Vec<String> {
         let mut addresses = Vec::new();
-        
+
         for line in output.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("inet ") || trimmed.starts_with("inet6 ") {
@@ -1039,15 +1124,19 @@ impl CacheManager {
                 }
             }
         }
-        
+
         addresses
     }
 
     /// Get interface link speed if available
-    async fn get_interface_speed(&self, interface: &str, command_runner: &crate::command::RealCommandRunner) -> Option<u64> {
+    async fn get_interface_speed(
+        &self,
+        interface: &str,
+        command_runner: &crate::command::RealCommandRunner,
+    ) -> Option<u64> {
         // First try reading from sysfs (fastest method)
         let speed_path = format!("/sys/class/net/{}/speed", interface);
-        
+
         match tokio::fs::read_to_string(speed_path).await {
             Ok(content) => {
                 if let Ok(speed) = content.trim().parse::<u64>() {
@@ -1056,52 +1145,68 @@ impl CacheManager {
                 }
             }
             Err(e) => {
-                debug!("Failed to read interface speed from sysfs for {}: {}", interface, e);
+                debug!(
+                    "Failed to read interface speed from sysfs for {}: {}",
+                    interface, e
+                );
             }
         }
-        
+
         // Fallback to using ethtool via command runner
-        debug!("Attempting to get interface {} speed using ethtool", interface);
+        debug!(
+            "Attempting to get interface {} speed using ethtool",
+            interface
+        );
         match command_runner.run_command("ethtool", &[interface]) {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                
+
                 // Look for "Speed: 1000Mb/s" or similar patterns
                 for line in stdout.lines() {
                     if line.trim().starts_with("Speed:") {
-                        let speed_str = line.trim()
+                        let speed_str = line
+                            .trim()
                             .replace("Speed:", "")
                             .replace("Mb/s", "")
                             .replace("Gb/s", "000") // Convert Gb to Mb
                             .trim()
                             .to_string();
-                        
+
                         if let Ok(speed) = speed_str.parse::<u64>() {
                             debug!("Interface {} speed from ethtool: {} Mbps", interface, speed);
                             return Some(speed);
                         }
                     }
                 }
-                debug!("Could not parse speed from ethtool output for interface {}", interface);
+                debug!(
+                    "Could not parse speed from ethtool output for interface {}",
+                    interface
+                );
             }
             Ok(output) => {
-                debug!("ethtool command failed for interface {}: exit code {}", 
-                       interface, output.status.code().unwrap_or(-1));
+                debug!(
+                    "ethtool command failed for interface {}: exit code {}",
+                    interface,
+                    output.status.code().unwrap_or(-1)
+                );
             }
             Err(e) => {
                 debug!("Failed to run ethtool for interface {}: {}", interface, e);
             }
         }
-        
+
         // Final fallback - assume gigabit if we can't determine
-        debug!("Could not determine speed for interface {}, assuming 1000 Mbps", interface);
+        debug!(
+            "Could not determine speed for interface {}, assuming 1000 Mbps",
+            interface
+        );
         Some(1000)
     }
 
     /// Invalidate all caches
     pub async fn invalidate_all(&self) {
         debug!("Invalidating all caches");
-        
+
         self.fingerprint_cache.write().await.clear();
         self.zone_match_cache.write().await.clear();
         self.network_state_cache.write().await.invalidate();
@@ -1137,9 +1242,9 @@ impl CacheManager {
                 {
                     let mut cache = fingerprint_cache.write().await;
                     let initial_size = cache.len();
-                    
+
                     cache.retain(|_, cached| cached.created_at.elapsed() < fingerprint_ttl);
-                    
+
                     let evicted = initial_size - cache.len();
                     if evicted > 0 {
                         debug!("Evicted {} expired fingerprint cache entries", evicted);
@@ -1152,9 +1257,9 @@ impl CacheManager {
                 {
                     let mut cache = zone_match_cache.write().await;
                     let initial_size = cache.len();
-                    
+
                     cache.retain(|_, cached| cached.created_at.elapsed() < zone_match_ttl);
-                    
+
                     let evicted = initial_size - cache.len();
                     if evicted > 0 {
                         debug!("Evicted {} expired zone match cache entries", evicted);
@@ -1172,33 +1277,48 @@ impl CacheManager {
 
         // Remove entries using smart LRU strategy (considers both access frequency and recency)
         let target_size = (self.config.max_entries as f64 * 0.8) as usize;
-        let mut entries: Vec<_> = cache.iter().map(|(k, v)| {
-            // Calculate eviction score: lower score = more likely to be evicted
-            // Combines recency and frequency with aging factor
-            let age_penalty = v.last_accessed.elapsed().as_secs() as f64 / 3600.0; // Hours since last access
-            let frequency_bonus = (v.access_count as f64).ln_1p(); // Logarithmic bonus for access count
-            let eviction_score = frequency_bonus - age_penalty;
-            
-            (k.clone(), eviction_score, v.last_accessed, v.access_count)
-        }).collect();
-        
+        let mut entries: Vec<_> = cache
+            .iter()
+            .map(|(k, v)| {
+                // Calculate eviction score: lower score = more likely to be evicted
+                // Combines recency and frequency with aging factor
+                let age_penalty = v.last_accessed.elapsed().as_secs() as f64 / 3600.0; // Hours since last access
+                let frequency_bonus = (v.access_count as f64).ln_1p(); // Logarithmic bonus for access count
+                let eviction_score = frequency_bonus - age_penalty;
+
+                (k.clone(), eviction_score, v.last_accessed, v.access_count)
+            })
+            .collect();
+
         // Sort by eviction score (ascending - lowest scores get evicted first)
         entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         // Remove entries with lowest scores
         let to_remove = cache.len().saturating_sub(target_size);
-        let keys_to_remove: Vec<_> = entries.iter().take(to_remove).map(|(k, score, last_access, access_count)| {
-            debug!("Evicting cache entry '{}' (score: {:.2}, access_count: {}, last_access: {:?})", 
-                   k, score, access_count, last_access.elapsed());
-            k.clone()
-        }).collect();
-        
+        let keys_to_remove: Vec<_> = entries
+            .iter()
+            .take(to_remove)
+            .map(|(k, score, last_access, access_count)| {
+                debug!(
+                    "Evicting cache entry '{}' (score: {:.2}, access_count: {}, last_access: {:?})",
+                    k,
+                    score,
+                    access_count,
+                    last_access.elapsed()
+                );
+                k.clone()
+            })
+            .collect();
+
         for key in keys_to_remove {
             cache.remove(&key);
         }
 
-        debug!("Cleaned up fingerprint cache, removed {} entries", to_remove);
-        
+        debug!(
+            "Cleaned up fingerprint cache, removed {} entries",
+            to_remove
+        );
+
         {
             let mut stats = self.cache_stats.write().await;
             stats.cache_evictions += to_remove as u64;
@@ -1210,7 +1330,7 @@ impl AsyncTaskManager {
     /// Create new async task manager
     pub fn new(max_concurrent_tasks: usize) -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(100);
-        
+
         Self {
             executor_pool: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
             active_tasks: Arc::new(RwLock::new(HashMap::new())),
@@ -1224,15 +1344,25 @@ impl AsyncTaskManager {
     where
         F: std::future::Future<Output = Result<String>> + Send + 'static,
     {
-        self.submit_task_with_priority(task_id, task_type, 5, task).await
+        self.submit_task_with_priority(task_id, task_type, 5, task)
+            .await
     }
 
     /// Submit background task for execution with specified priority
-    pub async fn submit_task_with_priority<F>(&self, task_id: String, task_type: String, priority: u8, task: F) -> Result<()>
+    pub async fn submit_task_with_priority<F>(
+        &self,
+        task_id: String,
+        task_type: String,
+        priority: u8,
+        task: F,
+    ) -> Result<()>
     where
         F: std::future::Future<Output = Result<String>> + Send + 'static,
     {
-        debug!("Submitting background task: {} ({}) priority: {}", task_id, task_type, priority);
+        debug!(
+            "Submitting background task: {} ({}) priority: {}",
+            task_id, task_type, priority
+        );
 
         // Check if we're at capacity (high priority tasks can preempt low priority ones)
         {
@@ -1245,13 +1375,17 @@ impl AsyncTaskManager {
                     let cancelled = self.cancel_low_priority_tasks(3).await; // Cancel tasks with priority <= 3
                     if cancelled == 0 {
                         return Err(GeofenceError::ActionExecution(
-                            "Task manager at capacity and no low priority tasks to cancel".to_string()
+                            "Task manager at capacity and no low priority tasks to cancel"
+                                .to_string(),
                         ));
                     }
-                    debug!("Cancelled {} low priority tasks for high priority task", cancelled);
+                    debug!(
+                        "Cancelled {} low priority tasks for high priority task",
+                        cancelled
+                    );
                 } else {
                     return Err(GeofenceError::ActionExecution(
-                        "Task manager at capacity".to_string()
+                        "Task manager at capacity".to_string(),
                     ));
                 }
             }
@@ -1278,7 +1412,7 @@ impl AsyncTaskManager {
         // Create task future that returns TaskResult
         let task_future = async move {
             let result = task.await;
-            
+
             // Remove from active tasks
             {
                 let mut active_tasks = active_tasks_clone.write().await;
@@ -1341,7 +1475,7 @@ impl AsyncTaskManager {
     /// Get long-running tasks (running for more than specified duration)
     pub async fn get_long_running_tasks(&self, max_duration: Duration) -> Vec<TaskMetadata> {
         let active_tasks = self.active_tasks.read().await;
-        
+
         active_tasks
             .values()
             .filter(|metadata| metadata.runtime() > max_duration)
@@ -1350,11 +1484,17 @@ impl AsyncTaskManager {
     }
 
     /// Get tasks by priority range
-    pub async fn get_tasks_by_priority(&self, min_priority: u8, max_priority: u8) -> Vec<TaskMetadata> {
+    pub async fn get_tasks_by_priority(
+        &self,
+        min_priority: u8,
+        max_priority: u8,
+    ) -> Vec<TaskMetadata> {
         let active_tasks = self.active_tasks.read().await;
         active_tasks
             .values()
-            .filter(|metadata| metadata.priority >= min_priority && metadata.priority <= max_priority)
+            .filter(|metadata| {
+                metadata.priority >= min_priority && metadata.priority <= max_priority
+            })
             .cloned()
             .collect()
     }
@@ -1363,56 +1503,67 @@ impl AsyncTaskManager {
     pub async fn cancel_tasks_by_type(&self, task_type: &str) -> usize {
         let mut active_tasks = self.active_tasks.write().await;
         let _initial_count = active_tasks.len();
-        
+
         // Find tasks to cancel
         let task_ids_to_cancel: Vec<String> = active_tasks
             .iter()
             .filter(|(_, metadata)| metadata.task_type == task_type)
             .map(|(task_id, metadata)| {
-                warn!("Cancelling {} task '{}' (running for {:?})", 
-                      metadata.task_type, metadata.get_task_id(), metadata.runtime());
+                warn!(
+                    "Cancelling {} task '{}' (running for {:?})",
+                    metadata.task_type,
+                    metadata.get_task_id(),
+                    metadata.runtime()
+                );
                 task_id.clone()
             })
             .collect();
-        
+
         // Remove from active tasks (in real implementation, would also cancel the actual tasks)
         for task_id in &task_ids_to_cancel {
             active_tasks.remove(task_id);
         }
-        
+
         task_ids_to_cancel.len()
     }
 
     /// Cancel low priority tasks to make room for higher priority ones
     async fn cancel_low_priority_tasks(&self, max_priority: u8) -> usize {
         let mut active_tasks = self.active_tasks.write().await;
-        
+
         // Find low priority tasks to cancel (priority <= max_priority)
         let task_ids_to_cancel: Vec<String> = active_tasks
             .iter()
-            .filter(|(_, metadata)| metadata.priority <= max_priority && !metadata.is_high_priority())
+            .filter(|(_, metadata)| {
+                metadata.priority <= max_priority && !metadata.is_high_priority()
+            })
             .map(|(task_id, metadata)| {
-                warn!("Cancelling low priority {} task '{}' (priority: {}, running for {:?})", 
-                      metadata.task_type, metadata.get_task_id(), metadata.priority, metadata.runtime());
+                warn!(
+                    "Cancelling low priority {} task '{}' (priority: {}, running for {:?})",
+                    metadata.task_type,
+                    metadata.get_task_id(),
+                    metadata.priority,
+                    metadata.runtime()
+                );
                 task_id.clone()
             })
             .collect();
-        
+
         // Remove from active tasks
         for task_id in &task_ids_to_cancel {
             active_tasks.remove(task_id);
         }
-        
+
         task_ids_to_cancel.len()
     }
 
     /// Process completed tasks in executor pool
     pub async fn process_completed_tasks(&self) -> Vec<TaskResult> {
         let mut completed_results = Vec::new();
-        
+
         {
             let mut executor_pool = self.executor_pool.lock().await;
-            
+
             // Poll for completed tasks without blocking
             while let Some(result) = executor_pool.try_join_next() {
                 match result {
@@ -1423,33 +1574,33 @@ impl AsyncTaskManager {
                     Err(e) => {
                         warn!("Task join error: {}", e);
                         completed_results.push(TaskResult::Failed(
-                            "unknown".to_string(), 
-                            format!("Join error: {}", e)
+                            "unknown".to_string(),
+                            format!("Join error: {}", e),
                         ));
                     }
                 }
             }
         }
-        
+
         completed_results
     }
 
     /// Start background task processor to handle executor pool
     pub async fn start_background_processor(&self) {
         debug!("Starting async task manager background processor");
-        
+
         let executor_pool_clone = Arc::clone(&self.executor_pool);
         let _active_tasks_clone = Arc::clone(&self.active_tasks);
-        
+
         tokio::spawn(async move {
             loop {
                 // Process completed tasks every 5 seconds
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                
+
                 let mut completed_count = 0;
                 {
                     let mut executor_pool = executor_pool_clone.lock().await;
-                    
+
                     // Process all completed tasks
                     while let Some(result) = executor_pool.try_join_next() {
                         completed_count += 1;
@@ -1463,7 +1614,7 @@ impl AsyncTaskManager {
                         }
                     }
                 }
-                
+
                 if completed_count > 0 {
                     debug!("Processed {} completed tasks", completed_count);
                 }
@@ -1475,7 +1626,7 @@ impl AsyncTaskManager {
     pub async fn get_executor_pool_metrics(&self) -> ExecutorPoolMetrics {
         let executor_pool = self.executor_pool.lock().await;
         let active_tasks = self.active_tasks.read().await;
-        
+
         ExecutorPoolMetrics {
             active_task_count: active_tasks.len(),
             executor_pool_size: executor_pool.len(),
@@ -1486,13 +1637,13 @@ impl AsyncTaskManager {
     /// Cancel all running tasks and shutdown executor pool
     pub async fn shutdown(&self) {
         info!("Shutting down async task manager");
-        
+
         let mut executor_pool = self.executor_pool.lock().await;
         executor_pool.shutdown().await;
-        
+
         let mut active_tasks = self.active_tasks.write().await;
         active_tasks.clear();
-        
+
         debug!("Async task manager shutdown completed");
     }
 }
@@ -1552,13 +1703,15 @@ impl PerformanceOptimizer {
 
     /// Calculate overall cache hit rate
     fn calculate_cache_hit_rate(stats: &CacheStatistics) -> f64 {
-        let total_requests = stats.fingerprint_hits + stats.fingerprint_misses 
-                          + stats.zone_match_hits + stats.zone_match_misses;
-        
+        let total_requests = stats.fingerprint_hits
+            + stats.fingerprint_misses
+            + stats.zone_match_hits
+            + stats.zone_match_misses;
+
         if total_requests == 0 {
             return 0.0;
         }
-        
+
         let total_hits = stats.fingerprint_hits + stats.zone_match_hits;
         (total_hits as f64 / total_requests as f64) * 100.0
     }
@@ -1583,7 +1736,7 @@ mod tests {
     fn test_network_state_cache_validity() {
         let mut cache = NetworkStateCache::new(ChronoDuration::seconds(10));
         assert!(cache.is_valid());
-        
+
         // Simulate cache expiry
         cache.cache_time = Utc::now() - ChronoDuration::seconds(15);
         assert!(!cache.is_valid());
@@ -1609,7 +1762,7 @@ mod tests {
     async fn test_cache_manager_creation() {
         let config = CacheConfig::default();
         let cache_manager = CacheManager::new(config);
-        
+
         let stats = cache_manager.get_cache_stats().await;
         assert_eq!(stats.fingerprint_hits, 0);
         assert_eq!(stats.fingerprint_misses, 0);
@@ -1626,13 +1779,13 @@ mod tests {
     async fn test_async_task_manager() {
         let task_manager = AsyncTaskManager::new(3);
         assert_eq!(task_manager.get_active_task_count().await, 0);
-        
-        let result = task_manager.submit_task(
-            "test_task".to_string(),
-            "test".to_string(),
-            async { Ok("Test completed".to_string()) }
-        ).await;
-        
+
+        let result = task_manager
+            .submit_task("test_task".to_string(), "test".to_string(), async {
+                Ok("Test completed".to_string())
+            })
+            .await;
+
         assert!(result.is_ok());
     }
 
@@ -1640,7 +1793,7 @@ mod tests {
     async fn test_performance_optimizer() {
         let optimizer = PerformanceOptimizer::new().await;
         let metrics = optimizer.get_performance_metrics().await;
-        
+
         assert_eq!(metrics.connection_pool_utilization, 0.0);
         assert_eq!(metrics.active_background_tasks, 0);
         assert_eq!(metrics.cache_hit_rate, 0.0);

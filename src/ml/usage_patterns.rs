@@ -229,10 +229,10 @@ pub struct ActionStats {
     pub total_count: u32,
     pub recent_count: u32, // Last 7 days within RECENT_WINDOW_DAYS
     pub hourly_distribution: [u32; time_constants::HOURS_PER_DAY], // 24-hour usage pattern
-    pub daily_distribution: [u32; time_constants::DAYS_PER_WEEK],  // 7-day weekly pattern
-    pub last_used: Option<i64>,         // Unix timestamp for recency calculation
+    pub daily_distribution: [u32; time_constants::DAYS_PER_WEEK], // 7-day weekly pattern
+    pub last_used: Option<i64>, // Unix timestamp for recency calculation
     pub average_time_between_uses: f32, // In hours for frequency analysis
-    pub contexts: Vec<NetworkContext>,  // Historical contexts for similarity matching
+    pub contexts: Vec<NetworkContext>, // Historical contexts for similarity matching
 }
 
 impl Default for ActionStats {
@@ -331,10 +331,7 @@ impl UsagePatternLearner {
         let now_timestamp = now.timestamp();
 
         // Update action statistics
-        let stats = self
-            .action_stats
-            .entry(action.clone())
-            .or_default();
+        let stats = self.action_stats.entry(action.clone()).or_default();
         stats.total_count += 1;
 
         // Update recent count within the rolling window
@@ -347,7 +344,8 @@ impl UsagePatternLearner {
             }
 
             // Update average time between uses using incremental calculation
-            let hours_since = ((now_timestamp - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+            let hours_since =
+                ((now_timestamp - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
             stats.average_time_between_uses =
                 (stats.average_time_between_uses * (stats.total_count - 1) as f32 + hours_since)
                     / stats.total_count as f32;
@@ -490,13 +488,15 @@ impl UsagePatternLearner {
         score += time_score * wifi_scoring::TEMPORAL_WEIGHT;
 
         // Frequency-based preference with normalization
-        let frequency_score = (pattern.total_connections as f32 / defaults::FREQUENCY_NORMALIZATION).min(defaults::MAX_SCORE);
+        let frequency_score = (pattern.total_connections as f32
+            / defaults::FREQUENCY_NORMALIZATION)
+            .min(defaults::MAX_SCORE);
         score += frequency_score * wifi_scoring::FREQUENCY_WEIGHT;
 
         // Recency bonus with exponential decay over weeks
         let recency_score = if let Some(last_connected_ts) = pattern.last_connected {
-            let hours_since =
-                ((chrono::Utc::now().timestamp() - last_connected_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+            let hours_since = ((chrono::Utc::now().timestamp() - last_connected_ts) as f32)
+                / time_constants::SECONDS_PER_HOUR;
             (-hours_since / time_constants::HOURS_PER_WEEK).exp() // Exponential decay over weeks
         } else {
             0.0
@@ -696,15 +696,16 @@ impl UsagePatternLearner {
             if let Some(stats) = self.action_stats.get(&action) {
                 // Recency score with exponential decay favoring recent usage
                 let recency_score = if let Some(last_used_ts) = stats.last_used {
-                    let hours_since =
-                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+                    let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32)
+                        / time_constants::SECONDS_PER_HOUR;
                     (-hours_since / time_constants::HOURS_PER_WEEK).exp() // Exponential decay over weeks
                 } else {
                     0.0
                 };
 
                 // Frequency score with logarithmic scaling to prevent dominance
-                let frequency_score = (1.0 + stats.total_count as f32).ln() / defaults::RECENT_NORMALIZATION;
+                let frequency_score =
+                    (1.0 + stats.total_count as f32).ln() / defaults::RECENT_NORMALIZATION;
 
                 // Context score
                 let context_score = self.calculate_context_similarity(&action, context);
@@ -728,8 +729,8 @@ impl UsagePatternLearner {
 
                 // Recent usage boost for actions used within recency window
                 let recent_boost = if let Some(last_used_ts) = stats.last_used {
-                    let hours_since =
-                        ((chrono::Utc::now().timestamp() - last_used_ts) as f32) / time_constants::SECONDS_PER_HOUR;
+                    let hours_since = ((chrono::Utc::now().timestamp() - last_used_ts) as f32)
+                        / time_constants::SECONDS_PER_HOUR;
                     if hours_since <= time_constants::RECENCY_BONUS_HOURS {
                         0.2
                     } else {
@@ -1523,14 +1524,14 @@ mod tests {
 
         // Record the action once
         learner.record_action(test_action.clone(), context.clone());
-        
+
         // Verify stats were created and updated
         let stats = learner.action_stats.get(&test_action).unwrap();
         assert_eq!(stats.total_count, 1);
         assert_eq!(stats.recent_count, 1);
         assert!(stats.last_used.is_some());
-        
-        // Record the action again 
+
+        // Record the action again
         learner.record_action(test_action.clone(), context.clone());
         let stats = learner.action_stats.get(&test_action).unwrap();
         assert_eq!(stats.total_count, 2);

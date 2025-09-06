@@ -15,21 +15,21 @@ pub mod zones;
 
 // Advanced components
 #[cfg(feature = "geofencing")]
-pub mod retry;
-#[cfg(feature = "geofencing")]
 pub mod adaptive;
 #[cfg(feature = "geofencing")]
-pub mod lifecycle;
-#[cfg(feature = "geofencing")]
-pub mod security;
-#[cfg(feature = "geofencing")]
-pub mod performance;
-#[cfg(feature = "geofencing")]
-pub mod observability;
+pub mod advanced_zones;
 #[cfg(feature = "geofencing")]
 pub mod config;
 #[cfg(feature = "geofencing")]
-pub mod advanced_zones;
+pub mod lifecycle;
+#[cfg(feature = "geofencing")]
+pub mod observability;
+#[cfg(feature = "geofencing")]
+pub mod performance;
+#[cfg(feature = "geofencing")]
+pub mod retry;
+#[cfg(feature = "geofencing")]
+pub mod security;
 
 #[cfg(feature = "geofencing")]
 pub use fingerprinting::*;
@@ -38,21 +38,21 @@ pub use zones::*;
 
 // Re-export key types from advanced components
 #[cfg(feature = "geofencing")]
-pub use retry::{RetryManager, RetryConfig, RetryableAction};
+pub use adaptive::{AdaptiveScanner, MovementState, PowerState, ScanFrequency};
 #[cfg(feature = "geofencing")]
-pub use adaptive::{AdaptiveScanner, ScanFrequency, MovementState, PowerState};
-#[cfg(feature = "geofencing")]
-pub use lifecycle::{LifecycleManager, SystemEvent, DaemonState};
-#[cfg(feature = "geofencing")]
-pub use security::{SecureCommandExecutor, SecurityPolicy};
-#[cfg(feature = "geofencing")]
-pub use performance::{PerformanceOptimizer, CacheManager, ConnectionPool, BatchProcessor};
-#[cfg(feature = "geofencing")]
-pub use observability::{ObservabilityManager, HealthStatus, DaemonMetrics};
+pub use advanced_zones::{AdvancedZoneManager, ZoneHierarchy, ZoneSuggestion};
 #[cfg(feature = "geofencing")]
 pub use config::{ConfigManager, EnhancedConfig, ValidationResult};
 #[cfg(feature = "geofencing")]
-pub use advanced_zones::{AdvancedZoneManager, ZoneSuggestion, ZoneHierarchy};
+pub use lifecycle::{DaemonState, LifecycleManager, SystemEvent};
+#[cfg(feature = "geofencing")]
+pub use observability::{DaemonMetrics, HealthStatus, ObservabilityManager};
+#[cfg(feature = "geofencing")]
+pub use performance::{BatchProcessor, CacheManager, ConnectionPool, PerformanceOptimizer};
+#[cfg(feature = "geofencing")]
+pub use retry::{RetryConfig, RetryManager, RetryableAction};
+#[cfg(feature = "geofencing")]
+pub use security::{SecureCommandExecutor, SecurityPolicy};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -160,8 +160,7 @@ impl Default for ZoneActions {
 }
 
 /// Geographic zone with location fingerprint and associated actions
-#[derive(Debug, Clone, Serialize)]
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "GeofenceZoneHelper")]
 pub struct GeofenceZone {
     /// Unique zone identifier
@@ -213,7 +212,7 @@ impl From<GeofenceZoneHelper> for GeofenceZone {
             // Generate ID from name: lowercase, replace spaces with underscores
             helper.name.to_lowercase().replace(' ', "_")
         });
-        
+
         Self {
             id,
             name: helper.name,
@@ -381,19 +380,19 @@ tailscale_exit_node = "office-node"
 "#;
 
         let config: GeofencingConfig = toml::from_str(toml_config).expect("Failed to parse TOML");
-        
+
         assert_eq!(config.zones.len(), 2);
-        
+
         // First zone: "home" should generate id "home"
         let home_zone = config.zones.iter().find(|z| z.name == "home").unwrap();
         assert_eq!(home_zone.id, "home");
         assert_eq!(home_zone.actions.wifi, Some("HomeWiFi".to_string()));
-        
-        // Second zone: "My Office" should generate id "my_office"  
+
+        // Second zone: "My Office" should generate id "my_office"
         let office_zone = config.zones.iter().find(|z| z.name == "My Office").unwrap();
         assert_eq!(office_zone.id, "my_office");
         assert_eq!(office_zone.actions.wifi, Some("OfficeWiFi".to_string()));
-        
+
         // Both zones should have default values
         assert_eq!(home_zone.confidence_threshold, 0.8);
         assert_eq!(office_zone.confidence_threshold, 0.8);

@@ -29,7 +29,7 @@ pub async fn create_wifi_fingerprint(privacy_mode: PrivacyMode) -> Result<Locati
             fingerprint.bluetooth_devices = scan_bluetooth_beacons(privacy_mode).await?;
         }
         PrivacyMode::Low => {
-            // Low privacy: All methods including IP geolocation  
+            // Low privacy: All methods including IP geolocation
             fingerprint.bluetooth_devices = scan_bluetooth_beacons(privacy_mode).await?;
             fingerprint.ip_location = get_ip_geolocation().await.ok();
         }
@@ -192,7 +192,7 @@ async fn scan_bluetooth_beacons(privacy_mode: PrivacyMode) -> Result<BTreeSet<St
                     let rest = &line[mac_start + 1..];
                     if let Some(mac_end) = rest.find(' ') {
                         let mac_address = &rest[..mac_end];
-                        
+
                         // Apply privacy settings
                         let beacon_id = match privacy_mode {
                             PrivacyMode::Low => {
@@ -208,7 +208,7 @@ async fn scan_bluetooth_beacons(privacy_mode: PrivacyMode) -> Result<BTreeSet<St
                                 hash_string(mac_address)
                             }
                         };
-                        
+
                         beacons.insert(beacon_id);
                     }
                 }
@@ -224,7 +224,6 @@ async fn scan_bluetooth_beacons(privacy_mode: PrivacyMode) -> Result<BTreeSet<St
 
 /// Get coarse location from IP geolocation (Low privacy mode only)
 async fn get_ip_geolocation() -> Result<CoarseLocation> {
-    
     // Use a free IP geolocation service
     let client = reqwest::Client::new();
     let response = client
@@ -232,13 +231,17 @@ async fn get_ip_geolocation() -> Result<CoarseLocation> {
         .timeout(tokio::time::Duration::from_secs(5))
         .send()
         .await
-        .map_err(|e| super::GeofenceError::LocationDetection(format!("IP geolocation failed: {}", e)))?;
+        .map_err(|e| {
+            super::GeofenceError::LocationDetection(format!("IP geolocation failed: {}", e))
+        })?;
 
     if response.status().is_success() {
-        let json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| super::GeofenceError::LocationDetection(format!("Failed to parse IP geolocation response: {}", e)))?;
+        let json: serde_json::Value = response.json().await.map_err(|e| {
+            super::GeofenceError::LocationDetection(format!(
+                "Failed to parse IP geolocation response: {}",
+                e
+            ))
+        })?;
 
         Ok(CoarseLocation {
             country: json["country"].as_str().unwrap_or("Unknown").to_string(),
@@ -256,8 +259,16 @@ async fn get_ip_geolocation() -> Result<CoarseLocation> {
 /// Calculate confidence score based on all available signals
 fn calculate_confidence(fingerprint: &LocationFingerprint) -> f64 {
     let wifi_confidence = calculate_wifi_confidence(&fingerprint.wifi_networks);
-    let bluetooth_bonus = if fingerprint.bluetooth_devices.is_empty() { 0.0 } else { 0.1 };
-    let ip_bonus = if fingerprint.ip_location.is_some() { 0.05 } else { 0.0 };
+    let bluetooth_bonus = if fingerprint.bluetooth_devices.is_empty() {
+        0.0
+    } else {
+        0.1
+    };
+    let ip_bonus = if fingerprint.ip_location.is_some() {
+        0.05
+    } else {
+        0.0
+    };
 
     // Combine confidence sources (max 1.0)
     (wifi_confidence + bluetooth_bonus + ip_bonus).min(1.0)
@@ -284,21 +295,26 @@ pub fn calculate_fingerprint_similarity(
 
     // WiFi similarity (primary signal, weight: 0.7)
     if !fingerprint1.wifi_networks.is_empty() || !fingerprint2.wifi_networks.is_empty() {
-        let wifi_similarity = calculate_wifi_similarity(&fingerprint1.wifi_networks, &fingerprint2.wifi_networks);
+        let wifi_similarity =
+            calculate_wifi_similarity(&fingerprint1.wifi_networks, &fingerprint2.wifi_networks);
         total_similarity += wifi_similarity * 0.7;
         total_weight += 0.7;
     }
 
-    // Bluetooth similarity (secondary signal, weight: 0.2)  
+    // Bluetooth similarity (secondary signal, weight: 0.2)
     if !fingerprint1.bluetooth_devices.is_empty() || !fingerprint2.bluetooth_devices.is_empty() {
-        let bt_similarity = calculate_bluetooth_similarity(&fingerprint1.bluetooth_devices, &fingerprint2.bluetooth_devices);
+        let bt_similarity = calculate_bluetooth_similarity(
+            &fingerprint1.bluetooth_devices,
+            &fingerprint2.bluetooth_devices,
+        );
         total_similarity += bt_similarity * 0.2;
         total_weight += 0.2;
     }
 
     // IP location similarity (coarse signal, weight: 0.1)
     if fingerprint1.ip_location.is_some() || fingerprint2.ip_location.is_some() {
-        let ip_similarity = calculate_ip_similarity(&fingerprint1.ip_location, &fingerprint2.ip_location);
+        let ip_similarity =
+            calculate_ip_similarity(&fingerprint1.ip_location, &fingerprint2.ip_location);
         total_similarity += ip_similarity * 0.1;
         total_weight += 0.1;
     }
@@ -311,7 +327,10 @@ pub fn calculate_fingerprint_similarity(
 }
 
 /// Calculate Jaccard similarity for WiFi networks
-fn calculate_wifi_similarity(networks1: &BTreeSet<NetworkSignature>, networks2: &BTreeSet<NetworkSignature>) -> f64 {
+fn calculate_wifi_similarity(
+    networks1: &BTreeSet<NetworkSignature>,
+    networks2: &BTreeSet<NetworkSignature>,
+) -> f64 {
     let intersection_size = networks1.intersection(networks2).count() as f64;
     let union_size = networks1.union(networks2).count() as f64;
 
@@ -335,7 +354,10 @@ fn calculate_bluetooth_similarity(beacons1: &BTreeSet<String>, beacons2: &BTreeS
 }
 
 /// Calculate similarity for IP geolocation (coarse matching)
-fn calculate_ip_similarity(location1: &Option<CoarseLocation>, location2: &Option<CoarseLocation>) -> f64 {
+fn calculate_ip_similarity(
+    location1: &Option<CoarseLocation>,
+    location2: &Option<CoarseLocation>,
+) -> f64 {
     match (location1, location2) {
         (Some(loc1), Some(loc2)) => {
             let mut matches = 0.0;
@@ -346,13 +368,13 @@ fn calculate_ip_similarity(location1: &Option<CoarseLocation>, location2: &Optio
             if loc1.city == loc2.city {
                 matches += 1.0;
             }
-            
-            // Region match 
+
+            // Region match
             total += 1.0;
             if loc1.region == loc2.region {
                 matches += 0.7;
             }
-            
+
             // Country match (least specific)
             total += 1.0;
             if loc1.country == loc2.country {
@@ -362,7 +384,7 @@ fn calculate_ip_similarity(location1: &Option<CoarseLocation>, location2: &Optio
             matches / total
         }
         (None, None) => 0.0, // Both missing
-        _ => 0.0, // One missing
+        _ => 0.0,            // One missing
     }
 }
 

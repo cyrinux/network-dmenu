@@ -8,7 +8,7 @@
 //! - Historical success rates and performance
 //!
 //! ## Scoring Algorithm
-//! 
+//!
 //! The prioritizer uses a weighted multi-criteria scoring system:
 //! - **Network Condition (25%)**: Adapts to current network type and signal strength
 //! - **Temporal Patterns (20%)**: Learns time-of-day and day-of-week preferences
@@ -18,12 +18,12 @@
 //! - **Emergency Boost (up to 50%)**: Critical actions during network issues
 //!
 //! ## Signal Strength Adaptation
-//! 
+//!
 //! - **Poor Signal (<30%)**: Prioritizes diagnostics and network switching
 //! - **Good Signal (>80%)**: Boosts bandwidth-intensive operations
 //!
 //! ## Time-Based Intelligence
-//! 
+//!
 //! - **Morning (6-8h)**: VPN and work connections prioritized
 //! - **Work Hours (9-16h)**: Productivity tools and stable connections
 //! - **Evening (17-21h)**: Entertainment and personal device connections
@@ -124,7 +124,7 @@ pub mod time_patterns {
     pub const NIGHT_END: u8 = 23;
     pub const NIGHT_EARLY_START: u8 = 0;
     pub const NIGHT_EARLY_END: u8 = 5;
-    
+
     /// Morning VPN/work connection bonus
     pub const MORNING_VPN_BONUS: f32 = 0.2;
     /// Morning entertainment penalty
@@ -151,7 +151,7 @@ pub mod weekly_patterns {
     /// Weekend range (Saturday=5, Sunday=6)
     pub const WEEKEND_START: u8 = 5;
     pub const WEEKEND_END: u8 = 6;
-    
+
     /// Weekday work connection bonus
     pub const WEEKDAY_WORK_BONUS: f32 = 0.1;
     /// Weekend personal connection bonus
@@ -267,7 +267,11 @@ impl ActionMetrics {
             / total_count as f32;
 
         // Update context-specific success rate using Bayesian updating
-        let context_total = self.context_success_rate.get(context).unwrap_or(&priority_scores::NEUTRAL) * 2.0;
+        let context_total = self
+            .context_success_rate
+            .get(context)
+            .unwrap_or(&priority_scores::NEUTRAL)
+            * 2.0;
         let new_rate = (context_total + 1.0) / (context_total + 2.0);
         self.context_success_rate
             .insert(context.to_string(), new_rate);
@@ -277,7 +281,11 @@ impl ActionMetrics {
         self.failure_count += 1;
 
         // Update context-specific success rate using Bayesian updating
-        let context_total = self.context_success_rate.get(context).unwrap_or(&priority_scores::NEUTRAL) * 2.0;
+        let context_total = self
+            .context_success_rate
+            .get(context)
+            .unwrap_or(&priority_scores::NEUTRAL)
+            * 2.0;
         let new_rate = context_total / (context_total + 2.0);
         self.context_success_rate
             .insert(context.to_string(), new_rate);
@@ -541,7 +549,8 @@ impl ActionPrioritizer {
                     score += time_patterns::EVENING_EXIT_NODE; // Geographic shifting for content access
                 }
             }
-            time_patterns::NIGHT_START..=time_patterns::NIGHT_END | time_patterns::NIGHT_EARLY_START..=time_patterns::NIGHT_EARLY_END => {
+            time_patterns::NIGHT_START..=time_patterns::NIGHT_END
+            | time_patterns::NIGHT_EARLY_START..=time_patterns::NIGHT_EARLY_END => {
                 // Night - minimal activity and power saving
                 if action.contains("disconnect") || action.contains("airplane") {
                     score += time_patterns::NIGHT_POWER_SAVING;
@@ -578,7 +587,11 @@ impl ActionPrioritizer {
             let general_success_rate = metrics.success_rate();
 
             // Generate context-specific key using time blocks for temporal grouping
-            let context_key = format!("{}_{}", context.network_type as u8, context.time_of_day / context_scoring::TIME_BLOCK_HOURS);
+            let context_key = format!(
+                "{}_{}",
+                context.network_type as u8,
+                context.time_of_day / context_scoring::TIME_BLOCK_HOURS
+            );
             let context_success_rate = metrics
                 .context_success_rate
                 .get(&context_key)
@@ -586,7 +599,8 @@ impl ActionPrioritizer {
                 .unwrap_or(general_success_rate);
 
             // Weighted combination favoring context-specific historical data
-            general_success_rate * context_scoring::GENERAL_SUCCESS_WEIGHT + context_success_rate * context_scoring::CONTEXT_SPECIFIC_WEIGHT
+            general_success_rate * context_scoring::GENERAL_SUCCESS_WEIGHT
+                + context_success_rate * context_scoring::CONTEXT_SPECIFIC_WEIGHT
         } else {
             priority_scores::NEUTRAL // Neutral score for unknown actions
         }
@@ -596,14 +610,17 @@ impl ActionPrioritizer {
     fn calculate_efficiency_score(&self, action_key: &str) -> f32 {
         if let Some(metrics) = self.action_metrics.get(action_key) {
             // Faster actions get higher scores using inverse relationship
-            let time_score = (efficiency_scoring::BASE_TIME_DIVISOR / (metrics.average_execution_time + 1.0)).min(time_constants::MAX_SCORE);
+            let time_score = (efficiency_scoring::BASE_TIME_DIVISOR
+                / (metrics.average_execution_time + 1.0))
+                .min(time_constants::MAX_SCORE);
 
             // Factor in reliability bonus for actions with consistent performance
-            let reliability_bonus = if metrics.success_count > efficiency_scoring::RELIABILITY_THRESHOLD { 
-                efficiency_scoring::RELIABILITY_BONUS 
-            } else { 
-                0.0 
-            };
+            let reliability_bonus =
+                if metrics.success_count > efficiency_scoring::RELIABILITY_THRESHOLD {
+                    efficiency_scoring::RELIABILITY_BONUS
+                } else {
+                    0.0
+                };
 
             time_score + reliability_bonus
         } else {
@@ -617,14 +634,17 @@ impl ActionPrioritizer {
         let action = action_str.to_lowercase();
 
         // Detect emergency situations requiring immediate action
-        let is_emergency = context.signal_strength.is_some_and(|s| s < signal_thresholds::CRITICAL_SIGNAL)
+        let is_emergency = context
+            .signal_strength
+            .is_some_and(|s| s < signal_thresholds::CRITICAL_SIGNAL)
             || context.network_type == NetworkType::Unknown;
 
         if is_emergency {
             if action.contains("diagnostic") || action.contains("connectivity") {
                 return self.config.emergency_boost; // Full emergency boost for diagnostics
             } else if action.contains("disconnect") || action.contains("airplane") {
-                return self.config.emergency_boost * network_bonuses::EMERGENCY_DIAGNOSTIC; // Partial boost for emergency disconnections
+                return self.config.emergency_boost * network_bonuses::EMERGENCY_DIAGNOSTIC;
+                // Partial boost for emergency disconnections
             }
         }
 
@@ -684,7 +704,11 @@ impl ActionPrioritizer {
         context: &NetworkContext,
     ) {
         let action_key = self.normalize_action_key(action_str);
-        let context_key = format!("{}_{}", context.network_type as u8, context.time_of_day / context_scoring::TIME_BLOCK_HOURS);
+        let context_key = format!(
+            "{}_{}",
+            context.network_type as u8,
+            context.time_of_day / context_scoring::TIME_BLOCK_HOURS
+        );
 
         let metrics = self.action_metrics.entry(action_key).or_default();
 

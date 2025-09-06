@@ -4,8 +4,8 @@
 //! with their associated network configurations.
 
 use super::{
+    advanced_zones::{SuggestionEvidence, SuggestionPriority, SuggestionType},
     fingerprinting::{calculate_weighted_similarity, create_wifi_fingerprint},
-    advanced_zones::{SuggestionEvidence, SuggestionType, SuggestionPriority},
     GeofenceError, GeofenceZone, GeofencingConfig, LocationChange, LocationFingerprint,
     PrivacyMode, Result, ZoneActions,
 };
@@ -195,28 +195,40 @@ impl ZoneManager {
 
         if let Some((existing_id, existing_zone)) = existing_zone {
             debug!("Zone '{}' already exists with ID '{}'. Adding fingerprint instead of creating duplicate.", name, existing_id);
-            
+
             // Add fingerprint to existing zone
             match self.add_fingerprint_to_zone(&name).await {
                 Ok(true) => {
-                    debug!("Successfully added new fingerprint to existing zone '{}'", name);
+                    debug!(
+                        "Successfully added new fingerprint to existing zone '{}'",
+                        name
+                    );
                     // Return updated zone
                     return Ok(self.zones.get(&existing_id).unwrap().clone());
                 }
                 Ok(false) => {
-                    debug!("Fingerprint too similar to existing ones, returning existing zone '{}'", name);
+                    debug!(
+                        "Fingerprint too similar to existing ones, returning existing zone '{}'",
+                        name
+                    );
                     // Return existing zone even if fingerprint wasn't added
                     return Ok(existing_zone);
                 }
                 Err(e) => {
-                    warn!("Failed to add fingerprint to existing zone '{}': {}", name, e);
+                    warn!(
+                        "Failed to add fingerprint to existing zone '{}': {}",
+                        name, e
+                    );
                     // Return existing zone as fallback
                     return Ok(existing_zone);
                 }
             }
         }
 
-        debug!("Creating new zone '{}' as no existing zone found with this name", name);
+        debug!(
+            "Creating new zone '{}' as no existing zone found with this name",
+            name
+        );
 
         // Create location fingerprint
         let fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
@@ -607,11 +619,17 @@ impl ZoneSuggestionEngine {
                     notifications: true,
                     ..Default::default()
                 },
-                reasoning: format!("Visited {} times, suggesting zone creation", pattern.visit_count),
+                reasoning: format!(
+                    "Visited {} times, suggesting zone creation",
+                    pattern.visit_count
+                ),
                 evidence: SuggestionEvidence {
                     visit_count: pattern.visit_count,
                     total_time: Duration::from_secs(pattern.total_duration_minutes as u64 * 60),
-                    average_visit_duration: Duration::from_secs(pattern.total_duration_minutes as u64 * 60 / pattern.visit_count.max(1) as u64),
+                    average_visit_duration: Duration::from_secs(
+                        pattern.total_duration_minutes as u64 * 60
+                            / pattern.visit_count.max(1) as u64,
+                    ),
                     common_visit_times: vec![],
                     common_actions: vec![],
                     similar_zones: vec![],
