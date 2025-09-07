@@ -385,20 +385,37 @@ impl ZoneManager {
         let mut best_match = None;
         let mut best_similarity = 0.0;
 
+        debug!("🎯 Finding best matching zone from {} configured zones", self.zones.len());
+        debug!("🎯 Current location has {} WiFi networks", fingerprint.wifi_networks.len());
+
         for zone in self.zones.values() {
             // Check similarity against all fingerprints in the zone, use the best match
             let max_similarity = zone
                 .fingerprints
                 .iter()
-                .map(|zone_fingerprint| {
-                    calculate_weighted_similarity(zone_fingerprint, fingerprint)
+                .enumerate()
+                .map(|(i, zone_fingerprint)| {
+                    let similarity = calculate_weighted_similarity(zone_fingerprint, fingerprint);
+                    debug!("🎯 Zone '{}' fingerprint {} similarity: {:.3} (threshold: {:.3})", 
+                           zone.name, i + 1, similarity, zone.confidence_threshold);
+                    similarity
                 })
                 .fold(0.0, f64::max);
 
+            debug!("🎯 Zone '{}' max similarity: {:.3} (threshold: {:.3})", 
+                   zone.name, max_similarity, zone.confidence_threshold);
+
             if max_similarity > best_similarity && max_similarity >= zone.confidence_threshold {
+                debug!("🎯 Zone '{}' is new best match with similarity {:.3}", zone.name, max_similarity);
                 best_similarity = max_similarity;
                 best_match = Some(zone.clone());
             }
+        }
+
+        if let Some(ref zone) = best_match {
+            debug!("✅ Best matching zone: '{}' with similarity {:.3}", zone.name, best_similarity);
+        } else {
+            debug!("❌ No zone matches above threshold");
         }
 
         Ok(best_match)
