@@ -27,7 +27,8 @@
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-high\" --config /tmp/user_config.toml)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-bssid\" --config /tmp/test_config.toml)",
       "Bash(git tag:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(pkill:*)"
     ],
     "deny": [],
     "ask": []

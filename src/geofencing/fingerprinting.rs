@@ -40,6 +40,10 @@ pub async fn create_wifi_fingerprint(privacy_mode: PrivacyMode) -> Result<Locati
     fingerprint.confidence_score = calculate_confidence(&fingerprint);
     fingerprint.timestamp = Utc::now();
 
+    debug!("🎯 Location fingerprint created: {} WiFi networks, confidence: {:.2}", 
+           fingerprint.wifi_networks.len(), 
+           fingerprint.confidence_score);
+
     Ok(fingerprint)
 }
 
@@ -88,6 +92,7 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
     ) {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            debug!("📡 nmcli WiFi scan found {} lines", stdout.lines().count());
             for line in stdout.lines() {
                 // Parse nmcli output format: SSID:BSSID:SIGNAL:FREQ
                 // Note: BSSID contains escaped colons (\:) so we need careful parsing
@@ -114,8 +119,12 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                                 // Parse signal strength (default to -50 if parsing fails)
                                 let signal_strength = signal_str.parse::<i8>().unwrap_or(-50);
 
-                                // Parse frequency (default to 2412 MHz if parsing fails)
-                                let frequency = freq_str.parse::<u32>().unwrap_or(2412);
+                                // Parse frequency - remove " MHz" suffix if present
+                                let frequency = freq_str
+                                    .replace(" MHz", "")
+                                    .trim()
+                                    .parse::<u32>()
+                                    .unwrap_or(2412);
 
                                 if let Some(signature) = create_network_signature(
                                     ssid,
@@ -124,6 +133,7 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                                     frequency,
                                     privacy_mode,
                                 ) {
+                                    debug!("📡 Parsed WiFi network: '{}' signal={} freq={}", ssid, signal_strength, frequency);
                                     signatures.insert(signature);
                                 }
                             }
@@ -131,6 +141,7 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                     }
                 }
             }
+            debug!("📡 nmcli parsing complete: {} WiFi networks found", signatures.len());
             return Ok(signatures);
         }
     }
