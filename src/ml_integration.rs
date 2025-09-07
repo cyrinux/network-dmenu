@@ -395,12 +395,7 @@ impl MlManager {
         // Enhance confidence with ML factors
         let mut confidence_multiplier = 1.0;
         
-        // Time-based confidence adjustment (higher during typical usage hours)
-        let time_factor = match context.time_of_day {
-            6..=22 => 1.1,   // Daytime hours - higher confidence
-            _ => 0.9,        // Nighttime hours (23-5) - slightly lower confidence
-        };
-        confidence_multiplier *= time_factor;
+        // Simplified confidence - removed time-based factors for WiFi/Bluetooth focus
         
         // Signal strength factor
         if let Some(signal) = context.signal_strength {
@@ -420,8 +415,10 @@ impl MlManager {
         
         let final_confidence = (base_confidence as f64 * confidence_multiplier as f64).clamp(0.0, 1.0);
         
-        debug!("🎯 Zone confidence calculation for {}: base={:.3}, time_factor={:.3}, network_factor={:.3}, final={:.3}", 
-               zone_id, base_confidence, time_factor, network_factor, final_confidence);
+        debug!("🎯 Zone confidence calculation for {}: base={:.3}, signal_factor={:.3}, network_factor={:.3}, final={:.3}", 
+               zone_id, base_confidence, 
+               context.signal_strength.map(|s| s * 0.3 + 0.7).unwrap_or(1.0), 
+               network_factor, final_confidence);
         
         final_confidence
     }
@@ -464,20 +461,13 @@ impl MlManager {
               confidence * 100.0);
     }
 
-    /// Get confidence threshold for automatic zone switching
+    /// Get confidence threshold for automatic zone switching (simplified)
     pub fn get_confidence_threshold(&self, zone_id: &str) -> f64 {
-        // Dynamic confidence threshold based on zone history
+        // Simplified confidence threshold based only on network reliability
         let base_threshold = 0.75;
         let context = get_current_context();
         
-        // Lower threshold during typical usage times
-        let time_adjustment = match context.time_of_day {
-            7..=9 | 17..=19 => -0.05, // Rush hours - more lenient
-            10..=16 => 0.05,          // Work hours - more strict
-            _ => 0.0,                 // Other times - normal
-        };
-        
-        // Adjust based on network reliability
+        // Adjust based on network reliability (focus on WiFi/Bluetooth quality)
         let network_adjustment = match context.network_type {
             NetworkType::WiFi => -0.05,     // WiFi is reliable, lower threshold
             NetworkType::Mobile => 0.10,    // Mobile is less reliable, higher threshold
@@ -485,11 +475,11 @@ impl MlManager {
             _ => 0.0,
         };
         
-        let sum = base_threshold + time_adjustment + network_adjustment;
+        let sum = base_threshold + network_adjustment;
         let dynamic_threshold = if sum < 0.5 { 0.5 } else if sum > 0.95 { 0.95 } else { sum };
         
-        debug!("🎯 Dynamic confidence threshold for {}: base={:.3}, time_adj={:.3}, network_adj={:.3}, final={:.3}",
-               zone_id, base_threshold, time_adjustment, network_adjustment, dynamic_threshold);
+        debug!("🎯 Dynamic confidence threshold for {}: base={:.3}, network_adj={:.3}, final={:.3}",
+               zone_id, base_threshold, network_adjustment, dynamic_threshold);
         
         dynamic_threshold
     }
@@ -502,12 +492,7 @@ impl MlManager {
         // Base confidence threshold for auto-acceptance
         let base_threshold = 0.85; // Higher than manual threshold
         
-        // Context-based adjustments
-        let time_adjustment = match current_context.time_of_day {
-            7..=9 | 17..=19 => -0.05,  // Rush hours - more lenient for convenience
-            2..=5 => 0.10,             // Late night - more strict
-            _ => 0.0,
-        };
+        // Simplified adjustments (no time-based logic)
         
         let network_adjustment = match current_context.network_type {
             NetworkType::WiFi => -0.05,      // WiFi is reliable
@@ -533,13 +518,13 @@ impl MlManager {
             0.10  // Single visit requires higher confidence
         };
         
-        let sum = base_threshold + time_adjustment + network_adjustment + priority_adjustment + evidence_adjustment;
+        let sum = base_threshold + network_adjustment + priority_adjustment + evidence_adjustment;
         let final_threshold = if sum < 0.75 { 0.75 } else if sum > 0.95 { 0.95 } else { sum };
         
         let should_accept = suggestion.confidence >= final_threshold;
         
-        debug!("🤖 Auto-acceptance evaluation: base={:.3}, time_adj={:.3}, network_adj={:.3}, priority_adj={:.3}, evidence_adj={:.3}, final_threshold={:.3}, confidence={:.3}, accept={}",
-               base_threshold, time_adjustment, network_adjustment, priority_adjustment, evidence_adjustment,
+        debug!("🤖 Auto-acceptance evaluation: base={:.3}, network_adj={:.3}, priority_adj={:.3}, evidence_adj={:.3}, final_threshold={:.3}, confidence={:.3}, accept={}",
+               base_threshold, network_adjustment, priority_adjustment, evidence_adjustment,
                final_threshold, suggestion.confidence, should_accept);
         
         if should_accept {
@@ -988,19 +973,15 @@ pub struct ZoneTransitionStats {
     pub oscillation_damping_active: bool,
 }
 
-/// Get current network context for ML predictions
+/// Get current network context for ML predictions (simplified - WiFi/Bluetooth focus only)
 #[cfg(feature = "ml")]
 pub fn get_current_context() -> NetworkContext {
-    use chrono::{Datelike, Local, Timelike};
-
-    let now = Local::now();
-
     NetworkContext {
-        time_of_day: now.hour() as u8,
-        day_of_week: now.weekday().num_days_from_monday() as u8,
-        location_hash: get_location_hash(),
-        network_type: detect_network_type(),
-        signal_strength: get_signal_strength(),
+        time_of_day: 12, // Fixed value - no time-based logic
+        day_of_week: 3,  // Fixed value - no day-based logic
+        location_hash: get_location_hash(), // Keep for network location
+        network_type: detect_network_type(), // Keep for network type detection
+        signal_strength: get_signal_strength(), // Keep for signal quality
     }
 }
 

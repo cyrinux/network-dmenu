@@ -223,7 +223,6 @@ impl GeofencingDaemon {
         let mut scan_count = 0u64;
 
         loop {
-            interval.tick().await;
             scan_count += 1;
             debug!("Location scan #{} starting", scan_count);
 
@@ -420,6 +419,9 @@ impl GeofencingDaemon {
                     );
                 }
             }
+
+            // Wait for next interval (moved to end so first scan is immediate)
+            interval.tick().await;
         }
 
         info!(
@@ -455,9 +457,6 @@ impl GeofencingDaemon {
             ml_update_counter += 1;
 
             debug!("🧠 Enhanced scan #{} (interval: {:?})", scan_count, current_scan_interval);
-
-            // Sleep for adaptive interval
-            tokio::time::sleep(current_scan_interval).await;
 
             // Check for shutdown
             if *should_shutdown.read().await {
@@ -737,6 +736,9 @@ impl GeofencingDaemon {
                 debug!("📊 ML-enhanced scan interval updated: {:?} (zone_changed={}, confidence={:.1}%)", 
                        current_scan_interval, zone_changed, confidence_score * 100.0);
             }
+
+            // Sleep for adaptive interval (moved to end so first scan is immediate)
+            tokio::time::sleep(current_scan_interval).await;
         }
 
         info!("🧠 Enhanced location monitoring loop stopped after {} scans", scan_count);
