@@ -63,12 +63,12 @@ pub struct NetworkMetrics {
     pub timestamp: i64,
 }
 
-/// Context information for predictions (time/day fields kept for compatibility but fixed to constants)
+/// Context information for predictions (time/day fields unused - network-focused only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkContext {
-    pub time_of_day: u8,    // Fixed constant - no time-based logic
-    pub day_of_week: u8,    // Fixed constant - no day-based logic  
-    pub location_hash: u64, // Hashed location identifier
+    pub time_of_day: u8,    // Unused - kept for compatibility
+    pub day_of_week: u8,    // Unused - kept for compatibility  
+    pub location_hash: u64, // Network location identifier
     pub network_type: NetworkType,
     pub signal_strength: Option<f32>,
 }
@@ -309,8 +309,8 @@ mod tests {
         assert!(data.is_empty());
 
         let context = NetworkContext {
-            time_of_day: 12, // Fixed constant
-            day_of_week: 3,  // Fixed constant
+            time_of_day: 0, // Unused
+            day_of_week: 0, // Unused
             location_hash: 12345,
             network_type: NetworkType::WiFi,
             signal_strength: Some(0.8),

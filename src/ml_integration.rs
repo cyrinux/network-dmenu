@@ -956,15 +956,15 @@ pub struct ZoneTransitionStats {
     pub oscillation_damping_active: bool,
 }
 
-/// Get current network context for ML predictions (simplified - fixed time/day for WiFi/Bluetooth focus)
+/// Get current network context for ML predictions (network-focused only)
 #[cfg(feature = "ml")]
 pub fn get_current_context() -> NetworkContext {
     NetworkContext {
-        time_of_day: 12, // Fixed constant - effectively disables time-based logic
-        day_of_week: 3,  // Fixed constant - effectively disables day-based logic
-        location_hash: get_location_hash(), // Keep for network location
-        network_type: detect_network_type(), // Keep for network type detection
-        signal_strength: get_signal_strength(), // Keep for signal quality
+        time_of_day: 0,  // Unused - simplified 
+        day_of_week: 0,  // Unused - simplified
+        location_hash: get_location_hash(),
+        network_type: detect_network_type(),
+        signal_strength: get_signal_strength(),
     }
 }
 
