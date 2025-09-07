@@ -539,6 +539,46 @@ On a typical system with 50+ network interfaces and 100+ Tailscale nodes:
 - **Audit Logging**: All privileged operations logged
 - **Input Validation**: All user input sanitized
 
+## 🔧 Running as Systemd Service
+
+For automatic geofencing daemon startup, network-dmenu can be run as a systemd user service.
+
+### Quick Install
+
+```bash
+# Install systemd service files
+./init/install-systemd-service.sh
+
+# Manual management
+systemctl --user status network-dmenu.service
+journalctl --user -u network-dmenu.service -f
+```
+
+### Service Files Included
+
+- **`init/systemd/network-dmenu.service`** - Standard version (recommended)
+- **`init/systemd/network-dmenu-privileged.service`** - Enhanced permissions version
+- **`init/install-systemd-service.sh`** - Automated installation script
+
+The privileged version grants additional system capabilities and should only be used if the standard version fails with permission errors.
+
+### Service Management
+
+```bash
+# Start/stop service
+systemctl --user start network-dmenu.service
+systemctl --user stop network-dmenu.service
+
+# Enable/disable autostart
+systemctl --user enable network-dmenu.service  
+systemctl --user disable network-dmenu.service
+
+# View logs
+journalctl --user -u network-dmenu.service -f
+```
+
+See [init/README.md](init/README.md) for detailed systemd configuration and troubleshooting.
+
 ## 🛠️ Troubleshooting
 
 ### Common Issues
