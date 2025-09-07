@@ -138,7 +138,7 @@ impl Default for UnknownZoneConfig {
             confidence_threshold: 0.3, // Very low threshold for maximum protection
             protective_actions: ZoneActions {
                 wifi: None, // Don't auto-connect to WiFi in unknown places
-                vpn: Some("tailscale".to_string()), // Enable VPN protection
+                vpn: None, // Enable VPN protection
                 tailscale_exit_node: Some("auto".to_string()),
                 tailscale_shields: Some(true), // Enable shields for protection
                 bluetooth: vec![], // Disconnect all Bluetooth devices
