@@ -28,7 +28,8 @@
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --create-zone \"test-bssid\" --config /tmp/test_config.toml)",
       "Bash(git tag:*)",
       "Bash(git push:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --daemon --log-level debug)"
     ],
     "deny": [],
     "ask": []

@@ -172,7 +172,7 @@ impl MlManager {
                     visit_count: 1,
                     total_time: std::time::Duration::from_secs(0),
                     average_visit_duration: std::time::Duration::from_secs(0),
-                    common_visit_times: vec![format!("{}:00", context.time_of_day)],
+                    common_visit_times: vec![], // Simplified - no time tracking
                     common_actions: vec!["zone_creation".to_string()],
                     similar_zones: vec![],
                 },
@@ -234,15 +234,7 @@ impl MlManager {
         };
         multiplier *= change_factor;
         
-        // Time-based scanning pattern (user activity patterns)
-        let time_factor = match current_context.time_of_day {
-            7..=9 => 0.7,    // Morning rush - frequent scanning
-            10..=16 => 1.2,  // Work hours - stable scanning
-            17..=19 => 0.8,  // Evening rush - more frequent scanning
-            20..=22 => 1.3,  // Evening stable - less frequent
-            _ => 1.5,        // Night - much less frequent
-        };
-        multiplier *= time_factor;
+        // Simplified scanning - no time-based patterns
         
         // Network type reliability factor
         let network_factor = match current_context.network_type {
@@ -260,12 +252,7 @@ impl MlManager {
             multiplier *= signal_factor;
         }
         
-        // Day of week pattern - weekends might be different
-        let day_factor = match current_context.day_of_week {
-            5..=6 => 1.1, // Weekend - slightly less frequent
-            _ => 1.0,     // Weekdays - normal
-        };
-        multiplier *= day_factor;
+        // Removed day-of-week patterns - simplified focus on network quality
         
         // Apply bounds to prevent extreme values
         multiplier = multiplier.clamp(0.3, 3.0);
@@ -274,10 +261,10 @@ impl MlManager {
             (base_interval.as_millis() as f64 * multiplier as f64) as u64
         );
         
-        debug!("📊 Adaptive scan calculation: change_factor={:.2}, time_factor={:.2}, network_factor={:.2}, signal_factor={:.2}, day_factor={:.2}, final_multiplier={:.2}, interval={:?}",
-               change_factor, time_factor, network_factor, 
+        debug!("📊 Adaptive scan calculation: change_factor={:.2}, network_factor={:.2}, signal_factor={:.2}, final_multiplier={:.2}, interval={:?}",
+               change_factor, network_factor, 
                current_context.signal_strength.map_or(1.0, |s| (s * 0.4 + 0.8).clamp(0.6, 1.4)),
-               day_factor, multiplier, adaptive_interval);
+               multiplier, adaptive_interval);
         
         adaptive_interval
     }
@@ -334,7 +321,7 @@ impl MlManager {
         
         // Use a detailed connection ID that includes context
         let connection_id = format!("scan_{}h_{}_{}_conf{:.0}", 
-                                  context.time_of_day, 
+                                  12, // Fixed time value 
                                   match context.network_type {
                                       NetworkType::WiFi => "wifi",
                                       NetworkType::Ethernet => "eth", 
@@ -727,14 +714,14 @@ impl ZoneTransitionSmoother {
             return ZoneTransitionDecision::Reject("No pending transition timestamp".to_string());
         };
         
-        // Calculate confidence threshold based on time pending
-        let time_factor = (pending_duration as f64 / self.smoothing_window_seconds as f64).min(1.0);
+        // Calculate confidence threshold based on duration pending
+        let duration_factor = (pending_duration as f64 / self.smoothing_window_seconds as f64).min(1.0);
         let base_threshold = 0.75;
-        let time_adjusted_threshold = base_threshold * (1.0 - time_factor * 0.2); // Lower threshold over time
+        let duration_adjusted_threshold = base_threshold * (1.0 - duration_factor * 0.2); // Lower threshold over time
         
         // Network stability factor
         let network_stability = self.calculate_network_stability(current_context);
-        let stability_adjusted_threshold = time_adjusted_threshold * network_stability;
+        let stability_adjusted_threshold = duration_adjusted_threshold * network_stability;
         
         if confidence >= stability_adjusted_threshold {
             // Accept the transition
@@ -830,11 +817,7 @@ impl ZoneTransitionSmoother {
             base_threshold
         };
         
-        // Time-based adjustment
-        let time_adjustment = match current_context.time_of_day {
-            7..=9 | 17..=19 => -0.05, // Rush hours - slightly more lenient
-            _ => 0.0,
-        };
+        // Removed time-based adjustment for simplified network-focused logic
         
         // Network type adjustment  
         let network_adjustment = match current_context.network_type {
@@ -844,7 +827,7 @@ impl ZoneTransitionSmoother {
         };
         
         {
-            let sum = decayed_threshold + time_adjustment + network_adjustment;
+            let sum = decayed_threshold + network_adjustment;
             if sum < 0.8 { 0.8 } else if sum > 0.95 { 0.95 } else { sum }
         }
     }
@@ -973,12 +956,12 @@ pub struct ZoneTransitionStats {
     pub oscillation_damping_active: bool,
 }
 
-/// Get current network context for ML predictions (simplified - WiFi/Bluetooth focus only)
+/// Get current network context for ML predictions (simplified - fixed time/day for WiFi/Bluetooth focus)
 #[cfg(feature = "ml")]
 pub fn get_current_context() -> NetworkContext {
     NetworkContext {
-        time_of_day: 12, // Fixed value - no time-based logic
-        day_of_week: 3,  // Fixed value - no day-based logic
+        time_of_day: 12, // Fixed constant - effectively disables time-based logic
+        day_of_week: 3,  // Fixed constant - effectively disables day-based logic
         location_hash: get_location_hash(), // Keep for network location
         network_type: detect_network_type(), // Keep for network type detection
         signal_strength: get_signal_strength(), // Keep for signal quality
