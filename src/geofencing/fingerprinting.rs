@@ -405,20 +405,21 @@ pub fn calculate_fingerprint_similarity(
 }
 
 /// Calculate Jaccard similarity for WiFi networks
-/// Compares networks by SSID hash and BSSID prefix, ignoring signal strength variations
+/// Compares networks by SSID hash and BSSID prefix only, ignoring signal strength and frequency variations
 fn calculate_wifi_similarity(
     networks1: &BTreeSet<NetworkSignature>,
     networks2: &BTreeSet<NetworkSignature>,
 ) -> f64 {
-    // Create sets of network identifiers (SSID hash + BSSID prefix) ignoring signal strength
+    // Create sets of network identifiers (SSID hash + BSSID prefix) ignoring signal strength and frequency
+    // Frequency can change for dual-band routers (2.4GHz vs 5GHz), so we ignore it for network identity
     let identifiers1: std::collections::HashSet<_> = networks1
         .iter()
-        .map(|net| (&net.ssid_hash, &net.bssid_prefix, net.frequency))
+        .map(|net| (&net.ssid_hash, &net.bssid_prefix))
         .collect();
     
     let identifiers2: std::collections::HashSet<_> = networks2
         .iter()
-        .map(|net| (&net.ssid_hash, &net.bssid_prefix, net.frequency))
+        .map(|net| (&net.ssid_hash, &net.bssid_prefix))
         .collect();
 
     let intersection_size = identifiers1.intersection(&identifiers2).count() as f64;
