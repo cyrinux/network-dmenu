@@ -960,8 +960,6 @@ pub struct ZoneTransitionStats {
 #[cfg(feature = "ml")]
 pub fn get_current_context() -> NetworkContext {
     NetworkContext {
-        time_of_day: 0,  // Unused - simplified 
-        day_of_week: 0,  // Unused - simplified
         location_hash: get_location_hash(),
         network_type: detect_network_type(),
         signal_strength: get_signal_strength(),

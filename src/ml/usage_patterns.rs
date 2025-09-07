@@ -479,13 +479,9 @@ impl UsagePatternLearner {
     ) -> f32 {
         let mut score = 0.0;
 
-        // Time-based preference using learned temporal patterns
-        let hour_weight = pattern.hourly_usage[context.time_of_day as usize] as f32
-            / pattern.total_connections.max(1) as f32;
-        let day_weight = pattern.daily_usage[context.day_of_week as usize] as f32
-            / pattern.total_connections.max(1) as f32;
-        let time_score = (hour_weight + day_weight) / 2.0;
-        score += time_score * wifi_scoring::TEMPORAL_WEIGHT;
+        // Simplified scoring (removed time-based patterns)
+        let connection_frequency = pattern.total_connections as f32 / 100.0; // Normalize usage
+        score += connection_frequency.min(1.0) * wifi_scoring::TEMPORAL_WEIGHT;
 
         // Frequency-based preference with normalization
         let frequency_score = (pattern.total_connections as f32
@@ -512,7 +508,7 @@ impl UsagePatternLearner {
 
         debug!(
             "WiFi score for '{}': {:.3} (time: {:.2}, freq: {:.2}, recency: {:.2}, context: {:.2})",
-            pattern.network_name, score, time_score, frequency_score, recency_score, context_bonus
+            pattern.network_name, score, 0.0, frequency_score, recency_score, context_bonus
         );
 
         score.min(defaults::MAX_SCORE)
@@ -530,9 +526,8 @@ impl UsagePatternLearner {
 
         // Find most similar context from history
         let current_context_vec = vec![
-            context.time_of_day as f32 / 24.0,
-            context.day_of_week as f32 / 7.0,
             context.location_hash as f32 / u64::MAX as f32,
+            context.network_type as u8 as f32 / 10.0, // Add network type as feature
         ];
 
         let max_similarity = pattern
@@ -540,9 +535,8 @@ impl UsagePatternLearner {
             .iter()
             .map(|hist_context| {
                 let hist_vec = vec![
-                    hist_context.time_of_day as f32 / 24.0,
-                    hist_context.day_of_week as f32 / 7.0,
                     hist_context.location_hash as f32 / u64::MAX as f32,
+                    hist_context.network_type as u8 as f32 / 10.0,
                 ];
                 cosine_similarity(&current_context_vec, &hist_vec)
             })
@@ -570,8 +564,8 @@ impl UsagePatternLearner {
         scored_networks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
         debug!(
-            "WiFi network ordering for context ({}h, day {}):",
-            context.time_of_day, context.day_of_week
+            "WiFi network ordering for context (network: {:?}):",
+            context.network_type
         );
         for (i, (network, score)) in scored_networks.iter().take(5).enumerate() {
             debug!("  {}. {} (score: {:.3})", i + 1, network, score);
@@ -618,9 +612,8 @@ impl UsagePatternLearner {
     fn extract_action_features(&self, action: &UserAction, context: &NetworkContext) -> Vec<f32> {
         let mut features = Vec::new();
 
-        // Time-based features
-        features.push(context.time_of_day as f32 / 24.0);
-        features.push(context.day_of_week as f32 / 7.0);
+        // Network-focused features (removed time-based)
+        features.push(context.network_type as u8 as f32 / 10.0);
 
         // Context features
         features.push(if context.network_type == NetworkType::WiFi {
@@ -710,22 +703,8 @@ impl UsagePatternLearner {
                 // Context score
                 let context_score = self.calculate_context_similarity(&action, context);
 
-                // Time-based score with better temporal modeling
-                let time_score = {
-                    let hour_weight = stats.hourly_distribution[context.time_of_day as usize]
-                        as f32
-                        / stats.total_count.max(1) as f32;
-                    let day_weight = stats.daily_distribution[context.day_of_week as usize] as f32
-                        / stats.total_count.max(1) as f32;
-
-                    // Add periodicity bonus for consistent usage patterns
-                    let hour_consistency =
-                        self.calculate_temporal_consistency(&stats.hourly_distribution);
-                    let day_consistency =
-                        self.calculate_temporal_consistency(&stats.daily_distribution);
-
-                    (hour_weight + day_weight) / 2.0 + (hour_consistency + day_consistency) * 0.1
-                };
+                // Simplified usage-based score (removed temporal modeling)
+                let time_score = stats.total_count as f32 / 100.0; // Basic frequency score
 
                 // Recent usage boost for actions used within recency window
                 let recent_boost = if let Some(last_used_ts) = stats.last_used {
@@ -809,41 +788,24 @@ impl UsagePatternLearner {
             }
         }
 
-        // Time-based intelligent bonuses
-        match context.time_of_day {
-            activity_periods::MORNING_START..=activity_periods::MORNING_END => {
-                // Morning - boost work-related connections
-                if action.contains("vpn") || action.contains("tailscale") {
-                    bonus += smart_bonuses::MORNING_VPN_BONUS;
+        // Network-focused bonuses (removed time/day logic)
+        match context.network_type {
+            NetworkType::WiFi => {
+                // WiFi networks - boost connection actions
+                if action.contains("wifi") || action.contains("connect") {
+                    bonus += 0.1;
                 }
             }
-            activity_periods::LUNCH_START..=activity_periods::LUNCH_END => {
-                // Lunch - boost personal connections
-                if action.contains("bluetooth") || action.contains("personal") {
-                    bonus += smart_bonuses::LUNCH_PERSONAL_BONUS;
+            NetworkType::Ethernet => {
+                // Stable connection - boost diagnostic/VPN actions
+                if action.contains("vpn") || action.contains("diagnostic") {
+                    bonus += 0.1;
                 }
             }
-            activity_periods::EVENING_START..=activity_periods::EVENING_END => {
-                // Evening - boost entertainment connections
-                if action.contains("streaming") || action.contains("exit") {
-                    bonus += smart_bonuses::EVENING_ENTERTAINMENT_BONUS;
-                }
-            }
-            _ => {}
-        }
-
-        // Day-based work-life balance bonuses
-        match context.day_of_week {
-            activity_periods::WEEKDAY_START..=activity_periods::WEEKDAY_END => {
-                // Weekdays - boost work connections
-                if action.contains("vpn") || action.contains("work") {
-                    bonus += smart_bonuses::WEEKDAY_WORK_BONUS;
-                }
-            }
-            activity_periods::WEEKEND_START..=activity_periods::WEEKEND_END => {
-                // Weekends - boost personal actions
-                if action.contains("bluetooth") || action.contains("entertainment") {
-                    bonus += smart_bonuses::WEEKEND_PERSONAL_BONUS;
+            NetworkType::Mobile => {
+                // Mobile - boost disconnect actions for data saving
+                if action.contains("disconnect") {
+                    bonus += 0.1;
                 }
             }
             _ => {}
@@ -896,13 +858,8 @@ impl UsagePatternLearner {
 
             // Find most similar historical context
             let context_vec = vec![
-                context.time_of_day as f32 / 24.0,
-                context.day_of_week as f32 / 7.0,
-                if context.network_type == NetworkType::WiFi {
-                    1.0
-                } else {
-                    0.0
-                },
+                context.network_type as u8 as f32 / 10.0,
+                context.location_hash as f32 / u64::MAX as f32,
                 context.signal_strength.unwrap_or(0.0),
             ];
 
@@ -911,13 +868,8 @@ impl UsagePatternLearner {
                 .iter()
                 .map(|hist_context| {
                     let hist_vec = vec![
-                        hist_context.time_of_day as f32 / 24.0,
-                        hist_context.day_of_week as f32 / 7.0,
-                        if hist_context.network_type == NetworkType::WiFi {
-                            1.0
-                        } else {
-                            0.0
-                        },
+                        hist_context.network_type as u8 as f32 / 10.0,
+                        hist_context.location_hash as f32 / u64::MAX as f32,
                         hist_context.signal_strength.unwrap_or(0.0),
                     ];
                     cosine_similarity(&context_vec, &hist_vec)
@@ -1082,12 +1034,11 @@ impl UsagePatternLearner {
             }
         }
 
-        // Add time-based predictions
+        // Add usage frequency predictions (removed time-based)
         for (action, stats) in &self.action_stats {
-            let time_weight = stats.hourly_distribution[context.time_of_day as usize] as f32
-                / stats.total_count.max(1) as f32;
-            if time_weight > 0.1 {
-                *action_scores.entry(action.clone()).or_insert(0.0) += time_weight;
+            let frequency_weight = stats.total_count as f32 / 100.0;
+            if frequency_weight > 0.1 {
+                *action_scores.entry(action.clone()).or_insert(0.0) += frequency_weight;
             }
         }
 

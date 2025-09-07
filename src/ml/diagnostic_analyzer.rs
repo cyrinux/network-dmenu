@@ -10,7 +10,7 @@ use super::{
     cosine_similarity, MlError, ModelPersistence, NetworkContext, NetworkMetrics, NetworkType,
     PredictionResult, TrainingData,
 };
-use chrono::{Datelike, Timelike};
+// Removed unused time imports
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -424,8 +424,6 @@ impl DiagnosticAnalyzer {
         // Update training data
         let feature_vec = self.symptoms_to_vector(&symptoms);
         let context = NetworkContext {
-            time_of_day: chrono::Local::now().hour() as u8,
-            day_of_week: chrono::Local::now().weekday().num_days_from_monday() as u8,
             location_hash: 0,
             network_type: NetworkType::Unknown,
             signal_strength: None,

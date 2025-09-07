@@ -280,19 +280,9 @@ impl ExitNodePredictor {
         }
     }
 
-    fn calculate_peak_hour_performance(&self, node_id: &str, context: &NetworkContext) -> f32 {
-        // Legacy method kept for compatibility
-        let is_peak_hour = context.time_of_day >= 9 && context.time_of_day <= 17;
-
-        if let Some(_history) = self.performance_history.get(node_id) {
-            if is_peak_hour {
-                0.7
-            } else {
-                0.9
-            }
-        } else {
-            0.5
-        }
+    fn calculate_peak_hour_performance(&self, _node_id: &str, _context: &NetworkContext) -> f32 {
+        // Simplified - removed time-based logic, return consistent performance
+        0.8
     }
 
     /// Score a node based on features

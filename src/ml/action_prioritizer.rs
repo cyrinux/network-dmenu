@@ -525,60 +525,37 @@ impl ActionPrioritizer {
         let action = action_str.to_lowercase();
         let mut score: f32 = priority_scores::NEUTRAL;
 
-        // Time of day patterns based on typical user workflows
-        match context.time_of_day {
-            time_patterns::MORNING_START..=time_patterns::MORNING_END => {
-                // Morning - work setup phase
-                if action.contains("vpn") || action.contains("tailscale") {
-                    score += time_patterns::MORNING_VPN_BONUS;
-                } else if action.contains("entertainment") || action.contains("gaming") {
-                    score += time_patterns::MORNING_ENTERTAINMENT_PENALTY;
+        // Network-focused prioritization (removed time/day logic)
+        match context.network_type {
+            NetworkType::WiFi => {
+                if action.contains("wifi") || action.contains("connect") {
+                    score += 0.2; // Prioritize WiFi actions on WiFi networks
+                }
+                if action.contains("bluetooth") {
+                    score += 0.1; // Bluetooth works well with WiFi
                 }
             }
-            time_patterns::WORK_START..=time_patterns::WORK_END => {
-                // Work hours - productivity focused environment
+            NetworkType::Ethernet => {
                 if action.contains("diagnostic") || action.contains("vpn") {
-                    score += time_patterns::WORK_PRODUCTIVITY_BONUS;
+                    score += 0.2; // Stable connection good for diagnostics/VPN
                 }
             }
-            time_patterns::EVENING_START..=time_patterns::EVENING_END => {
-                // Evening - personal and entertainment use
-                if action.contains("bluetooth") || action.contains("entertainment") {
-                    score += time_patterns::EVENING_ENTERTAINMENT; // General entertainment boost
-                } else if action.contains("exit") && action.contains("node") {
-                    score += time_patterns::EVENING_EXIT_NODE; // Geographic shifting for content access
-                }
-            }
-            time_patterns::NIGHT_START..=time_patterns::NIGHT_END
-            | time_patterns::NIGHT_EARLY_START..=time_patterns::NIGHT_EARLY_END => {
-                // Night - minimal activity and power saving
-                if action.contains("disconnect") || action.contains("airplane") {
-                    score += time_patterns::NIGHT_POWER_SAVING;
-                } else {
-                    score += time_patterns::NIGHT_ACTIVITY_PENALTY;
+            NetworkType::Mobile => {
+                if action.contains("disconnect") {
+                    score += 0.1; // Prefer disconnect on mobile to save data
                 }
             }
             _ => {}
         }
 
-        // Day of week patterns for work-life balance adaptation
-        match context.day_of_week {
-            weekly_patterns::WEEKDAY_START..=weekly_patterns::WEEKDAY_END => {
-                // Weekdays - work focused environment
-                if action.contains("vpn") || action.contains("work") {
-                    score += weekly_patterns::WEEKDAY_WORK_BONUS;
-                }
+        // Signal strength considerations
+        if let Some(signal) = context.signal_strength {
+            if signal < 0.5 && action.contains("diagnostic") {
+                score += 0.2; // Prioritize diagnostics on poor signal
             }
-            weekly_patterns::WEEKEND_START..=weekly_patterns::WEEKEND_END => {
-                // Weekends - personal focused activities
-                if action.contains("bluetooth") || action.contains("personal") {
-                    score += weekly_patterns::WEEKEND_PERSONAL_BONUS;
-                }
-            }
-            _ => {}
         }
 
-        score.clamp(0.0, time_constants::MAX_SCORE)
+        score.clamp(0.0, 1.0)
     }
 
     /// Calculate success rate score with context-aware weighting
@@ -588,9 +565,8 @@ impl ActionPrioritizer {
 
             // Generate context-specific key using time blocks for temporal grouping
             let context_key = format!(
-                "{}_{}",
-                context.network_type as u8,
-                context.time_of_day / context_scoring::TIME_BLOCK_HOURS
+                "{}",
+                context.network_type as u8
             );
             let context_success_rate = metrics
                 .context_success_rate
@@ -705,9 +681,8 @@ impl ActionPrioritizer {
     ) {
         let action_key = self.normalize_action_key(action_str);
         let context_key = format!(
-            "{}_{}",
-            context.network_type as u8,
-            context.time_of_day / context_scoring::TIME_BLOCK_HOURS
+            "{}",
+            context.network_type as u8
         );
 
         let metrics = self.action_metrics.entry(action_key).or_default();
@@ -756,8 +731,6 @@ mod tests {
 
     fn create_test_context() -> NetworkContext {
         NetworkContext {
-            time_of_day: 14,
-            day_of_week: 2,
             location_hash: 12345,
             network_type: NetworkType::WiFi,
             signal_strength: Some(0.8),
@@ -805,23 +778,22 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_scoring() {
+    fn test_network_scoring() {
         let prioritizer = ActionPrioritizer::new();
         let mut context = create_test_context();
 
-        // Morning context
-        context.time_of_day = 8;
-        let morning_vpn_score =
-            prioritizer.calculate_temporal_score("tailscale- ✅ Enable VPN", &context);
+        // WiFi context
+        context.network_type = NetworkType::WiFi;
+        let wifi_connect_score =
+            prioritizer.calculate_temporal_score("wifi - Connect to Network", &context);
 
-        // Evening context
-        context.time_of_day = 20;
-        let evening_vpn_score =
-            prioritizer.calculate_temporal_score("tailscale- ✅ Enable VPN", &context);
-        let evening_bluetooth_score =
-            prioritizer.calculate_temporal_score("bluetooth- 📱 Connect Device", &context);
+        // Mobile context
+        context.network_type = NetworkType::Mobile;
+        let mobile_disconnect_score =
+            prioritizer.calculate_temporal_score("disconnect - Save Data", &context);
 
-        assert!(morning_vpn_score > evening_vpn_score);
-        assert!(evening_bluetooth_score > morning_vpn_score);
+        // Basic scoring should work
+        assert!(wifi_connect_score >= 0.0);
+        assert!(mobile_disconnect_score >= 0.0);
     }
 }

@@ -258,9 +258,8 @@ impl NetworkPredictor {
             if network.frequency >= 5000 { 1.0 } else { 0.0 },
             network.channel as f32 / 14.0,
             if network.is_saved { 1.0 } else { 0.0 },
-            // Context features
-            context.time_of_day as f32 / 24.0,
-            context.day_of_week as f32 / 7.0,
+            // Network context features (removed time/day)
+            context.network_type as u8 as f32 / 10.0, // Network type as feature
         ];
 
         // Add historical features
