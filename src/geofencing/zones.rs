@@ -534,6 +534,57 @@ impl ZoneManager {
             ..self.config.clone()
         }
     }
+
+    /// Get current zone for startup application (even if no change detected)
+    /// This ensures zone actions are applied on daemon startup
+    pub async fn get_current_zone_for_startup(&mut self) -> Result<Option<LocationChange>> {
+        debug!("Getting current zone for startup application");
+        
+        let current_fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
+
+        if current_fingerprint.confidence_score < 0.3 {
+            debug!("Not enough data for reliable zone matching (confidence: {:.2})", current_fingerprint.confidence_score);
+            return Ok(None);
+        }
+
+        let matched_zone = self.find_best_matching_zone(&current_fingerprint)?;
+
+        if let Some(mut zone) = matched_zone {
+            debug!("Current zone detected for startup: '{}' (ID: {})", zone.name, zone.id);
+            
+            // Update zone statistics
+            zone.last_matched = Some(Utc::now());
+            zone.match_count += 1;
+            self.zones.insert(zone.id.clone(), zone.clone());
+
+            // Save updated zone statistics to disk
+            let _ = self.save_zones_to_disk(); // Don't fail on save error
+
+            // Update current zone tracking
+            let previous_zone_id = self.current_zone.clone();
+            self.current_zone = Some(zone.id.clone());
+            self.daemon_state.current_zone = Some(zone.id.clone());
+
+            // Create LocationChange for startup application
+            let from_zone = previous_zone_id
+                .as_ref()
+                .and_then(|id| self.zones.get(id))
+                .cloned();
+
+            let location_change = LocationChange {
+                from: from_zone,
+                to: zone.clone(),
+                confidence: current_fingerprint.confidence_score,
+                suggested_actions: zone.actions.clone(),
+            };
+
+            info!("🚀 Startup zone application: '{}' (confidence: {:.1}%)", zone.name, current_fingerprint.confidence_score * 100.0);
+            Ok(Some(location_change))
+        } else {
+            debug!("No matching zone found for current location");
+            Ok(None)
+        }
+    }
 }
 
 /// Generate a unique zone ID

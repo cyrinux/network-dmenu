@@ -244,15 +244,40 @@ impl GeofencingDaemon {
                 debug!("Scanning with {} configured zones", zone_count);
             }
 
-            // Check for location change
+            // Check for location change (or startup zone application)
             debug!("Detecting location change for scan #{}", scan_count);
             let location_change = {
                 let mut manager = zone_manager.lock().await;
-                match manager.detect_location_change().await {
-                    Ok(change) => {
-                        if let Some(ref change) = change {
-                            debug!(
-                                "Location change detected: from {:?} to {} (confidence: {:.2})",
+                
+                // On first scan, ensure current zone actions are applied (startup behavior)
+                if scan_count == 1 {
+                    debug!("First scan - checking for startup zone application");
+                    match manager.get_current_zone_for_startup().await {
+                        Ok(change) => {
+                            if let Some(ref change) = change {
+                                debug!(
+                                    "Startup zone application: from {:?} to {} (confidence: {:.2})",
+                                    change.from.as_ref().map(|z| &z.name),
+                                    change.to.name,
+                                    change.confidence
+                                );
+                            } else {
+                                debug!("No zone detected for startup application");
+                            }
+                            change
+                        }
+                        Err(e) => {
+                            warn!("Startup zone detection failed: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    // Regular location change detection for subsequent scans
+                    match manager.detect_location_change().await {
+                        Ok(change) => {
+                            if let Some(ref change) = change {
+                                debug!(
+                                    "Location change detected: from {:?} to {} (confidence: {:.2})",
                                 change.from.as_ref().map(|z| &z.name),
                                 change.to.name,
                                 change.confidence
@@ -265,6 +290,7 @@ impl GeofencingDaemon {
                     Err(e) => {
                         warn!("Location detection failed in scan #{}: {}", scan_count, e);
                         continue;
+                    }
                     }
                 }
             };
@@ -514,11 +540,19 @@ impl GeofencingDaemon {
                 }
             }
 
-            // Check for location change with ML learning
+            // Check for location change with ML learning (or startup zone application)
             debug!("🧠 Detecting location change with ML learning for scan #{}", scan_count);
             let location_change = {
                 let mut manager = zone_manager.lock().await;
-                manager.detect_location_change().await
+                
+                // On first scan, ensure current zone actions are applied (startup behavior)
+                if scan_count == 1 {
+                    debug!("🧠 First enhanced scan - checking for startup zone application");
+                    manager.get_current_zone_for_startup().await
+                } else {
+                    // Regular ML-enhanced location change detection for subsequent scans
+                    manager.detect_location_change().await
+                }
             };
 
             // Extract values for ML tracking before match consumes location_change
