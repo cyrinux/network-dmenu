@@ -43,6 +43,8 @@ struct DaemonStatusData {
     #[cfg(feature = "ml")]
     ml_suggestions_generated: u32,
     #[cfg(feature = "ml")]
+    ml_auto_suggestions_processed: u32,
+    #[cfg(feature = "ml")]
     adaptive_scan_interval: Duration,
     #[cfg(feature = "ml")]
     last_ml_update: Option<chrono::DateTime<chrono::Utc>>,
@@ -67,6 +69,8 @@ impl GeofencingDaemon {
             current_zone_id: None,
             #[cfg(feature = "ml")]
             ml_suggestions_generated: 0,
+            #[cfg(feature = "ml")]
+            ml_auto_suggestions_processed: 0,
             #[cfg(feature = "ml")]
             adaptive_scan_interval: Duration::from_secs(config.scan_interval_seconds),
             #[cfg(feature = "ml")]
@@ -461,25 +465,51 @@ impl GeofencingDaemon {
                 debug!("🧠 Generating ML-powered zone suggestions");
                 ml_update_counter = 0;
                 
-                let suggestions_generated = {
-                    let ml = ml_manager.lock().await;
+                let (suggestions_generated, auto_suggestions_processed) = {
+                    let mut ml = ml_manager.lock().await;
                     let manager = zone_manager.lock().await;
                     
-                    let suggestions = ml.generate_zone_suggestions(&manager.list_zones());
-                    if !suggestions.is_empty() {
-                        info!("🧠 Generated {} zone suggestions", suggestions.len());
-                        for suggestion in &suggestions {
-                            debug!("  📍 Suggestion: {} (confidence: {:.2})", 
-                                   suggestion.suggested_name, suggestion.confidence);
+                    // Generate suggestions with auto-acceptance evaluation
+                    let enhanced_suggestions = ml.generate_enhanced_zone_suggestions(&manager.list_zones());
+                    let suggestion_count = enhanced_suggestions.len();
+                    
+                    // Process automatic suggestions
+                    let auto_results = ml.process_auto_suggestions(&manager.list_zones());
+                    let auto_accepted_count = auto_results.iter()
+                        .filter(|r| r.action == crate::ml_integration::AutoSuggestionAction::CreateZone)
+                        .count();
+                    
+                    if !enhanced_suggestions.is_empty() {
+                        info!("🧠 Generated {} zone suggestions ({} auto-accepted, {} require manual approval)", 
+                              suggestion_count, auto_accepted_count, suggestion_count - auto_accepted_count);
+                        
+                        for (suggestion, should_auto_accept) in &enhanced_suggestions {
+                            let acceptance_status = if *should_auto_accept { "🤖 AUTO-ACCEPT" } else { "👤 MANUAL" };
+                            debug!("  📍 {}: {} (confidence: {:.1}%, priority: {:?})",
+                                   acceptance_status,
+                                   suggestion.suggested_name, 
+                                   suggestion.confidence * 100.0,
+                                   suggestion.priority);
+                        }
+                        
+                        // Log auto-accepted suggestions
+                        for result in &auto_results {
+                            if result.action == crate::ml_integration::AutoSuggestionAction::CreateZone {
+                                info!("🤖 ✨ Auto-suggestion: '{}' would be created automatically (confidence: {:.1}%)",
+                                      result.suggestion_name, result.confidence * 100.0);
+                                debug!("   Reasoning: {}", result.reasoning);
+                            }
                         }
                     }
-                    suggestions.len() as u32
+                    
+                    (suggestion_count as u32, auto_accepted_count as u32)
                 };
 
                 // Update status with ML metrics
                 {
                     let mut status_data = status.write().await;
                     status_data.ml_suggestions_generated += suggestions_generated;
+                    status_data.ml_auto_suggestions_processed += auto_suggestions_processed;
                     status_data.last_ml_update = Some(Utc::now());
                 }
             }
@@ -491,28 +521,69 @@ impl GeofencingDaemon {
                 manager.detect_location_change().await
             };
 
+            // Extract values for ML tracking before match consumes location_change
+            let zone_changed = matches!(location_change, Ok(Some(_)));
+            let confidence_score = match &location_change {
+                Ok(Some(change)) => change.confidence,
+                _ => 0.5, // Default confidence for stable/error states
+            };
+
             match location_change {
                 Ok(Some(change)) => {
-                    info!("🧠 Enhanced zone change detected: {} -> {} (confidence: {:.2}%)", 
+                    // Enhanced confidence calculation with ML
+                    let ml_confidence = {
+                        let ml = ml_manager.lock().await;
+                        let _manager = zone_manager.lock().await;
+                        if let Ok(fingerprint) = super::fingerprinting::create_wifi_fingerprint(super::PrivacyMode::High).await {
+                            ml.calculate_zone_confidence(&change.to.id, &fingerprint)
+                        } else {
+                            change.confidence // Fallback to original confidence
+                        }
+                    };
+
+                    // Get dynamic confidence threshold
+                    let confidence_threshold = {
+                        let ml = ml_manager.lock().await;
+                        ml.get_confidence_threshold(&change.to.id)
+                    };
+
+                    info!("🧠 Enhanced zone change detected: {} -> {} (original: {:.2}%, ML-enhanced: {:.2}%, threshold: {:.2}%)", 
                          change.from.as_ref().map(|z| z.name.as_str()).unwrap_or("None"),
                          change.to.name, 
-                         change.confidence * 100.0);
+                         change.confidence * 100.0,
+                         ml_confidence * 100.0,
+                         confidence_threshold * 100.0);
 
-                    // ML zone change recording is handled in the enhanced loop only
+                    // Only proceed if confidence meets dynamic threshold
+                    if ml_confidence >= confidence_threshold {
+                        // Track prediction accuracy if we had a previous prediction
+                        if let Some(previous_zone_id) = change.from.as_ref().map(|z| &z.id) {
+                            let mut ml = ml_manager.lock().await;
+                            ml.track_prediction_accuracy(previous_zone_id, &change.to.id, ml_confidence);
+                        }
 
-                    // Update status
-                    {
-                        let mut status_data = status.write().await;
-                        status_data.last_scan = Some(Utc::now());
-                        status_data.total_zone_changes += 1;
-                        status_data.current_zone_id = Some(change.to.id.clone());
-                    }
+                        // Record zone change for ML learning
+                        {
+                            let mut ml = ml_manager.lock().await;
+                            ml.record_zone_change(
+                                change.from.as_ref().map(|z| z.id.as_str()),
+                                &change.to.id
+                            );
+                        }
 
-                    // Execute zone actions
-                    debug!("🧠 Executing enhanced zone actions for zone '{}'", change.to.name);
-                    if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
-                        error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
-                    } else {
+                        // Update status
+                        {
+                            let mut status_data = status.write().await;
+                            status_data.last_scan = Some(Utc::now());
+                            status_data.total_zone_changes += 1;
+                            status_data.current_zone_id = Some(change.to.id.clone());
+                        }
+
+                        // Execute zone actions
+                        debug!("🧠 Executing enhanced zone actions for zone '{}'", change.to.name);
+                        if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
+                            error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
+                        } else {
                         debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
                     }
 
@@ -535,6 +606,36 @@ impl GeofencingDaemon {
                     }
                     
                     debug!("🧠 Adjusted scan interval to {:?} after zone change", current_scan_interval);
+                    } else {
+                        // Confidence below threshold - reject zone change
+                        warn!("🧠 Zone change rejected due to low confidence: {:.2}% < {:.2}% threshold", 
+                              ml_confidence * 100.0, confidence_threshold * 100.0);
+                        
+                        // Still update last scan time
+                        {
+                            let mut status_data = status.write().await;
+                            status_data.last_scan = Some(Utc::now());
+                        }
+                        
+                        // Use more frequent scanning when confidence is low
+                        current_scan_interval = Self::calculate_adaptive_scan_interval(
+                            base_scan_interval,
+                            false, // no zone change executed
+                            scan_start_time.elapsed(),
+                        );
+                        
+                        // Reduce interval further for low confidence situations
+                        current_scan_interval = Duration::from_millis(
+                            (current_scan_interval.as_millis() as f64 * 0.7) as u64
+                        );
+                        
+                        {
+                            let mut status_data = status.write().await;
+                            status_data.adaptive_scan_interval = current_scan_interval;
+                        }
+                        
+                        debug!("🧠 Increased scan frequency to {:?} due to low confidence", current_scan_interval);
+                    }
                 }
                 Ok(None) => {
                     debug!("🧠 No zone change detected in enhanced scan #{}", scan_count);
@@ -569,11 +670,38 @@ impl GeofencingDaemon {
                 }
             }
 
-            // Update ML system with scan performance data every 10 scans
-            if scan_count % 10 == 0 {
+            // Update ML system with enhanced scan performance data every scan
+            {
                 let scan_duration = scan_start_time.elapsed();
                 let mut ml = ml_manager.lock().await;
-                ml.record_scan_performance(scan_duration, current_scan_interval);
+                let manager = zone_manager.lock().await;
+                let zones_detected = manager.list_zones().len();
+                
+                ml.record_enhanced_scan_performance(
+                    scan_duration, 
+                    current_scan_interval, 
+                    zones_detected, 
+                    zone_changed,
+                    confidence_score as f64
+                );
+                
+                // Use ML-enhanced adaptive interval calculation
+                let context = crate::ml_integration::get_current_context();
+                let recent_changes = status.read().await.total_zone_changes % 10; // Recent changes in window
+                current_scan_interval = ml.get_adaptive_scan_interval(
+                    base_scan_interval,
+                    recent_changes as u32,
+                    &context
+                );
+                
+                // Update status with ML-calculated interval
+                {
+                    let mut status_data = status.write().await;
+                    status_data.adaptive_scan_interval = current_scan_interval;
+                }
+                
+                debug!("📊 ML-enhanced scan interval updated: {:?} (zone_changed={}, confidence={:.1}%)", 
+                       current_scan_interval, zone_changed, confidence_score * 100.0);
             }
         }
 
@@ -840,8 +968,15 @@ impl GeofencingDaemon {
             DaemonCommand::GetMlMetrics => {
                 debug!("Processing GetMlMetrics command");
                 let ml_manager = ml_manager.lock().await;
-                let metrics = ml_manager.get_ml_metrics();
-                debug!("Retrieved ML metrics: model_version={}", metrics.ml_model_version);
+                let status_data = status.read().await;
+                let metrics = ml_manager.get_ml_metrics(
+                    status_data.ml_suggestions_generated,
+                    status_data.ml_auto_suggestions_processed
+                );
+                debug!("Retrieved ML metrics: model_version={}, suggestions={}, auto_processed={}", 
+                       metrics.ml_model_version, 
+                       status_data.ml_suggestions_generated,
+                       status_data.ml_auto_suggestions_processed);
                 DaemonResponse::MlMetrics { metrics }
             }
         }
