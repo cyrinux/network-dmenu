@@ -836,6 +836,15 @@ impl ZoneTransitionSmoother {
     fn calculate_immediate_threshold(&self, current_context: &NetworkContext) -> f64 {
         let base_threshold = 0.9; // High threshold for immediate acceptance
         
+        // Apply confidence decay if we have a pending transition
+        let decayed_threshold = if let Some(pending_since) = self.pending_since {
+            let seconds_pending = chrono::Utc::now().signed_duration_since(pending_since).num_seconds() as f64;
+            // Use confidence_decay_rate to lower threshold over time (making transitions easier)
+            base_threshold * self.confidence_decay_rate.powf(seconds_pending / 10.0) // Decay every 10 seconds
+        } else {
+            base_threshold
+        };
+        
         // Time-based adjustment
         let time_adjustment = match current_context.time_of_day {
             7..=9 | 17..=19 => -0.05, // Rush hours - slightly more lenient
@@ -850,13 +859,28 @@ impl ZoneTransitionSmoother {
         };
         
         {
-            let sum = base_threshold + time_adjustment + network_adjustment;
+            let sum = decayed_threshold + time_adjustment + network_adjustment;
             if sum < 0.8 { 0.8 } else if sum > 0.95 { 0.95 } else { sum }
         }
     }
 
     fn detect_oscillation(&self, candidate_zone_id: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
         // Look for oscillation pattern in recent history (last 10 minutes)
+        // Also check if we're trying to return to a recently departed zone
+        if self.current_zone_id.is_some() {
+            // Check if candidate was recently left (using from_zone_id)
+            let recent_departures = self.transition_history.iter()
+                .rev()
+                .take(5) // Last 5 transitions
+                .filter(|t| t.from_zone_id.as_deref() == Some(candidate_zone_id) && 
+                           now.signed_duration_since(t.timestamp).num_seconds() < 300) // Last 5 minutes
+                .count();
+                
+            if recent_departures >= 2 {
+                debug!("🌊 🔄 Detected rapid return pattern: {} was recently departed {} times", candidate_zone_id, recent_departures);
+                return true;
+            }
+        }
         let recent_cutoff = now - chrono::Duration::minutes(10);
         let recent_transitions: Vec<_> = self.transition_history
             .iter()
