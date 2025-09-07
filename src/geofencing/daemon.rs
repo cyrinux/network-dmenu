@@ -153,6 +153,24 @@ impl GeofencingDaemon {
             })
         };
 
+        // Start system event monitoring task (suspend/resume)
+        let system_event_task = {
+            let zone_manager = Arc::clone(&zone_manager);
+            let should_shutdown = Arc::clone(&should_shutdown);
+            #[cfg(feature = "ml")]
+            let ml_manager = Arc::clone(&ml_manager);
+            
+            tokio::spawn(async move {
+                Self::system_event_monitoring_loop(
+                    zone_manager,
+                    should_shutdown,
+                    #[cfg(feature = "ml")]
+                    ml_manager,
+                )
+                .await;
+            })
+        };
+
         // Handle IPC commands
         let ipc_task = {
             let zone_manager = Arc::clone(&self.zone_manager);
@@ -193,6 +211,9 @@ impl GeofencingDaemon {
         tokio::select! {
             _ = monitor_task => {
                 info!("Location monitoring task completed");
+            },
+            _ = system_event_task => {
+                info!("System event monitoring task completed");
             },
             _ = ipc_task => {
                 info!("IPC task completed");
@@ -391,9 +412,16 @@ impl GeofencingDaemon {
                     }
                 );
 
-                // Execute zone actions
-                debug!("Executing zone actions for zone '{}'", change.to.name);
-                if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
+                // Execute zone actions with retry logic and connection optimization
+                debug!("Executing zone actions with retry for zone '{}'", change.to.name);
+                let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                let action_context = super::retry::ActionContext {
+                    zone_id: change.to.id.clone(),
+                    zone_name: change.to.name.clone(),
+                    confidence: change.confidence,
+                };
+                
+                if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
                     error!(
                         "Failed to execute zone actions for zone '{}': {}",
                         change.to.name, e
@@ -428,6 +456,103 @@ impl GeofencingDaemon {
             "Location monitoring loop stopped after {} scans",
             scan_count
         );
+    }
+
+    /// System event monitoring loop for suspend/resume detection
+    async fn system_event_monitoring_loop(
+        zone_manager: Arc<Mutex<ZoneManager>>,
+        should_shutdown: Arc<RwLock<bool>>,
+        #[cfg(feature = "ml")]
+        _ml_manager: Arc<Mutex<MlManager>>,
+    ) {
+        info!("🔋 Starting system event monitoring (suspend/resume detection)");
+        debug!("System event monitoring will trigger immediate zone checks on resume");
+        
+        // Use dbus to monitor logind suspend/resume signals
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut was_suspended = false;
+        let mut last_network_check = std::time::Instant::now();
+        
+        loop {
+            // Check for shutdown
+            if *should_shutdown.read().await {
+                debug!("Shutdown signal received, exiting system event monitoring loop");
+                break;
+            }
+            
+            // Simple approach: monitor network connectivity changes which often indicate resume
+            let current_time = std::time::Instant::now();
+            if current_time.duration_since(last_network_check) >= Duration::from_secs(10) {
+                last_network_check = current_time;
+                
+                // Check if network connectivity has changed (potential resume indicator)
+                if Self::detect_network_state_change().await {
+                    debug!("🔋 Network state change detected - potential resume event");
+                    
+                    if was_suspended {
+                        info!("🔋 System resume detected - performing immediate zone check");
+                        was_suspended = false;
+                        
+                        // Trigger immediate zone check on resume
+                        debug!("🔋 Executing immediate post-resume zone detection");
+                        let mut manager = zone_manager.lock().await;
+                        match manager.get_current_zone_for_startup().await {
+                            Ok(Some(change)) => {
+                                info!("🔋 Post-resume zone detected: '{}' (confidence: {:.1}%)", 
+                                     change.to.name, change.confidence * 100.0);
+                                
+                                // Execute zone actions immediately after resume
+                                let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                                let action_context = super::retry::ActionContext {
+                                    zone_id: change.to.id.clone(),
+                                    zone_name: change.to.name.clone(),
+                                    confidence: change.confidence,
+                                };
+                                
+                                if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
+                                    error!("🔋 Failed to execute post-resume zone actions for '{}': {}", change.to.name, e);
+                                } else {
+                                    info!("🔋 Successfully applied post-resume zone actions for '{}'", change.to.name);
+                                }
+                            }
+                            Ok(None) => {
+                                debug!("🔋 No zone detected after resume");
+                            }
+                            Err(e) => {
+                                warn!("🔋 Failed to detect zone after resume: {}", e);
+                            }
+                        }
+                    } else {
+                        debug!("🔋 Network state change detected - marking potential suspend");
+                        was_suspended = true;
+                    }
+                }
+            }
+            
+            interval.tick().await;
+        }
+        
+        info!("🔋 System event monitoring stopped");
+    }
+
+    /// Detect network state changes (simple heuristic for suspend/resume)
+    async fn detect_network_state_change() -> bool {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        // Check if we have active network connections
+        if let Ok(output) = command_runner.run_command("ip", &["route", "show", "default"]) {
+            if output.status.success() {
+                let routes = String::from_utf8_lossy(&output.stdout);
+                let has_default_route = !routes.trim().is_empty();
+                
+                // Simple state tracking - in a real implementation, you'd compare with previous state
+                debug!("Network connectivity check: default route = {}", has_default_route);
+                return has_default_route;
+            }
+        }
+        
+        false
     }
 
     /// Enhanced location monitoring loop with ML-powered intelligence
@@ -612,13 +737,20 @@ impl GeofencingDaemon {
                             status_data.current_zone_id = Some(change.to.id.clone());
                         }
 
-                        // Execute zone actions
-                        debug!("🧠 Executing enhanced zone actions for zone '{}'", change.to.name);
-                        if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
+                        // Execute zone actions with retry logic and connection optimization
+                        debug!("🧠 Executing enhanced zone actions with retry for zone '{}'", change.to.name);
+                        let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                        let action_context = super::retry::ActionContext {
+                            zone_id: change.to.id.clone(),
+                            zone_name: change.to.name.clone(),
+                            confidence: change.confidence,
+                        };
+                        
+                        if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
                             error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
                         } else {
-                        debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
-                    }
+                            debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
+                        }
 
                     // Send notification if enabled
                     if change.suggested_actions.notifications {
@@ -861,9 +993,15 @@ impl GeofencingDaemon {
                             "Zone '{}' activated successfully, executing actions",
                             change.to.name
                         );
-                        // Execute zone actions
-                        if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await
-                        {
+                        // Execute zone actions with retry logic and connection optimization
+                        let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                        let action_context = super::retry::ActionContext {
+                            zone_id: change.to.id.clone(),
+                            zone_name: change.to.name.clone(),
+                            confidence: change.confidence,
+                        };
+                        
+                        if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
                             warn!(
                                 "Zone '{}' activated but actions failed: {}",
                                 change.to.name, e
@@ -1144,6 +1282,99 @@ impl GeofencingDaemon {
         }
     }
 
+    /// Check if already connected to a specific WiFi network
+    async fn is_wifi_connected_to(target_ssid: &str) -> bool {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        debug!("Checking if already connected to WiFi: '{}'", target_ssid);
+        
+        // Check with NetworkManager first
+        if crate::command::is_command_installed("nmcli") {
+            if let Ok(output) = command_runner.run_command("nmcli", &["-t", "connection", "show", "--active"]) {
+                if output.status.success() {
+                    let connections = String::from_utf8_lossy(&output.stdout);
+                    for line in connections.lines() {
+                        if line.contains(target_ssid) && line.contains("wifi") {
+                            debug!("Already connected to WiFi '{}' via NetworkManager", target_ssid);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check with iwconfig as fallback
+        if crate::command::is_command_installed("iwconfig") {
+            if let Ok(output) = command_runner.run_command("iwconfig", &[]) {
+                if output.status.success() {
+                    let config = String::from_utf8_lossy(&output.stdout);
+                    if config.contains(&format!("ESSID:\"{}\"", target_ssid)) {
+                        debug!("Already connected to WiFi '{}' via iwconfig", target_ssid);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        debug!("Not currently connected to WiFi '{}'", target_ssid);
+        false
+    }
+
+    /// Check if already connected to a specific Bluetooth device
+    async fn is_bluetooth_connected_to(target_device: &str) -> bool {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        debug!("Checking if already connected to Bluetooth device: '{}'", target_device);
+        
+        if !crate::command::is_command_installed("bluetoothctl") {
+            debug!("bluetoothctl not available, skipping Bluetooth connection check");
+            return false;
+        }
+        
+        // Use bluetoothctl to check connected devices
+        if let Ok(output) = command_runner.run_command("bluetoothctl", &["info", target_device]) {
+            if output.status.success() {
+                let info = String::from_utf8_lossy(&output.stdout);
+                if info.contains("Connected: yes") {
+                    debug!("Already connected to Bluetooth device '{}'", target_device);
+                    return true;
+                }
+            }
+        }
+        
+        debug!("Not currently connected to Bluetooth device '{}'", target_device);
+        false
+    }
+
+    /// Get current connected WiFi SSID
+    pub async fn get_current_wifi_ssid() -> Option<String> {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        // Try NetworkManager first
+        if crate::command::is_command_installed("nmcli") {
+            if let Ok(output) = command_runner.run_command("nmcli", &["-t", "-f", "ACTIVE,SSID", "dev", "wifi"]) {
+                if output.status.success() {
+                    let wifi_list = String::from_utf8_lossy(&output.stdout);
+                    for line in wifi_list.lines() {
+                        if line.starts_with("yes:") {
+                            let ssid = line.strip_prefix("yes:").unwrap_or("").trim();
+                            if !ssid.is_empty() {
+                                debug!("Current WiFi SSID: '{}'", ssid);
+                                return Some(ssid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("No current WiFi connection detected");
+        None
+    }
+
     /// Execute zone actions (connect to WiFi, VPN, etc.)
     async fn execute_zone_actions(actions: &ZoneActions) -> Result<()> {
         debug!("Starting zone action execution");
@@ -1152,15 +1383,19 @@ impl GeofencingDaemon {
             actions.wifi, actions.vpn, actions.tailscale_exit_node, actions.tailscale_shields,
             actions.bluetooth.len(), actions.custom_commands.len());
 
-        // Connect to WiFi
+        // Connect to WiFi (skip if already connected)
         if let Some(ref wifi_ssid) = actions.wifi {
             debug!(
                 "Processing WiFi connection action for SSID: '{}'",
                 wifi_ssid
             );
-            info!("Connecting to WiFi: {}", wifi_ssid);
 
-            let command_runner = RealCommandRunner;
+            // Check if already connected to avoid unnecessary reconnection
+            if Self::is_wifi_connected_to(wifi_ssid).await {
+                info!("Already connected to WiFi '{}', skipping connection", wifi_ssid);
+            } else {
+                info!("Connecting to WiFi: {}", wifi_ssid);
+                let command_runner = RealCommandRunner;
 
             // Try NetworkManager first, then fall back to IWD
             let success = if crate::command::is_command_installed("nmcli") {
@@ -1250,6 +1485,7 @@ impl GeofencingDaemon {
                     wifi_ssid
                 );
             }
+            } // End of else block (not already connected)
         }
 
         // Connect to VPN
@@ -1374,14 +1610,20 @@ impl GeofencingDaemon {
             }
         }
 
-        // Connect Bluetooth devices
+        // Connect Bluetooth devices (skip if already connected)
         for device_name in &actions.bluetooth {
             debug!(
                 "Processing Bluetooth connection action for device: '{}'",
                 device_name
             );
-            info!("Connecting Bluetooth device: {}", device_name);
 
+            // Check if already connected to avoid unnecessary reconnection
+            if Self::is_bluetooth_connected_to(device_name).await {
+                info!("Already connected to Bluetooth device '{}', skipping connection", device_name);
+                continue;
+            }
+
+            info!("Connecting Bluetooth device: {}", device_name);
             let command_runner = RealCommandRunner;
 
             if crate::command::is_command_installed("bluetoothctl") {

@@ -155,49 +155,58 @@ impl RetryManager {
         // Execute WiFi action
         if let Some(ref wifi_ssid) = actions.wifi {
             info!(
-                "📶 [1/{}] WiFi Action: Connecting to SSID '{}'",
+                "📶 [1/{}] WiFi Action: Checking connection to SSID '{}'",
                 total_actions, wifi_ssid
             );
             debug!(
-                "WiFi connection attempt starting for zone '{}' to network '{}'",
+                "WiFi connection check starting for zone '{}' to network '{}'",
                 context.zone_name, wifi_ssid
             );
 
-            let wifi_start = std::time::Instant::now();
-            let action = RetryableAction::WiFiConnection(wifi_ssid.clone());
-            match self.execute_with_retry(action.clone(), context).await {
-                RetryStatus::Success => {
-                    success_count += 1;
-                    info!(
-                        "✅ WiFi connection to '{}' successful in {:?}",
-                        wifi_ssid,
-                        wifi_start.elapsed()
-                    );
-                    debug!("WiFi action completed successfully for zone '{}' - network '{}' is now active", 
-                           context.zone_name, wifi_ssid);
-                }
-                RetryStatus::Failed(error) => {
-                    warn!(
-                        "❌ WiFi connection to '{}' failed after {:?}: {}",
-                        wifi_ssid,
-                        wifi_start.elapsed(),
-                        error
-                    );
-                    debug!(
-                        "WiFi action failed for zone '{}' - network '{}' connection unsuccessful",
-                        context.zone_name, wifi_ssid
-                    );
-                    partial_failures.push((action, error));
-                }
-                RetryStatus::MaxRetriesExceeded => {
-                    error!(
-                        "⏰ WiFi connection to '{}' exceeded max retries after {:?}",
-                        wifi_ssid,
-                        wifi_start.elapsed()
-                    );
-                    debug!("WiFi action retry exhausted for zone '{}' - network '{}' connection abandoned", 
-                           context.zone_name, wifi_ssid);
-                    partial_failures.push((action, "Max retries exceeded".to_string()));
+            // Check if already connected to avoid unnecessary reconnection
+            if self.is_wifi_connected_to(wifi_ssid).await {
+                success_count += 1;
+                info!("✅ Already connected to WiFi '{}', skipping connection", wifi_ssid);
+                debug!("WiFi action skipped for zone '{}' - already connected to network '{}'", 
+                       context.zone_name, wifi_ssid);
+            } else {
+                info!("📶 [1/{}] WiFi Action: Connecting to SSID '{}'", total_actions, wifi_ssid);
+                let wifi_start = std::time::Instant::now();
+                let action = RetryableAction::WiFiConnection(wifi_ssid.clone());
+                match self.execute_with_retry(action.clone(), context).await {
+                    RetryStatus::Success => {
+                        success_count += 1;
+                        info!(
+                            "✅ WiFi connection to '{}' successful in {:?}",
+                            wifi_ssid,
+                            wifi_start.elapsed()
+                        );
+                        debug!("WiFi action completed successfully for zone '{}' - network '{}' is now active", 
+                               context.zone_name, wifi_ssid);
+                    }
+                    RetryStatus::Failed(error) => {
+                        warn!(
+                            "❌ WiFi connection to '{}' failed after {:?}: {}",
+                            wifi_ssid,
+                            wifi_start.elapsed(),
+                            error
+                        );
+                        debug!(
+                            "WiFi action failed for zone '{}' - network '{}' connection unsuccessful",
+                            context.zone_name, wifi_ssid
+                        );
+                        partial_failures.push((action, error));
+                    }
+                    RetryStatus::MaxRetriesExceeded => {
+                        error!(
+                            "⏰ WiFi connection to '{}' exceeded max retries after {:?}",
+                            wifi_ssid,
+                            wifi_start.elapsed()
+                        );
+                        debug!("WiFi action retry exhausted for zone '{}' - network '{}' connection abandoned", 
+                               context.zone_name, wifi_ssid);
+                        partial_failures.push((action, "Max retries exceeded".to_string()));
+                    }
                 }
             }
         }
@@ -408,6 +417,20 @@ impl RetryManager {
         }
 
         for (bt_index, device_name) in actions.bluetooth.iter().enumerate() {
+            // Check if already connected to avoid unnecessary reconnection
+            if self.is_bluetooth_connected_to(device_name).await {
+                success_count += 1;
+                info!("✅ Already connected to Bluetooth device '{}', skipping connection", device_name);
+                debug!(
+                    "Bluetooth device {} ({}/{}) already connected for zone '{}'",
+                    device_name,
+                    bt_index + 1,
+                    actions.bluetooth.len(),
+                    context.zone_name
+                );
+                continue;
+            }
+            
             let bt_start = std::time::Instant::now();
             let action = RetryableAction::BluetoothConnection(device_name.clone());
             match self.execute_with_retry(action.clone(), context).await {
@@ -1223,6 +1246,49 @@ impl RetryManager {
             self.failed_actions.len()
         );
         self.failed_actions.clear();
+    }
+
+    /// Check if already connected to a specific WiFi network
+    async fn is_wifi_connected_to(&self, target_ssid: &str) -> bool {
+        debug!("Checking if already connected to WiFi: '{}'", target_ssid);
+        
+        // Use daemon's function to get current WiFi SSID
+        if let Some(current_ssid) = crate::geofencing::daemon::GeofencingDaemon::get_current_wifi_ssid().await {
+            if current_ssid == target_ssid {
+                debug!("Already connected to WiFi '{}' (current: '{}')", target_ssid, current_ssid);
+                return true;
+            }
+        }
+        
+        debug!("Not currently connected to WiFi '{}'", target_ssid);
+        false
+    }
+
+    /// Check if already connected to a specific Bluetooth device
+    async fn is_bluetooth_connected_to(&self, target_device: &str) -> bool {
+        use crate::command::{CommandRunner, RealCommandRunner};
+        let command_runner = RealCommandRunner;
+        
+        debug!("Checking if already connected to Bluetooth device: '{}'", target_device);
+        
+        if !crate::command::is_command_installed("bluetoothctl") {
+            debug!("bluetoothctl not available, skipping Bluetooth connection check");
+            return false;
+        }
+        
+        // Use bluetoothctl to check connected devices
+        if let Ok(output) = command_runner.run_command("bluetoothctl", &["info", target_device]) {
+            if output.status.success() {
+                let info = String::from_utf8_lossy(&output.stdout);
+                if info.contains("Connected: yes") {
+                    debug!("Already connected to Bluetooth device '{}'", target_device);
+                    return true;
+                }
+            }
+        }
+        
+        debug!("Not currently connected to Bluetooth device '{}'", target_device);
+        false
     }
 }
 

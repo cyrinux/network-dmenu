@@ -412,10 +412,38 @@ impl ZoneManager {
             }
         }
 
+        // If no configured zone matches, check unknown zone protection
+        if best_match.is_none() && self.config.unknown_zone.enabled {
+            debug!("🛡️ No configured zones match - checking unknown zone protection");
+            debug!("🛡️ Unknown zone confidence threshold: {:.3}", self.config.unknown_zone.confidence_threshold);
+            
+            // If no zone matches above the unknown zone threshold, trigger protection mode
+            if best_similarity < self.config.unknown_zone.confidence_threshold {
+                debug!("🚨 Unknown zone detected! Best similarity {:.3} < threshold {:.3}", 
+                       best_similarity, self.config.unknown_zone.confidence_threshold);
+                
+                // Create virtual unknown zone with protective actions
+                let unknown_zone = GeofenceZone {
+                    id: "unknown_zone".to_string(),
+                    name: "🛡️ Unknown Zone (Protection Mode)".to_string(),
+                    fingerprints: vec![fingerprint.clone()],
+                    confidence_threshold: self.config.unknown_zone.confidence_threshold,
+                    actions: self.config.unknown_zone.protective_actions.clone(),
+                    created_at: Utc::now(),
+                    last_matched: Some(Utc::now()),
+                    match_count: 1,
+                };
+                
+                debug!("🛡️ Activating unknown zone protection with {} actions", 
+                       unknown_zone.actions.custom_commands.len());
+                return Ok(Some(unknown_zone));
+            }
+        }
+
         if let Some(ref zone) = best_match {
             debug!("✅ Best matching zone: '{}' with similarity {:.3}", zone.name, best_similarity);
         } else {
-            debug!("❌ No zone matches above threshold");
+            debug!("❌ No zone matches above threshold and unknown zone protection not triggered");
         }
 
         Ok(best_match)

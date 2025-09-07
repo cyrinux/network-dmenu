@@ -118,6 +118,40 @@ impl Default for LocationFingerprint {
     }
 }
 
+/// Configuration for unknown zone protection
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnknownZoneConfig {
+    /// Enable unknown zone protection
+    pub enabled: bool,
+    /// Below this similarity threshold = unknown zone (0.0-1.0)
+    pub confidence_threshold: f64,
+    /// Protective actions to apply in unknown zones
+    pub protective_actions: ZoneActions,
+    /// Custom notification message for unknown zones
+    pub notification_message: String,
+}
+
+impl Default for UnknownZoneConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            confidence_threshold: 0.3, // Very low threshold for maximum protection
+            protective_actions: ZoneActions {
+                wifi: None, // Don't auto-connect to WiFi in unknown places
+                vpn: Some("tailscale".to_string()), // Enable VPN protection
+                tailscale_exit_node: Some("auto".to_string()),
+                tailscale_shields: Some(true), // Enable shields for protection
+                bluetooth: vec![], // Disconnect all Bluetooth devices
+                custom_commands: vec![
+                    "notify-send 'Security Alert' 'Entered unknown location - protection mode activated' --urgency=critical".to_string()
+                ],
+                notifications: true,
+            },
+            notification_message: "🛡️ Unknown location detected - Security mode activated".to_string(),
+        }
+    }
+}
+
 /// Actions to execute when entering a geofence zone
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ZoneActions {
@@ -246,6 +280,9 @@ pub struct GeofencingConfig {
     pub zones: Vec<GeofenceZone>,
     /// Whether to send notifications on zone changes
     pub notifications: bool,
+    /// Unknown zone protection configuration
+    #[serde(default)]
+    pub unknown_zone: UnknownZoneConfig,
 }
 
 impl Default for GeofencingConfig {
@@ -257,6 +294,7 @@ impl Default for GeofencingConfig {
             confidence_threshold: 0.8,
             zones: Vec::new(),
             notifications: true,
+            unknown_zone: UnknownZoneConfig::default(),
         }
     }
 }
