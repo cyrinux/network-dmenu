@@ -8,11 +8,15 @@ use super::{
     zones::ZoneManager,
     GeofencingConfig, LocationChange, Result, ZoneActions,
 };
+
+#[cfg(feature = "ml")]
+use crate::ml_integration::MlManager;
 use chrono::Utc;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
+#[cfg(not(feature = "ml"))]
 use tokio::time::interval;
 
 // Import network functions from the main codebase
@@ -24,6 +28,8 @@ pub struct GeofencingDaemon {
     config: GeofencingConfig,
     status: Arc<RwLock<DaemonStatusData>>,
     should_shutdown: Arc<RwLock<bool>>,
+    #[cfg(feature = "ml")]
+    ml_manager: Arc<Mutex<MlManager>>,
 }
 
 /// Internal daemon status data
@@ -34,6 +40,12 @@ struct DaemonStatusData {
     total_zone_changes: u32,
     startup_time: Instant,
     current_zone_id: Option<String>,
+    #[cfg(feature = "ml")]
+    ml_suggestions_generated: u32,
+    #[cfg(feature = "ml")]
+    adaptive_scan_interval: Duration,
+    #[cfg(feature = "ml")]
+    last_ml_update: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl GeofencingDaemon {
@@ -44,12 +56,21 @@ impl GeofencingDaemon {
 
         let zone_manager = Arc::new(Mutex::new(ZoneManager::new(config.clone())));
 
+        #[cfg(feature = "ml")]
+        let ml_manager = Arc::new(Mutex::new(MlManager::new()));
+
         let status = Arc::new(RwLock::new(DaemonStatusData {
             monitoring: false,
             last_scan: None,
             total_zone_changes: 0,
             startup_time: Instant::now(),
             current_zone_id: None,
+            #[cfg(feature = "ml")]
+            ml_suggestions_generated: 0,
+            #[cfg(feature = "ml")]
+            adaptive_scan_interval: Duration::from_secs(config.scan_interval_seconds),
+            #[cfg(feature = "ml")]
+            last_ml_update: None,
         }));
 
         debug!("Geofencing daemon created successfully");
@@ -58,6 +79,8 @@ impl GeofencingDaemon {
             config,
             status,
             should_shutdown: Arc::new(RwLock::new(false)),
+            #[cfg(feature = "ml")]
+            ml_manager,
         }
     }
 
@@ -89,6 +112,8 @@ impl GeofencingDaemon {
         let status = Arc::clone(&self.status);
         let should_shutdown = Arc::clone(&self.should_shutdown);
         let scan_interval = Duration::from_secs(self.config.scan_interval_seconds);
+        #[cfg(feature = "ml")]
+        let ml_manager = Arc::clone(&self.ml_manager);
         debug!("Scan interval set to {:?}", scan_interval);
 
         // Start location monitoring task
@@ -96,15 +121,31 @@ impl GeofencingDaemon {
             let zone_manager = Arc::clone(&zone_manager);
             let status = Arc::clone(&status);
             let should_shutdown = Arc::clone(&should_shutdown);
+            #[cfg(feature = "ml")]
+            let ml_manager = Arc::clone(&ml_manager);
 
             tokio::spawn(async move {
-                Self::location_monitoring_loop(
-                    zone_manager,
-                    status,
-                    should_shutdown,
-                    scan_interval,
-                )
-                .await;
+                #[cfg(feature = "ml")]
+                {
+                    Self::enhanced_location_monitoring_loop(
+                        zone_manager,
+                        status,
+                        should_shutdown,
+                        ml_manager,
+                        scan_interval,
+                    )
+                    .await;
+                }
+                #[cfg(not(feature = "ml"))]
+                {
+                    Self::location_monitoring_loop(
+                        zone_manager,
+                        status,
+                        should_shutdown,
+                        scan_interval,
+                    )
+                    .await;
+                }
             })
         };
 
@@ -113,8 +154,22 @@ impl GeofencingDaemon {
             let zone_manager = Arc::clone(&self.zone_manager);
             let status = Arc::clone(&self.status);
             let should_shutdown = Arc::clone(&self.should_shutdown);
+            #[cfg(feature = "ml")]
+            let ml_manager = Arc::clone(&self.ml_manager);
 
             tokio::spawn(async move {
+                #[cfg(feature = "ml")]
+                let command_handler = move |cmd| {
+                    Self::handle_ipc_command(
+                        Arc::clone(&zone_manager),
+                        Arc::clone(&status),
+                        Arc::clone(&should_shutdown),
+                        Arc::clone(&ml_manager),
+                        cmd,
+                    )
+                };
+
+                #[cfg(not(feature = "ml"))]
                 let command_handler = move |cmd| {
                     Self::handle_ipc_command(
                         Arc::clone(&zone_manager),
@@ -148,7 +203,8 @@ impl GeofencingDaemon {
         Ok(())
     }
 
-    /// Main location monitoring loop
+    /// Main location monitoring loop (non-ML version)
+    #[cfg(not(feature = "ml"))]
     async fn location_monitoring_loop(
         zone_manager: Arc<Mutex<ZoneManager>>,
         status: Arc<RwLock<DaemonStatusData>>,
@@ -342,11 +398,222 @@ impl GeofencingDaemon {
         );
     }
 
+    /// Enhanced location monitoring loop with ML-powered intelligence
+    #[cfg(feature = "ml")]
+    async fn enhanced_location_monitoring_loop(
+        zone_manager: Arc<Mutex<ZoneManager>>,
+        status: Arc<RwLock<DaemonStatusData>>,
+        should_shutdown: Arc<RwLock<bool>>,
+        ml_manager: Arc<Mutex<MlManager>>,
+        base_scan_interval: Duration,
+    ) {
+        info!("🧠 Starting ML-enhanced location monitoring with adaptive scanning");
+        let mut scan_count = 0u32;
+        let mut current_scan_interval = base_scan_interval;
+        let mut ml_update_counter = 0u32;
+
+        // Initialize ML system
+        {
+            let mut ml = ml_manager.lock().await;
+            ml.initialize();
+            info!("ML system initialized successfully");
+        }
+
+        loop {
+            let scan_start_time = std::time::Instant::now();
+            scan_count += 1;
+            ml_update_counter += 1;
+
+            debug!("🧠 Enhanced scan #{} (interval: {:?})", scan_count, current_scan_interval);
+
+            // Sleep for adaptive interval
+            tokio::time::sleep(current_scan_interval).await;
+
+            // Check for shutdown
+            if *should_shutdown.read().await {
+                debug!("Shutdown signal received, exiting enhanced monitoring loop");
+                
+                // Save ML models before shutdown
+                {
+                    let ml = ml_manager.lock().await;
+                    if let Err(e) = ml.save_models() {
+                        warn!("Failed to save ML models on shutdown: {}", e);
+                    } else {
+                        info!("ML models saved successfully");
+                    }
+                }
+                break;
+            }
+
+            // Skip if no zones configured
+            {
+                let manager = zone_manager.lock().await;
+                let zone_count = manager.list_zones().len();
+                if zone_count == 0 {
+                    debug!("No zones configured, skipping enhanced scan #{}", scan_count);
+                    continue;
+                }
+                debug!("Enhanced scanning with {} configured zones", zone_count);
+            }
+
+            // Generate ML-powered zone suggestions every 5 scans
+            if ml_update_counter >= 5 {
+                debug!("🧠 Generating ML-powered zone suggestions");
+                ml_update_counter = 0;
+                
+                let suggestions_generated = {
+                    let ml = ml_manager.lock().await;
+                    let manager = zone_manager.lock().await;
+                    
+                    let suggestions = ml.generate_zone_suggestions(&manager.list_zones());
+                    if !suggestions.is_empty() {
+                        info!("🧠 Generated {} zone suggestions", suggestions.len());
+                        for suggestion in &suggestions {
+                            debug!("  📍 Suggestion: {} (confidence: {:.2})", 
+                                   suggestion.suggested_name, suggestion.confidence);
+                        }
+                    }
+                    suggestions.len() as u32
+                };
+
+                // Update status with ML metrics
+                {
+                    let mut status_data = status.write().await;
+                    status_data.ml_suggestions_generated += suggestions_generated;
+                    status_data.last_ml_update = Some(Utc::now());
+                }
+            }
+
+            // Check for location change with ML learning
+            debug!("🧠 Detecting location change with ML learning for scan #{}", scan_count);
+            let location_change = {
+                let mut manager = zone_manager.lock().await;
+                manager.detect_location_change().await
+            };
+
+            match location_change {
+                Ok(Some(change)) => {
+                    info!("🧠 Enhanced zone change detected: {} -> {} (confidence: {:.2}%)", 
+                         change.from.as_ref().map(|z| z.name.as_str()).unwrap_or("None"),
+                         change.to.name, 
+                         change.confidence * 100.0);
+
+                    // ML zone change recording is handled in the enhanced loop only
+
+                    // Update status
+                    {
+                        let mut status_data = status.write().await;
+                        status_data.last_scan = Some(Utc::now());
+                        status_data.total_zone_changes += 1;
+                        status_data.current_zone_id = Some(change.to.id.clone());
+                    }
+
+                    // Execute zone actions
+                    debug!("🧠 Executing enhanced zone actions for zone '{}'", change.to.name);
+                    if let Err(e) = Self::execute_zone_actions(&change.suggested_actions).await {
+                        error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
+                    } else {
+                        debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
+                    }
+
+                    // Send notification if enabled
+                    if change.suggested_actions.notifications {
+                        debug!("Sending enhanced zone change notification for zone '{}'", change.to.name);
+                        Self::send_zone_change_notification(&change);
+                    }
+
+                    // Adjust scan interval based on zone change
+                    current_scan_interval = Self::calculate_adaptive_scan_interval(
+                        base_scan_interval,
+                        true, // zone changed
+                        scan_start_time.elapsed(),
+                    );
+                    
+                    {
+                        let mut status_data = status.write().await;
+                        status_data.adaptive_scan_interval = current_scan_interval;
+                    }
+                    
+                    debug!("🧠 Adjusted scan interval to {:?} after zone change", current_scan_interval);
+                }
+                Ok(None) => {
+                    debug!("🧠 No zone change detected in enhanced scan #{}", scan_count);
+                    
+                    // Update status
+                    {
+                        let mut status_data = status.write().await;
+                        status_data.last_scan = Some(Utc::now());
+                    }
+
+                    // Adjust scan interval for stable location
+                    current_scan_interval = Self::calculate_adaptive_scan_interval(
+                        base_scan_interval,
+                        false, // no zone change
+                        scan_start_time.elapsed(),
+                    );
+                    
+                    {
+                        let mut status_data = status.write().await;
+                        status_data.adaptive_scan_interval = current_scan_interval;
+                    }
+                }
+                Err(e) => {
+                    error!("🧠 Enhanced location detection failed in scan #{}: {}", scan_count, e);
+                    
+                    // Use exponential backoff on errors
+                    current_scan_interval = std::cmp::min(
+                        current_scan_interval * 2,
+                        Duration::from_secs(300) // Max 5 minutes
+                    );
+                    debug!("🧠 Increased scan interval to {:?} due to error", current_scan_interval);
+                }
+            }
+
+            // Update ML system with scan performance data every 10 scans
+            if scan_count % 10 == 0 {
+                let scan_duration = scan_start_time.elapsed();
+                let mut ml = ml_manager.lock().await;
+                ml.record_scan_performance(scan_duration, current_scan_interval);
+            }
+        }
+
+        info!("🧠 Enhanced location monitoring loop stopped after {} scans", scan_count);
+    }
+
+    /// Calculate adaptive scan interval based on recent activity
+    fn calculate_adaptive_scan_interval(
+        base_interval: Duration,
+        zone_changed: bool,
+        last_scan_duration: Duration,
+    ) -> Duration {
+        let base_seconds = base_interval.as_secs();
+        
+        let adjusted_seconds = if zone_changed {
+            // Increase frequency after zone change to catch rapid transitions
+            std::cmp::max(base_seconds / 2, 10) // Minimum 10 seconds
+        } else {
+            // Decrease frequency when stable, but consider scan performance
+            let performance_factor = if last_scan_duration > Duration::from_secs(5) {
+                1.5 // Slower scans if previous scan took long
+            } else {
+                1.2 // Normal backoff
+            };
+            
+            (base_seconds as f64 * performance_factor) as u64
+        };
+        
+        // Clamp to reasonable bounds
+        let clamped_seconds = std::cmp::min(std::cmp::max(adjusted_seconds, 10), 300);
+        Duration::from_secs(clamped_seconds)
+    }
+
     /// Handle IPC commands from clients
     async fn handle_ipc_command(
         zone_manager: Arc<Mutex<ZoneManager>>,
         status: Arc<RwLock<DaemonStatusData>>,
         should_shutdown: Arc<RwLock<bool>>,
+        #[cfg(feature = "ml")]
+        ml_manager: Arc<Mutex<crate::ml_integration::MlManager>>,
         command: DaemonCommand,
     ) -> DaemonResponse {
         debug!("Handling IPC command: {:?}", command);
@@ -511,6 +778,157 @@ impl GeofencingDaemon {
                         warn!("Failed to execute requested actions: {}", e);
                         DaemonResponse::Error {
                             message: format!("Failed to execute actions: {}", e),
+                        }
+                    }
+                }
+            }
+
+            DaemonCommand::GetStatus => {
+                debug!("Processing GetStatus command");
+                let status_data = status.read().await;
+                let daemon_status = DaemonStatus {
+                    monitoring: status_data.monitoring,
+                    zone_count: {
+                        let manager = zone_manager.lock().await;
+                        manager.list_zones().len()
+                    },
+                    active_zone_id: {
+                        let manager = zone_manager.lock().await;
+                        manager.get_current_zone().map(|z| z.id.clone())
+                    },
+                    last_scan: {
+                        let manager = zone_manager.lock().await;
+                        manager.get_last_scan()
+                    },
+                    total_zone_changes: {
+                        let manager = zone_manager.lock().await;
+                        manager.get_total_zone_changes()
+                    },
+                    uptime_seconds: status_data.startup_time.elapsed().as_secs(),
+                    #[cfg(feature = "ml")]
+                    ml_suggestions_generated: status_data.ml_suggestions_generated,
+                    #[cfg(feature = "ml")]
+                    adaptive_scan_interval_seconds: status_data.adaptive_scan_interval.as_secs(),
+                    #[cfg(feature = "ml")]
+                    last_ml_update: status_data.last_ml_update,
+                };
+                debug!("Daemon status: monitoring={}, {} zones, active_zone={:?}, {} zone changes, uptime={}s", daemon_status.monitoring, daemon_status.zone_count, daemon_status.active_zone_id, daemon_status.total_zone_changes, daemon_status.uptime_seconds);
+                DaemonResponse::Status {
+                    status: daemon_status,
+                }
+            }
+
+            DaemonCommand::Shutdown => {
+                debug!("Processing Shutdown command");
+                info!("Received shutdown command from client");
+                *should_shutdown.write().await = true;
+                debug!("Shutdown flag set to true");
+                DaemonResponse::Success
+            }
+
+            #[cfg(feature = "ml")]
+            DaemonCommand::GetZoneSuggestions => {
+                debug!("Processing GetZoneSuggestions command");
+                let ml_manager = ml_manager.lock().await;
+                let manager = zone_manager.lock().await;
+                let suggestions = ml_manager.generate_zone_suggestions(&manager.list_zones());
+                debug!("Generated {} zone suggestions", suggestions.len());
+                DaemonResponse::ZoneSuggestions { suggestions }
+            }
+
+            #[cfg(feature = "ml")]
+            DaemonCommand::GetMlMetrics => {
+                debug!("Processing GetMlMetrics command");
+                let ml_manager = ml_manager.lock().await;
+                let metrics = ml_manager.get_ml_metrics();
+                debug!("Retrieved ML metrics: model_version={}", metrics.ml_model_version);
+                DaemonResponse::MlMetrics { metrics }
+            }
+        }
+    }
+
+    /// Handle IPC commands from clients (non-ML version)
+    #[cfg(not(feature = "ml"))]
+    async fn handle_ipc_command(
+        zone_manager: Arc<Mutex<ZoneManager>>,
+        status: Arc<RwLock<DaemonStatusData>>,
+        should_shutdown: Arc<RwLock<bool>>,
+        command: DaemonCommand,
+    ) -> DaemonResponse {
+        debug!("Handling IPC command: {:?}", command);
+
+        match command {
+            DaemonCommand::GetCurrentLocation => {
+                debug!("Processing GetCurrentLocation command");
+                match super::fingerprinting::create_wifi_fingerprint(super::PrivacyMode::High).await
+                {
+                    Ok(fingerprint) => {
+                        debug!("Successfully created location fingerprint with {} WiFi networks, confidence: {:.2}",
+                            fingerprint.wifi_networks.len(), fingerprint.confidence_score);
+                        DaemonResponse::LocationUpdate { fingerprint }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create location fingerprint: {}", e);
+                        DaemonResponse::Error {
+                            message: format!("Failed to get location: {}", e),
+                        }
+                    }
+                }
+            }
+
+            DaemonCommand::GetActiveZone => {
+                debug!("Processing GetActiveZone command");
+                let manager = zone_manager.lock().await;
+                let zone = manager.get_current_zone().cloned();
+                if let Some(ref zone) = zone {
+                    debug!("Current active zone: {} (ID: {})", zone.name, zone.id);
+                } else {
+                    debug!("No active zone currently detected");
+                }
+                DaemonResponse::ActiveZone { zone }
+            }
+
+            DaemonCommand::ListZones => {
+                debug!("Processing ListZones command");
+                let manager = zone_manager.lock().await;
+                let zones = manager.list_zones();
+                debug!("Returning {} configured zones", zones.len());
+                DaemonResponse::ZoneList { zones }
+            }
+
+            DaemonCommand::CreateZone { name, actions } => {
+                debug!("Processing CreateZone command for zone: {}", name);
+                let mut manager = zone_manager.lock().await;
+                match manager.create_zone(name, actions) {
+                    Ok(zone) => {
+                        debug!("Successfully created zone: {} (ID: {})", zone.name, zone.id);
+                        DaemonResponse::ZoneCreated { zone }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create zone: {}", e);
+                        DaemonResponse::Error {
+                            message: format!("Failed to create zone: {}", e),
+                        }
+                    }
+                }
+            }
+
+            DaemonCommand::AddFingerprint { zone_name } => {
+                debug!("Processing AddFingerprint command for zone: {}", zone_name);
+                let mut manager = zone_manager.lock().await;
+                match manager.add_fingerprint_to_zone(&zone_name).await {
+                    Ok(_) => {
+                        debug!("Successfully added fingerprint to zone: {}", zone_name);
+                        DaemonResponse::FingerprintAdded {
+                            success: true,
+                            message: "Fingerprint added successfully".to_string(),
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to add fingerprint to zone {}: {}", zone_name, e);
+                        DaemonResponse::FingerprintAdded {
+                            success: false,
+                            message: format!("Failed to add fingerprint: {}", e),
                         }
                     }
                 }

@@ -35,6 +35,12 @@ pub enum DaemonCommand {
     GetStatus,
     /// Shutdown the daemon gracefully
     Shutdown,
+    /// Get ML-powered zone suggestions (requires ml feature)
+    #[cfg(feature = "ml")]
+    GetZoneSuggestions,
+    /// Get ML performance metrics (requires ml feature)
+    #[cfg(feature = "ml")]
+    GetMlMetrics,
 }
 
 /// Responses from the daemon
@@ -62,6 +68,12 @@ pub enum DaemonResponse {
     Success,
     /// Error response
     Error { message: String },
+    /// ML zone suggestions response (requires ml feature)
+    #[cfg(feature = "ml")]
+    ZoneSuggestions { suggestions: Vec<ZoneSuggestion> },
+    /// ML metrics response (requires ml feature)
+    #[cfg(feature = "ml")]
+    MlMetrics { metrics: MlDaemonMetrics },
 }
 
 /// Daemon status information
@@ -79,6 +91,70 @@ pub struct DaemonStatus {
     pub total_zone_changes: u32,
     /// Daemon uptime in seconds
     pub uptime_seconds: u64,
+    /// ML-specific metrics (only when ml feature is enabled)
+    #[cfg(feature = "ml")]
+    pub ml_suggestions_generated: u32,
+    #[cfg(feature = "ml")]
+    pub adaptive_scan_interval_seconds: u64,
+    #[cfg(feature = "ml")]
+    pub last_ml_update: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Zone suggestion from ML system (requires ml feature)
+#[cfg(feature = "ml")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ZoneSuggestion {
+    pub suggested_name: String,
+    pub confidence: f64,
+    pub reasoning: String,
+    pub evidence: SuggestionEvidence,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub priority: SuggestionPriority,
+}
+
+/// Evidence supporting a zone suggestion (requires ml feature)
+#[cfg(feature = "ml")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SuggestionEvidence {
+    pub visit_count: u32,
+    pub total_time: std::time::Duration,
+    pub average_visit_duration: std::time::Duration,
+    pub common_visit_times: Vec<String>,
+    pub common_actions: Vec<String>,
+    pub similar_zones: Vec<String>,
+}
+
+/// Priority level for zone suggestions (requires ml feature)
+#[cfg(feature = "ml")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum SuggestionPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// ML daemon metrics (requires ml feature)
+#[cfg(feature = "ml")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MlDaemonMetrics {
+    pub total_suggestions_generated: u32,
+    pub suggestion_accuracy_rate: f64,
+    pub zone_prediction_confidence: f64,
+    pub adaptive_scan_effectiveness: f64,
+    pub ml_model_version: String,
+    pub last_model_training: Option<chrono::DateTime<chrono::Utc>>,
+    pub performance_metrics: MlPerformanceMetrics,
+}
+
+/// ML performance metrics (requires ml feature)
+#[cfg(feature = "ml")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MlPerformanceMetrics {
+    pub average_prediction_time_ms: f64,
+    pub memory_usage_mb: f64,
+    pub cache_hit_rate: f64,
+    pub training_data_size: usize,
 }
 
 /// Client for communicating with the daemon

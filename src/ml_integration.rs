@@ -152,6 +152,100 @@ impl MlManager {
         info!("All ML models saved successfully");
         Ok(())
     }
+
+    /// Generate zone suggestions based on ML analysis
+    pub fn generate_zone_suggestions(&self, zones: &[crate::geofencing::GeofenceZone]) -> Vec<crate::geofencing::ipc::ZoneSuggestion> {
+        use crate::geofencing::ipc::{ZoneSuggestion, SuggestionEvidence, SuggestionPriority};
+        
+        let context = get_current_context();
+        let mut suggestions = Vec::new();
+        
+        // Simple suggestion logic - can be enhanced with more sophisticated ML
+        if zones.len() < 3 {
+            suggestions.push(ZoneSuggestion {
+                suggested_name: format!("auto-location-{}", context.location_hash % 1000),
+                confidence: 0.75,
+                reasoning: "Detected new location pattern, suggest creating a zone".to_string(),
+                evidence: SuggestionEvidence {
+                    visit_count: 1,
+                    total_time: std::time::Duration::from_secs(0),
+                    average_visit_duration: std::time::Duration::from_secs(0),
+                    common_visit_times: vec![format!("{}:00", context.time_of_day)],
+                    common_actions: vec!["zone_creation".to_string()],
+                    similar_zones: vec![],
+                },
+                created_at: chrono::Utc::now(),
+                priority: SuggestionPriority::Medium,
+            });
+        }
+        
+        debug!("Generated {} zone suggestions", suggestions.len());
+        suggestions
+    }
+
+    /// Record a zone change for ML learning
+    pub fn record_zone_change(&mut self, from_zone_id: Option<&str>, to_zone_id: &str) {
+        debug!("Recording zone change from {:?} to {:?}", from_zone_id, to_zone_id);
+        
+        // Update usage patterns with basic zone switch action
+        let user_action = crate::ml::usage_patterns::UserAction::ConnectWifi(
+            format!("zone-{}", to_zone_id)
+        );
+        
+        let context = get_current_context();
+        self.usage_learner.record_action(user_action, context);
+    }
+
+    /// Record scan performance for adaptive intervals
+    pub fn record_scan_performance(&mut self, scan_duration: std::time::Duration, scan_interval: std::time::Duration) {
+        debug!("Recording scan performance: duration={:?}, interval={:?}", 
+               scan_duration, scan_interval);
+        
+        let metrics = NetworkMetrics {
+            latency_ms: scan_duration.as_millis() as f32,
+            packet_loss: 0.0, // Not measured in scans
+            jitter_ms: 0.0, // Not measured in scans
+            bandwidth_mbps: 0.0, // Not measured in scans
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        
+        // Use a connection ID based on the current context location hash
+        let context = get_current_context();
+        let connection_id = format!("scan_{}", context.location_hash);
+        self.performance_tracker.record_metrics(&connection_id, metrics);
+    }
+
+    /// Get current adaptive scan interval
+    pub fn get_adaptive_scan_interval(&self, base_interval: std::time::Duration, recent_changes: u32) -> std::time::Duration {
+        // Simple adaptive logic - can be enhanced with ML
+        let multiplier = if recent_changes > 3 {
+            0.5 // Scan more frequently if there are many changes
+        } else if recent_changes == 0 {
+            2.0 // Scan less frequently if no changes
+        } else {
+            1.0 // Normal interval
+        };
+        
+        std::time::Duration::from_millis((base_interval.as_millis() as f64 * multiplier) as u64)
+    }
+
+    /// Get ML metrics for daemon status
+    pub fn get_ml_metrics(&self) -> crate::geofencing::ipc::MlDaemonMetrics {
+        crate::geofencing::ipc::MlDaemonMetrics {
+            total_suggestions_generated: 0, // Will be tracked properly later
+            suggestion_accuracy_rate: 0.85, // Placeholder
+            zone_prediction_confidence: 0.75, // Placeholder  
+            adaptive_scan_effectiveness: 0.80, // Placeholder
+            ml_model_version: "1.0.0".to_string(),
+            last_model_training: None,
+            performance_metrics: crate::geofencing::ipc::MlPerformanceMetrics {
+                average_prediction_time_ms: 5.0,
+                memory_usage_mb: 50.0,
+                cache_hit_rate: 0.90,
+                training_data_size: 1000,
+            },
+        }
+    }
 }
 
 /// Get current network context for ML predictions

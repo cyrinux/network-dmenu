@@ -595,12 +595,15 @@ impl PowerMonitor {
         let system_name = System::name().unwrap_or_default();
         let kernel_version = System::kernel_version().unwrap_or_default();
         let host_name = System::host_name().unwrap_or_default();
-        
-        debug!("System: {}, Kernel: {}, Host: {}", system_name, kernel_version, host_name);
-        
+
+        debug!(
+            "System: {}, Kernel: {}, Host: {}",
+            system_name, kernel_version, host_name
+        );
+
         // Use heuristics to determine if this is a battery-powered system
         let is_likely_laptop = Self::detect_laptop_system(system);
-        
+
         if is_likely_laptop {
             debug!("Detected likely laptop/mobile system, checking for battery via filesystem");
             // Use filesystem approach with better error handling
@@ -622,28 +625,30 @@ impl PowerMonitor {
         let cpu_count = system.cpus().len();
         let total_memory_kb = system.total_memory();
         let system_name = System::name().unwrap_or_default().to_lowercase();
-        
+
         // CPU count heuristic (laptops typically have fewer cores)
         let cpu_suggests_laptop = cpu_count <= 8;
-        
+
         // Memory heuristic (laptops often have less RAM, but this is less reliable now)
         let memory_gb = total_memory_kb / (1024 * 1024);
         let memory_suggests_mobile = memory_gb <= 32; // 32GB or less might be laptop
-        
+
         // System name heuristics
-        let name_suggests_laptop = system_name.contains("book") 
-            || system_name.contains("laptop") 
+        let name_suggests_laptop = system_name.contains("book")
+            || system_name.contains("laptop")
             || system_name.contains("mobile")
             || system_name.contains("surface")
             || system_name.contains("thinkpad")
             || system_name.contains("macbook");
-        
+
         // Combine heuristics - if any strongly suggests laptop, assume laptop
         let result = name_suggests_laptop || (cpu_suggests_laptop && memory_suggests_mobile);
-        
-        debug!("Laptop detection: CPU cores: {}, Memory: {}GB, System: '{}', Result: {}", 
-               cpu_count, memory_gb, system_name, result);
-        
+
+        debug!(
+            "Laptop detection: CPU cores: {}, Memory: {}GB, System: '{}', Result: {}",
+            cpu_count, memory_gb, system_name, result
+        );
+
         result
     }
 
@@ -651,40 +656,45 @@ impl PowerMonitor {
     fn read_battery_via_sysfs() -> Result<BatteryInfo> {
         use std::fs;
         use std::path::Path;
-        
+
         // Look for battery information in common locations
         let battery_paths = [
             "/sys/class/power_supply/BAT0",
-            "/sys/class/power_supply/BAT1", 
+            "/sys/class/power_supply/BAT1",
             "/sys/class/power_supply/battery",
             "/sys/class/power_supply/macsmc-battery",
         ];
-        
+
         for battery_path in &battery_paths {
             if Path::new(battery_path).exists() {
                 debug!("Found battery at: {}", battery_path);
-                
+
                 // Read battery capacity
-                let capacity = if let Ok(content) = fs::read_to_string(format!("{}/capacity", battery_path)) {
-                    content.trim().parse::<u8>().unwrap_or(50)
-                } else {
-                    50 // Default if we can't read capacity
-                };
-                
-                // Read charging status  
-                let status = if let Ok(content) = fs::read_to_string(format!("{}/status", battery_path)) {
-                    content.trim().to_lowercase()
-                } else {
-                    "unknown".to_string()
-                };
-                
+                let capacity =
+                    if let Ok(content) = fs::read_to_string(format!("{}/capacity", battery_path)) {
+                        content.trim().parse::<u8>().unwrap_or(50)
+                    } else {
+                        50 // Default if we can't read capacity
+                    };
+
+                // Read charging status
+                let status =
+                    if let Ok(content) = fs::read_to_string(format!("{}/status", battery_path)) {
+                        content.trim().to_lowercase()
+                    } else {
+                        "unknown".to_string()
+                    };
+
                 let charging = status.contains("charging");
-                
+
                 // Check for AC adapter
                 let ac_connected = Self::check_ac_power_sysfs().unwrap_or(!charging);
-                
-                debug!("Battery found: {}%, charging: {}, AC: {}", capacity, charging, ac_connected);
-                
+
+                debug!(
+                    "Battery found: {}%, charging: {}, AC: {}",
+                    capacity, charging, ac_connected
+                );
+
                 return Ok(BatteryInfo {
                     ac_connected,
                     battery_level: capacity,
@@ -692,7 +702,7 @@ impl PowerMonitor {
                 });
             }
         }
-        
+
         // No battery found - likely desktop
         debug!("No battery detected, assuming desktop with AC power");
         Ok(BatteryInfo {
@@ -705,14 +715,14 @@ impl PowerMonitor {
     #[cfg(feature = "geofencing")]
     fn check_ac_power_sysfs() -> Option<bool> {
         use std::fs;
-        
+
         let ac_paths = [
             "/sys/class/power_supply/ADP1/online",
-            "/sys/class/power_supply/AC/online", 
+            "/sys/class/power_supply/AC/online",
             "/sys/class/power_supply/ACAD/online",
             "/sys/class/power_supply/macsmc-ac/online",
         ];
-        
+
         for ac_path in &ac_paths {
             if let Ok(content) = fs::read(ac_path) {
                 if let Ok(content_str) = String::from_utf8(content) {
@@ -721,7 +731,7 @@ impl PowerMonitor {
                 }
             }
         }
-        
+
         None
     }
 
