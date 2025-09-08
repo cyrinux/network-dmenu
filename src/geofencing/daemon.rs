@@ -259,6 +259,8 @@ impl GeofencingDaemon {
                 let zone_count = manager.list_zones().len();
                 if zone_count == 0 {
                     debug!("No zones configured, skipping scan #{}", scan_count);
+                    // Wait for interval even when no zones are configured to prevent CPU spinning
+                    interval.tick().await;
                     continue;
                 }
                 debug!("Scanning with {} configured zones", zone_count);
@@ -605,6 +607,8 @@ impl GeofencingDaemon {
                 let zone_count = manager.list_zones().len();
                 if zone_count == 0 {
                     debug!("No zones configured, skipping enhanced scan #{}", scan_count);
+                    // Wait for scan interval even when no zones are configured to prevent CPU spinning
+                    tokio::time::sleep(current_scan_interval).await;
                     continue;
                 }
                 debug!("Enhanced scanning with {} configured zones", zone_count);
