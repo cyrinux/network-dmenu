@@ -72,13 +72,27 @@ pub async fn get_firewalld_actions_async() -> Vec<FirewalldAction> {
     ];
 
     // Add zone switching actions
-    if let Ok(zones) = get_available_zones_async().await {
-        let current_zone = get_current_zone_async().await.unwrap_or_default();
+    debug!("Attempting to get available zones");
+    match get_available_zones_async().await {
+        Ok(zones) => {
+            debug!("Successfully got {} zones", zones.len());
+            let current_zone = get_current_zone_async().await.unwrap_or_default();
+            debug!("Current zone: {}", current_zone);
 
-        for zone in zones {
-            // Don't show action for current zone
-            if zone.name != current_zone {
-                actions.push(FirewalldAction::SetZone(zone.name));
+            for zone in zones {
+                // Don't show action for current zone
+                if zone.name != current_zone {
+                    debug!("Adding zone switching action for: {}", zone.name);
+                    actions.push(FirewalldAction::SetZone(zone.name));
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Failed to get zones: {}, adding fallback zones", e);
+            // Add common zones as fallback when zone enumeration fails
+            let fallback_zones = vec!["public", "home", "work", "trusted", "block", "drop"];
+            for zone in fallback_zones {
+                actions.push(FirewalldAction::SetZone(zone.to_string()));
             }
         }
     }
