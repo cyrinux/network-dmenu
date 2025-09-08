@@ -294,8 +294,8 @@ impl MlManager {
         };
         
         {
-            let result = base_effectiveness * time_effectiveness;
-            if result < 0.5 { 0.5 } else if result > 1.0 { 1.0 } else { result }
+            let result: f64 = base_effectiveness * time_effectiveness;
+            result.clamp(0.5, 1.0)
         }
     }
 
@@ -400,7 +400,7 @@ impl MlManager {
         };
         confidence_multiplier *= network_factor;
         
-        let final_confidence = (base_confidence as f64 * confidence_multiplier as f64).clamp(0.0, 1.0);
+        let final_confidence = (base_confidence * confidence_multiplier as f64).clamp(0.0, 1.0);
         
         debug!("🎯 Zone confidence calculation for {}: base={:.3}, signal_factor={:.3}, network_factor={:.3}, final={:.3}", 
                zone_id, base_confidence, 
@@ -462,8 +462,8 @@ impl MlManager {
             _ => 0.0,
         };
         
-        let sum = base_threshold + network_adjustment;
-        let dynamic_threshold = if sum < 0.5 { 0.5 } else if sum > 0.95 { 0.95 } else { sum };
+        let sum: f64 = base_threshold + network_adjustment;
+        let dynamic_threshold = sum.clamp(0.5, 0.95);
         
         debug!("🎯 Dynamic confidence threshold for {}: base={:.3}, network_adj={:.3}, final={:.3}",
                zone_id, base_threshold, network_adjustment, dynamic_threshold);
@@ -505,8 +505,8 @@ impl MlManager {
             0.10  // Single visit requires higher confidence
         };
         
-        let sum = base_threshold + network_adjustment + priority_adjustment + evidence_adjustment;
-        let final_threshold = if sum < 0.75 { 0.75 } else if sum > 0.95 { 0.95 } else { sum };
+        let sum: f64 = base_threshold + network_adjustment + priority_adjustment + evidence_adjustment;
+        let final_threshold = sum.clamp(0.75, 0.95);
         
         let should_accept = suggestion.confidence >= final_threshold;
         
@@ -828,7 +828,7 @@ impl ZoneTransitionSmoother {
         
         {
             let sum = decayed_threshold + network_adjustment;
-            if sum < 0.8 { 0.8 } else if sum > 0.95 { 0.95 } else { sum }
+            sum.clamp(0.8, 0.95)
         }
     }
 

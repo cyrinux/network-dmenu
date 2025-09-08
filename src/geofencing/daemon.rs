@@ -859,7 +859,7 @@ impl GeofencingDaemon {
                 let recent_changes = status.read().await.total_zone_changes % 10; // Recent changes in window
                 current_scan_interval = ml.get_adaptive_scan_interval(
                     base_scan_interval,
-                    recent_changes as u32,
+                    recent_changes,
                     &context
                 );
                 
@@ -903,7 +903,7 @@ impl GeofencingDaemon {
         };
         
         // Clamp to reasonable bounds
-        let clamped_seconds = std::cmp::min(std::cmp::max(adjusted_seconds, 10), 300);
+        let clamped_seconds = adjusted_seconds.clamp(10, 300);
         Duration::from_secs(clamped_seconds)
     }
 
