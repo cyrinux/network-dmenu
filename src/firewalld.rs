@@ -19,8 +19,6 @@ pub enum FirewalldAction {
     TogglePanicMode(bool),
     /// Get current zone
     GetCurrentZone,
-    /// List all zones
-    ListZones,
     /// Open firewalld configuration editor
     OpenConfigEditor,
 }
@@ -54,9 +52,6 @@ impl FirewalldAction {
             FirewalldAction::GetCurrentZone => {
                 format!("firewalld  - {} Show current zone", ICON_LOCK)
             }
-            FirewalldAction::ListZones => {
-                format!("firewalld  - {} List all zones", ICON_LOCK)
-            }
             FirewalldAction::OpenConfigEditor => {
                 "firewalld  - ⚙️ Open firewall configuration".to_string()
             }
@@ -73,7 +68,6 @@ pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<Firewall
 
     let mut actions = vec![
         FirewalldAction::GetCurrentZone,
-        FirewalldAction::ListZones,
         FirewalldAction::OpenConfigEditor,
     ];
 
@@ -119,21 +113,6 @@ pub async fn handle_firewalld_action(
         FirewalldAction::GetCurrentZone => {
             let zone = get_current_zone(command_runner)?;
             println!("Current firewalld zone: {}", zone);
-            Ok(true)
-        }
-        FirewalldAction::ListZones => {
-            let zones = get_available_zones(command_runner)?;
-            println!("Available firewalld zones:");
-            for zone in zones {
-                let marker = if zone.is_active {
-                    " (active)"
-                } else if zone.is_default {
-                    " (default)"
-                } else {
-                    ""
-                };
-                println!("  {}{} - {}", zone.name, marker, zone.description);
-            }
             Ok(true)
         }
         FirewalldAction::OpenConfigEditor => {
@@ -406,9 +385,6 @@ mod tests {
         assert!(current_zone
             .to_display_string()
             .contains("Show current zone"));
-
-        let list_zones = FirewalldAction::ListZones;
-        assert!(list_zones.to_display_string().contains("List all zones"));
 
         let config_editor = FirewalldAction::OpenConfigEditor;
         assert!(config_editor

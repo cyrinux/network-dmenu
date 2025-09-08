@@ -1361,7 +1361,6 @@ async fn set_action(
                         FirewalldAction::GetCurrentZone => {
                             "Current firewalld zone displayed".to_string()
                         }
-                        FirewalldAction::ListZones => "Firewalld zones listed".to_string(),
                         FirewalldAction::OpenConfigEditor => {
                             "Firewalld configuration editor opened".to_string()
                         }
