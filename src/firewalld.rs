@@ -192,39 +192,26 @@ async fn is_firewalld_available_async() -> bool {
         return false;
     }
     
-    // Check if firewalld service is running using systemctl (much faster than firewall-cmd --state)
-    let service_check = tokio::time::timeout(
+    // Check if firewalld process is running (works with any init system, not just systemd)
+    let process_check = tokio::time::timeout(
         std::time::Duration::from_millis(100),
-        tokio::process::Command::new("systemctl")
-            .args(["is-active", "--quiet", "firewalld"])
+        tokio::process::Command::new("pgrep")
+            .args(["-f", "firewalld"])
             .output()
     ).await;
     
-    let service_running = service_check
+    let process_running = process_check
         .map(|result| result.map(|output| output.status.success()).unwrap_or(false))
         .unwrap_or(false);
     
-    if !service_running {
-        debug!("firewalld service is not running or not responsive");
+    if !process_running {
+        debug!("firewalld process is not running");
         return false;
     }
     
-    // Additional quick test with timeout to ensure firewall-cmd actually works (avoid slow D-Bus issues)
-    let cmd_test = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        tokio::process::Command::new("firewall-cmd")
-            .arg("--get-default-zone")
-            .output()
-    ).await;
-    
-    let cmd_works = cmd_test
-        .map(|result| result.map(|output| output.status.success()).unwrap_or(false))
-        .unwrap_or(false);
-    
-    if !cmd_works {
-        debug!("firewall-cmd is not responding within timeout or has D-Bus issues");
-        return false;
-    }
+    // Skip the firewall-cmd validation test - if process is running, assume it will work
+    // The individual firewall-cmd calls will handle any issues gracefully
+    debug!("firewalld process detected, assuming it's functional");
     
     debug!("firewalld appears to be available and running");
     true
@@ -244,15 +231,15 @@ fn is_firewalld_available() -> bool {
         return false;
     }
     
-    // Check if firewalld service is running using systemctl (much faster than firewall-cmd --state)
-    let service_running = Command::new("systemctl")
-        .args(["is-active", "--quiet", "firewalld"])
+    // Check if firewalld process is running (works with any init system, not just systemd)
+    let process_running = Command::new("pgrep")
+        .args(["-f", "firewalld"])
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
     
-    if !service_running {
-        debug!("firewalld service is not running");
+    if !process_running {
+        debug!("firewalld process is not running");
         return false;
     }
     
@@ -262,10 +249,13 @@ fn is_firewalld_available() -> bool {
 
 /// Get the current active zone (async version)
 async fn get_current_zone_async() -> Result<String, Box<dyn Error + Send + Sync>> {
-    let output = tokio::process::Command::new("firewall-cmd")
-        .arg("--get-default-zone")
-        .output()
-        .await?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("firewall-cmd")
+            .arg("--get-default-zone")
+            .output()
+    ).await
+    .map_err(|_| "firewall-cmd timeout")??;
 
     if !output.status.success() {
         return Err("Failed to get current zone".into());
@@ -293,11 +283,14 @@ fn get_current_zone(command_runner: &dyn CommandRunner) -> Result<String, Box<dy
 
 /// Get available firewalld zones with information (async version)
 async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error + Send + Sync>> {
-    // Get list of zones
-    let zones_output = tokio::process::Command::new("firewall-cmd")
-        .arg("--get-zones")
-        .output()
-        .await?;
+    // Get list of zones with timeout
+    let zones_output = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("firewall-cmd")
+            .arg("--get-zones")
+            .output()
+    ).await
+    .map_err(|_| "firewall-cmd --get-zones timeout")??;
     if !zones_output.status.success() {
         return Err("Failed to get zones list".into());
     }
@@ -308,11 +301,14 @@ async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error
     // Get current default zone
     let current_zone = get_current_zone_async().await.unwrap_or_default();
 
-    // Get active zones
-    let active_zones_output = tokio::process::Command::new("firewall-cmd")
-        .arg("--get-active-zones")
-        .output()
-        .await?;
+    // Get active zones with timeout
+    let active_zones_output = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("firewall-cmd")
+            .arg("--get-active-zones")
+            .output()
+    ).await
+    .map_err(|_| "firewall-cmd --get-active-zones timeout")??;
     let active_zones_str = if active_zones_output.status.success() {
         String::from_utf8(active_zones_output.stdout).unwrap_or_default()
     } else {
@@ -322,11 +318,14 @@ async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error
     let mut zones = Vec::new();
 
     for zone_name in zone_names {
-        // Get zone description
-        let info_output = tokio::process::Command::new("firewall-cmd")
-            .args(["--zone", zone_name, "--get-description"])
-            .output()
-            .await?;
+        // Get zone description with timeout
+        let info_output = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::process::Command::new("firewall-cmd")
+                .args(["--zone", zone_name, "--get-description"])
+                .output()
+        ).await
+        .map_err(|_| "firewall-cmd zone description timeout")??;
 
         let description = if info_output.status.success() {
             String::from_utf8(info_output.stdout)
@@ -425,10 +424,13 @@ fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<()
 
 /// Check if panic mode is enabled (async version)
 async fn is_panic_mode_enabled_async() -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let output = tokio::process::Command::new("firewall-cmd")
-        .arg("--query-panic-on")
-        .output()
-        .await?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("firewall-cmd")
+            .arg("--query-panic-on")
+            .output()
+    ).await
+    .map_err(|_| "firewall-cmd panic mode timeout")??;
 
     // firewall-cmd returns 0 if panic mode is on, 1 if off
     Ok(output.status.success())

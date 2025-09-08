@@ -62,6 +62,9 @@ struct Args {
     no_nextdns: bool,
     #[arg(long)]
     no_tor: bool,
+    #[cfg(feature = "firewalld")]
+    #[arg(long)]
+    no_firewalld: bool,
     #[arg(
         long,
         default_value = "",
