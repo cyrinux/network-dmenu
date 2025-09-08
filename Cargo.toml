@@ -1,3 +1,12 @@
+[workspace]
+members = [
+    ".",
+    "xtask",
+    "network-monitor-ebpf",
+    "network-monitor-common"
+]
+resolver = "2"
+
 [package]
 name = "network-dmenu"
 version = "2.13.0"
@@ -27,6 +36,7 @@ geofencing = [
 ]
 firewalld = []
 tailscale = []
+bpf = ["aya", "aya-log", "bytes", "tokio-stream", "network-monitor-common"]
 
 [dependencies]
 dirs = "6.0"
@@ -79,6 +89,13 @@ libc = { version = "0.2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 sysinfo = { version = "0.36", optional = true }
+
+# BPF dependencies (optional)
+aya = { version = "0.13", optional = true, features = ["async_tokio"] }
+aya-log = { version = "0.2", optional = true }
+bytes = { version = "1.0", optional = true }
+tokio-stream = { version = "0.1", optional = true }
+network-monitor-common = { path = "network-monitor-common", features = ["user"], optional = true }
 
 [dev-dependencies]
 mockall = "0.12"

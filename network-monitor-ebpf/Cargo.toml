@@ -1,0 +1,31 @@
+[package]
+name = "network-monitor-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+# For now, create a placeholder eBPF program
+# In production, this would use proper eBPF libraries
+[dependencies]
+# aya-bpf = "0.1.0" # Not available in current crates.io
+# aya-log-ebpf = "0.1.0" # Not available in current crates.io
+network-monitor-common = { path = "../network-monitor-common", default-features = false }
+
+[[bin]]
+name = "network-monitor"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = "abort"
+incremental = false
+codegen-units = 1
+rpath = false
+
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1

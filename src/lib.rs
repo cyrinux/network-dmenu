@@ -4,6 +4,8 @@
 //! Wi-Fi networks (via NetworkManager and iwd), VPN connections, and Bluetooth devices.
 
 pub mod bluetooth;
+#[cfg(feature = "bpf")]
+pub mod bpf;
 pub mod command;
 pub mod constants;
 pub mod diagnostics;

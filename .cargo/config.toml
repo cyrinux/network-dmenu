@@ -1,0 +1,11 @@
+[build]
+target-dir = "target"
+
+[target.bpfel-unknown-none]
+runner = "bpf-linker"
+
+[target.bpfeb-unknown-none]
+runner = "bpf-linker"
+
+[unstable]
+build-std = ["core"]
