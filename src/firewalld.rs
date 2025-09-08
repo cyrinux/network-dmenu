@@ -59,7 +59,38 @@ impl FirewalldAction {
     }
 }
 
-/// Get available firewalld actions
+/// Get available firewalld actions (async version)
+pub async fn get_firewalld_actions_async() -> Vec<FirewalldAction> {
+    if !is_firewalld_available_async().await {
+        debug!("firewall-cmd not available, skipping firewalld actions");
+        return vec![];
+    }
+
+    let mut actions = vec![
+        FirewalldAction::GetCurrentZone,
+        FirewalldAction::OpenConfigEditor,
+    ];
+
+    // Add zone switching actions
+    if let Ok(zones) = get_available_zones_async().await {
+        let current_zone = get_current_zone_async().await.unwrap_or_default();
+
+        for zone in zones {
+            // Don't show action for current zone
+            if zone.name != current_zone {
+                actions.push(FirewalldAction::SetZone(zone.name));
+            }
+        }
+    }
+
+    // Add panic mode toggle
+    let panic_enabled = is_panic_mode_enabled_async().await.unwrap_or(false);
+    actions.push(FirewalldAction::TogglePanicMode(!panic_enabled));
+
+    actions
+}
+
+/// Get available firewalld actions (sync version for backwards compatibility)
 pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<FirewalldAction> {
     if !is_firewalld_available() {
         debug!("firewall-cmd not available, skipping firewalld actions");
@@ -146,16 +177,107 @@ pub async fn handle_firewalld_action(
     }
 }
 
-/// Check if firewall-cmd is available
+/// Check if firewall-cmd is available and firewalld service is running (async version)
+async fn is_firewalld_available_async() -> bool {
+    // First check if command exists
+    let cmd_exists = tokio::process::Command::new("which")
+        .arg("firewall-cmd")
+        .output()
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    
+    if !cmd_exists {
+        debug!("firewall-cmd command not found");
+        return false;
+    }
+    
+    // Check if firewalld service is running using systemctl (much faster than firewall-cmd --state)
+    let service_check = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        tokio::process::Command::new("systemctl")
+            .args(["is-active", "--quiet", "firewalld"])
+            .output()
+    ).await;
+    
+    let service_running = service_check
+        .map(|result| result.map(|output| output.status.success()).unwrap_or(false))
+        .unwrap_or(false);
+    
+    if !service_running {
+        debug!("firewalld service is not running or not responsive");
+        return false;
+    }
+    
+    // Additional quick test with timeout to ensure firewall-cmd actually works (avoid slow D-Bus issues)
+    let cmd_test = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        tokio::process::Command::new("firewall-cmd")
+            .arg("--get-default-zone")
+            .output()
+    ).await;
+    
+    let cmd_works = cmd_test
+        .map(|result| result.map(|output| output.status.success()).unwrap_or(false))
+        .unwrap_or(false);
+    
+    if !cmd_works {
+        debug!("firewall-cmd is not responding within timeout or has D-Bus issues");
+        return false;
+    }
+    
+    debug!("firewalld appears to be available and running");
+    true
+}
+
+/// Check if firewall-cmd is available and firewalld service is running (sync version)
 fn is_firewalld_available() -> bool {
-    Command::new("which")
+    // First check if command exists
+    let cmd_exists = Command::new("which")
         .arg("firewall-cmd")
         .output()
         .map(|output| output.status.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    
+    if !cmd_exists {
+        debug!("firewall-cmd command not found");
+        return false;
+    }
+    
+    // Check if firewalld service is running using systemctl (much faster than firewall-cmd --state)
+    let service_running = Command::new("systemctl")
+        .args(["is-active", "--quiet", "firewalld"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    
+    if !service_running {
+        debug!("firewalld service is not running");
+        return false;
+    }
+    
+    debug!("firewalld appears to be available and running");
+    true
 }
 
-/// Get the current active zone
+/// Get the current active zone (async version)
+async fn get_current_zone_async() -> Result<String, Box<dyn Error + Send + Sync>> {
+    let output = tokio::process::Command::new("firewall-cmd")
+        .arg("--get-default-zone")
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        return Err("Failed to get current zone".into());
+    }
+
+    let zone = String::from_utf8(output.stdout)?.trim().to_string();
+
+    debug!("Current firewalld zone: {}", zone);
+    Ok(zone)
+}
+
+/// Get the current active zone (sync version)
 fn get_current_zone(command_runner: &dyn CommandRunner) -> Result<String, Box<dyn Error>> {
     let output = command_runner.run_command("firewall-cmd", &["--get-default-zone"])?;
 
@@ -169,7 +291,68 @@ fn get_current_zone(command_runner: &dyn CommandRunner) -> Result<String, Box<dy
     Ok(zone)
 }
 
-/// Get available firewalld zones with information
+/// Get available firewalld zones with information (async version)
+async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error + Send + Sync>> {
+    // Get list of zones
+    let zones_output = tokio::process::Command::new("firewall-cmd")
+        .arg("--get-zones")
+        .output()
+        .await?;
+    if !zones_output.status.success() {
+        return Err("Failed to get zones list".into());
+    }
+
+    let zones_str = String::from_utf8(zones_output.stdout)?;
+    let zone_names: Vec<&str> = zones_str.split_whitespace().collect();
+
+    // Get current default zone
+    let current_zone = get_current_zone_async().await.unwrap_or_default();
+
+    // Get active zones
+    let active_zones_output = tokio::process::Command::new("firewall-cmd")
+        .arg("--get-active-zones")
+        .output()
+        .await?;
+    let active_zones_str = if active_zones_output.status.success() {
+        String::from_utf8(active_zones_output.stdout).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let mut zones = Vec::new();
+
+    for zone_name in zone_names {
+        // Get zone description
+        let info_output = tokio::process::Command::new("firewall-cmd")
+            .args(["--zone", zone_name, "--get-description"])
+            .output()
+            .await?;
+
+        let description = if info_output.status.success() {
+            String::from_utf8(info_output.stdout)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        } else {
+            format!("Zone: {}", zone_name)
+        };
+
+        let is_active = active_zones_str.contains(zone_name);
+        let is_default = zone_name == current_zone;
+
+        zones.push(FirewalldZone {
+            name: zone_name.to_string(),
+            description,
+            is_active,
+            is_default,
+        });
+    }
+
+    debug!("Found {} firewalld zones", zones.len());
+    Ok(zones)
+}
+
+/// Get available firewalld zones with information (sync version)
 fn get_available_zones(
     command_runner: &dyn CommandRunner,
 ) -> Result<Vec<FirewalldZone>, Box<dyn Error>> {
@@ -240,7 +423,18 @@ fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<()
     Ok(())
 }
 
-/// Check if panic mode is enabled
+/// Check if panic mode is enabled (async version)
+async fn is_panic_mode_enabled_async() -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let output = tokio::process::Command::new("firewall-cmd")
+        .arg("--query-panic-on")
+        .output()
+        .await?;
+
+    // firewall-cmd returns 0 if panic mode is on, 1 if off
+    Ok(output.status.success())
+}
+
+/// Check if panic mode is enabled (sync version)
 fn is_panic_mode_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
     let output = command_runner.run_command("firewall-cmd", &["--query-panic-on"])?;
 

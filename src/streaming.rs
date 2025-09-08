@@ -22,7 +22,7 @@ use network_dmenu::{
 };
 
 #[cfg(feature = "firewalld")]
-use network_dmenu::firewalld::get_firewalld_actions;
+use network_dmenu::firewalld::get_firewalld_actions_async;
 use std::error::Error;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -861,13 +861,12 @@ async fn send_firewalld_actions(tx: &mpsc::UnboundedSender<ActionType>) {
     let start_time = std::time::Instant::now();
     debug!("FIREWALLD_DEBUG: Starting send_firewalld_actions()");
 
-    let command_runner = RealCommandRunner;
     let actions_start = std::time::Instant::now();
-    let actions = get_firewalld_actions(&command_runner);
+    let actions = get_firewalld_actions_async().await;
     let actions_elapsed = actions_start.elapsed();
 
     debug!(
-        "FIREWALLD_DEBUG: get_firewalld_actions() took {:?}, got {} actions",
+        "FIREWALLD_DEBUG: get_firewalld_actions_async() took {:?}, got {} actions",
         actions_elapsed,
         actions.len()
     );
