@@ -21,6 +21,7 @@ use tokio::time::interval;
 
 // Import network functions from the main codebase
 use crate::command::{CommandRunner, RealCommandRunner};
+use crate::notifications::NotificationManager;
 
 /// Main geofencing daemon
 pub struct GeofencingDaemon {
@@ -30,6 +31,7 @@ pub struct GeofencingDaemon {
     should_shutdown: Arc<RwLock<bool>>,
     #[cfg(feature = "ml")]
     ml_manager: Arc<Mutex<MlManager>>,
+    notification_manager: NotificationManager,
 }
 
 /// Internal daemon status data
@@ -77,6 +79,7 @@ impl GeofencingDaemon {
             last_ml_update: None,
         }));
 
+        let notification_manager = NotificationManager::new(config.notification_config.clone());
         debug!("Geofencing daemon created successfully");
         Self {
             zone_manager,
@@ -85,6 +88,7 @@ impl GeofencingDaemon {
             should_shutdown: Arc::new(RwLock::new(false)),
             #[cfg(feature = "ml")]
             ml_manager,
+            notification_manager,
         }
     }
 
@@ -1166,7 +1170,8 @@ impl GeofencingDaemon {
                 );
                 debug!("Actions details: WiFi={:?}, VPN={:?}, Tailscale Exit={:?}, Shields={:?}, Bluetooth={:?}",
                     actions.wifi, actions.vpn, actions.tailscale_exit_node, actions.tailscale_shields, actions.bluetooth);
-                match Self::execute_zone_actions(&actions).await {
+                let notification_manager = NotificationManager::default(); // Use default config for IPC commands
+                match Self::execute_zone_actions_static(&actions, &notification_manager).await {
                     Ok(_) => {
                         debug!("Successfully executed all requested actions");
                         DaemonResponse::Success
@@ -1486,7 +1491,12 @@ impl GeofencingDaemon {
     }
 
     /// Execute zone actions (connect to WiFi, VPN, etc.)
-    async fn execute_zone_actions(actions: &ZoneActions) -> Result<()> {
+    async fn execute_zone_actions(&self, actions: &ZoneActions) -> Result<()> {
+        Self::execute_zone_actions_static(actions, &self.notification_manager).await
+    }
+
+    /// Execute zone actions (connect to WiFi, VPN, etc.) - static version for IPC
+    async fn execute_zone_actions_static(actions: &ZoneActions, notification_manager: &NotificationManager) -> Result<()> {
         debug!("Starting zone action execution");
         info!("Executing zone actions: {:?}", actions);
         debug!("Action details: WiFi={:?}, VPN={:?}, Tailscale Exit Node={:?}, Tailscale Shields={:?}, {} Bluetooth devices, {} custom commands",
@@ -1845,43 +1855,26 @@ impl GeofencingDaemon {
             debug!("Processing custom command #{}: '{}'", idx + 1, command);
             info!("Executing custom command: {}", command);
 
+            // Check if this is a notify-send command that we can handle with our notification system
+            if let Some(_) = notification_manager.parse_notify_send_command(command) {
+                debug!("Converting notify-send command to native notification: {}", command);
+                let notification_result = notification_manager.execute_notification_command(command);
+                match notification_result {
+                    Ok(()) => {
+                        info!("Successfully sent notification via native system: {}", command);
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("Failed to send notification via native system, falling back to shell command: {}", e.to_string());
+                        // Fall through to execute as shell command
+                    }
+                }
+            }
+
             // Security: Only allow predefined safe commands or whitelist patterns
             if Self::is_safe_command(command) {
                 debug!("Command passed security check, executing...");
-                match tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .output()
-                    .await
-                {
-                    Ok(output) => {
-                        if output.status.success() {
-                            info!("Successfully executed custom command: {}", command);
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            if !stdout.trim().is_empty() {
-                                debug!("Command output: {}", stdout.trim());
-                            } else {
-                                debug!("Command executed successfully with no output");
-                            }
-                        } else {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            debug!(
-                                "Custom command failed with status: {:?}, stderr: {}",
-                                output.status,
-                                stderr.trim()
-                            );
-                            error!(
-                                "Custom command failed: {} - Error: {}",
-                                command,
-                                stderr.trim()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Custom command execution error: {}", e);
-                        error!("Failed to execute custom command '{}': {}", command, e);
-                    }
-                }
+                Self::execute_shell_command_static(command).await;
             } else {
                 debug!("Command failed security check: '{}'", command);
                 warn!("Skipped potentially unsafe custom command: {}", command);
@@ -1890,6 +1883,49 @@ impl GeofencingDaemon {
         debug!("Finished processing all custom commands");
 
         Ok(())
+    }
+
+    /// Execute a shell command with proper logging
+    async fn execute_shell_command(&self, command: &str) {
+        Self::execute_shell_command_static(command).await;
+    }
+
+    /// Execute a shell command with proper logging - static version
+    async fn execute_shell_command_static(command: &str) {
+        match tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .await
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    info!("Successfully executed custom command: {}", command);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if !stdout.trim().is_empty() {
+                        debug!("Command output: {}", stdout.trim());
+                    } else {
+                        debug!("Command executed successfully with no output");
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    debug!(
+                        "Custom command failed with status: {:?}, stderr: {}",
+                        output.status,
+                        stderr.trim()
+                    );
+                    error!(
+                        "Custom command failed: {} - Error: {}",
+                        command,
+                        stderr.trim()
+                    );
+                }
+            }
+            Err(e) => {
+                debug!("Custom command execution error: {}", e);
+                error!("Failed to execute custom command '{}': {}", command, e);
+            }
+        }
     }
 
     /// Check if a custom command is safe to execute

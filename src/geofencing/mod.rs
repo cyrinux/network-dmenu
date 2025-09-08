@@ -57,6 +57,7 @@ pub use security::{SecureCommandExecutor, SecurityPolicy};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use crate::notifications::NotificationConfig;
 
 /// Privacy mode for location detection
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
@@ -139,7 +140,7 @@ impl Default for UnknownZoneConfig {
             protective_actions: ZoneActions {
                 wifi: None, // Don't auto-connect to WiFi in unknown places
                 vpn: None, // Enable VPN protection
-                tailscale_exit_node: Some("auto".to_string()),
+                tailscale_exit_node: None,
                 tailscale_shields: Some(true), // Enable shields for protection
                 bluetooth: vec![], // Disconnect all Bluetooth devices
                 custom_commands: vec![
@@ -283,6 +284,9 @@ pub struct GeofencingConfig {
     /// Unknown zone protection configuration
     #[serde(default)]
     pub unknown_zone: UnknownZoneConfig,
+    /// Notification configuration
+    #[serde(default)]
+    pub notification_config: NotificationConfig,
 }
 
 impl Default for GeofencingConfig {
@@ -295,6 +299,7 @@ impl Default for GeofencingConfig {
             zones: Vec::new(),
             notifications: true,
             unknown_zone: UnknownZoneConfig::default(),
+            notification_config: NotificationConfig::default(),
         }
     }
 }

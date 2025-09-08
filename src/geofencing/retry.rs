@@ -4,6 +4,7 @@
 //! and intelligent failure handling.
 
 use crate::geofencing::{GeofenceError, Result, ZoneActions};
+use crate::notifications::NotificationManager;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -940,6 +941,23 @@ impl RetryManager {
             RetryableAction::CustomCommand(command) => {
                 debug!("Executing custom command: '{}'", command);
 
+                // Check if this is a notify-send command that we can handle with our notification system
+                let notification_manager = NotificationManager::default();
+                if let Some(_) = notification_manager.parse_notify_send_command(command) {
+                    debug!("Converting notify-send command to native notification: {}", command);
+                    let notification_result = notification_manager.execute_notification_command(command);
+                    match notification_result {
+                        Ok(()) => {
+                            debug!("Successfully sent notification via native system: {}", command);
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            debug!("Failed to send notification via native system, falling back to shell command: {}", e.to_string());
+                            // Fall through to execute as shell command
+                        }
+                    }
+                }
+
                 // Use enhanced security check
                 if !self.is_safe_command(command) {
                     return Err(GeofenceError::ActionExecution(format!(
@@ -948,29 +966,34 @@ impl RetryManager {
                     )));
                 }
 
-                match tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .output()
-                    .await
-                {
-                    Ok(output) if output.status.success() => {
-                        debug!("Custom command executed successfully");
-                        Ok(())
-                    }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(GeofenceError::ActionExecution(format!(
-                            "Custom command failed: {}",
-                            stderr
-                        )))
-                    }
-                    Err(e) => Err(GeofenceError::ActionExecution(format!(
-                        "Failed to execute custom command: {}",
-                        e
-                    ))),
-                }
+                self.execute_shell_command(command).await
             }
+        }
+    }
+
+    /// Execute a shell command with proper logging
+    async fn execute_shell_command(&self, command: &str) -> Result<()> {
+        match tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                debug!("Custom command executed successfully");
+                Ok(())
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(GeofenceError::ActionExecution(format!(
+                    "Custom command failed: {}",
+                    stderr
+                )))
+            }
+            Err(e) => Err(GeofenceError::ActionExecution(format!(
+                "Failed to execute custom command: {}",
+                e
+            ))),
         }
     }
 
