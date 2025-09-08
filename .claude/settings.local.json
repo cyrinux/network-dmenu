@@ -31,7 +31,9 @@
       "Bash(pkill:*)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --daemon --log-level debug)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics)",
-      "Bash(time:*)"
+      "Bash(time:*)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics --stdout)",
+      "Bash(firewall-cmd:*)"
     ],
     "deny": [],
     "ask": []

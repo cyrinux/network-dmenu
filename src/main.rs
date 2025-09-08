@@ -716,7 +716,7 @@ fn action_to_string(action: &ActionType) -> String {
         },
         ActionType::Diagnostic(diagnostic_action) => diagnostic_action_to_string(diagnostic_action),
         #[cfg(feature = "firewalld")]
-        ActionType::Firewalld(firewalld_action) => firewalld_action.to_display_string(),
+        ActionType::Firewalld(firewalld_action) => firewalld_action.to_display_string_simple(),
         ActionType::NextDns(nextdns_action) => {
             format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
         }
@@ -902,7 +902,7 @@ fn find_selected_action<'a>(
             }
             #[cfg(feature = "firewalld")]
             ActionType::Firewalld(firewalld_action) => {
-                action == firewalld_action.to_display_string()
+                action == firewalld_action.to_display_string_simple()
             }
             ActionType::NextDns(nextdns_action) => {
                 action == format_entry(ACTION_TYPE_NEXTDNS, "", &nextdns_action.to_string())
