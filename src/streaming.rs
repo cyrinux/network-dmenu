@@ -120,35 +120,8 @@ pub async fn select_action_from_menu_streaming(
     let producer_handle =
         tokio::spawn(async move { stream_actions_simple(&args_cloned, &config_cloned, tx).await });
 
-    // Collect all actions first for ML personalization
-    let mut all_actions = Vec::new();
+    // Stream actions to dmenu as they become available (true streaming)
     while let Some(action) = rx.recv().await {
-        all_actions.push(action);
-    }
-
-    // Apply ML personalization if enabled
-    #[cfg(feature = "ml")]
-    {
-        let action_strings: Vec<String> = all_actions.iter().map(crate::action_to_string).collect();
-        let personalized = network_dmenu::get_personalized_menu_order(action_strings);
-
-        // Reorder actions based on personalized order
-        let mut reordered = Vec::new();
-        for action_str in personalized {
-            if let Some(pos) = all_actions
-                .iter()
-                .position(|a| crate::action_to_string(a) == action_str)
-            {
-                reordered.push(all_actions.remove(pos));
-            }
-        }
-        // Add any remaining actions that weren't in the personalized list
-        reordered.extend(all_actions);
-        all_actions = reordered;
-    }
-
-    // Stream personalized actions to dmenu
-    for action in all_actions {
         let action_string = crate::action_to_string(&action);
         if stdin
             .write_all(format!("{}\n", action_string).as_bytes())
@@ -182,12 +155,14 @@ async fn stream_actions_simple(
     config: &Config,
     tx: mpsc::UnboundedSender<ActionType>,
 ) {
-    // Send custom actions first
+    // Send fastest actions first for immediate response
+    
+    // 1. Custom actions (already available, no computation needed)
     for action in &config.actions {
         let _ = tx.send(ActionType::Custom(action.clone()));
     }
 
-    // Send system actions
+    // 2. System actions (very fast)
     if !args.no_wifi
         && is_command_installed("nmcli")
         && is_command_installed("nm-connection-editor")
@@ -195,10 +170,23 @@ async fn stream_actions_simple(
         let _ = tx.send(ActionType::System(SystemAction::EditConnections));
     }
 
-    // Run simple collection tasks
+    // 3. Diagnostic actions (instant, no external commands)
+    if !args.no_diagnostics {
+        send_diagnostic_actions(&tx);
+    }
+
+    // 4. SSH proxy actions (fast, just config-based)
+    if is_command_installed("ssh") {
+        let actions = network_dmenu::get_ssh_proxy_actions(&config.ssh_proxies);
+        for action in actions {
+            let _ = tx.send(ActionType::Ssh(action));
+        }
+    }
+
+    // Start async tasks for actions that require external commands
     let mut handles = vec![];
 
-    // Bluetooth
+    // Priority 1: Bluetooth (usually fast, cached devices)
     if !args.no_bluetooth && is_command_installed("bluetoothctl") {
         let tx_clone = tx.clone();
         handles.push(tokio::spawn(async move {
@@ -206,7 +194,7 @@ async fn stream_actions_simple(
         }));
     }
 
-    // VPN
+    // Priority 2: VPN (usually fast, few connections)
     if !args.no_vpn && is_command_installed("nmcli") {
         let tx_clone = tx.clone();
         handles.push(tokio::spawn(async move {
@@ -214,7 +202,17 @@ async fn stream_actions_simple(
         }));
     }
 
-    // WiFi
+    // Priority 3: Rfkill (fast system calls)
+    if rfkill::is_rfkill_available() {
+        let tx_clone = tx.clone();
+        let no_wifi = args.no_wifi;
+        let no_bluetooth = args.no_bluetooth;
+        handles.push(tokio::spawn(async move {
+            send_rfkill_actions(&tx_clone, no_wifi, no_bluetooth).await;
+        }));
+    }
+
+    // Priority 4: WiFi (can be slower due to scanning)
     if !args.no_wifi {
         let tx_clone = tx.clone();
         let wifi_interface = args.wifi_interface.clone();
@@ -223,7 +221,7 @@ async fn stream_actions_simple(
         }));
     }
 
-    // Tailscale
+    // Priority 5: Tailscale (can be slow due to exit node fetching)
     #[cfg(feature = "tailscale")]
     if !args.no_tailscale && is_command_installed("tailscale") {
         let tx_clone = tx.clone();
@@ -243,7 +241,7 @@ async fn stream_actions_simple(
         }));
     }
 
-    // NextDNS
+    // Priority 6: NextDNS (can be slow due to API calls)
     if !args.no_nextdns {
         let tx_clone = tx.clone();
         let api_key = if !args.nextdns_api_key.is_empty() {
@@ -270,32 +268,13 @@ async fn stream_actions_simple(
         }));
     }
 
-    // Diagnostics
-    if !args.no_diagnostics {
-        let tx_clone = tx.clone();
-        handles.push(tokio::spawn(async move {
-            send_diagnostic_actions(&tx_clone);
-        }));
-    }
+    // Diagnostics already sent above for faster response
 
-    // Rfkill
-    if rfkill::is_rfkill_available() {
-        let tx_clone = tx.clone();
-        let no_wifi = args.no_wifi;
-        let no_bluetooth = args.no_bluetooth;
-        handles.push(tokio::spawn(async move {
-            send_rfkill_actions(&tx_clone, no_wifi, no_bluetooth).await;
-        }));
-    }
+    // Rfkill already sent above for faster response
 
-    // SSH proxies
-    let tx_clone = tx.clone();
-    let ssh_proxies = config.ssh_proxies.clone();
-    handles.push(tokio::spawn(async move {
-        send_ssh_actions(&tx_clone, &ssh_proxies).await;
-    }));
+    // SSH proxies already sent above for faster response
 
-    // Tor proxies
+    // Priority 7: Tor proxies (can be slow checking daemon status)
     if !args.no_tor {
         let tx_clone = tx.clone();
         let torsocks_apps = config.torsocks_apps.clone();
@@ -304,7 +283,7 @@ async fn stream_actions_simple(
         }));
     }
 
-    // Firewalld
+    // Priority 8: Firewalld (can be slow checking zones)
     #[cfg(feature = "firewalld")]
     {
         let tx_clone = tx.clone();
