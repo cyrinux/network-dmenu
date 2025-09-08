@@ -5,6 +5,7 @@
 
 use crate::command::CommandRunner;
 use crate::constants::{ICON_FIREWALL_ALLOW, ICON_FIREWALL_BLOCK, ICON_LOCK};
+use crate::privilege::wrap_privileged_command;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -425,7 +426,12 @@ fn get_available_zones(
 fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<(), Box<dyn Error>> {
     debug!("Setting firewalld zone to: {}", zone);
 
-    let output = command_runner.run_command("firewall-cmd", &["--set-default-zone", zone])?;
+    // Use privilege escalation for firewall-cmd commands
+    let command = format!("firewall-cmd --set-default-zone {}", zone);
+    let privileged_cmd = wrap_privileged_command(&command, false);
+    
+    debug!("Running privileged command: {}", privileged_cmd);
+    let output = command_runner.run_command("sh", &["-c", &privileged_cmd])?;
 
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
@@ -464,7 +470,12 @@ fn set_panic_mode(enable: bool, command_runner: &dyn CommandRunner) -> Result<()
 
     debug!("Setting firewalld panic mode: {}", enable);
 
-    let output = command_runner.run_command("firewall-cmd", &[arg])?;
+    // Use privilege escalation for firewall-cmd commands
+    let command = format!("firewall-cmd {}", arg);
+    let privileged_cmd = wrap_privileged_command(&command, false);
+    
+    debug!("Running privileged command: {}", privileged_cmd);
+    let output = command_runner.run_command("sh", &["-c", &privileged_cmd])?;
 
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
