@@ -1,8 +1,6 @@
 use country_emoji::flag;
 use log::debug;
 
-#[cfg(feature = "geofencing")]
-use sysinfo::Networks;
 use notify_rust::Notification;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -10,6 +8,8 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
+#[cfg(feature = "geofencing")]
+use sysinfo::Networks;
 use tokio::time::{timeout, Duration};
 
 const DETECT_CAPTIVE_PORTAL_URL: &str = "http://detectportal.firefox.com/";
@@ -269,21 +269,21 @@ mod tests {
 pub fn detect_network_interfaces() -> (Option<String>, Option<String>) {
     let mut networks = Networks::new();
     networks.refresh(true);
-    
+
     let mut wifi_interface = None;
     let mut ethernet_interface = None;
-    
+
     debug!("Detecting network interfaces...");
-    
+
     for (interface_name, _data) in networks.iter() {
         let name = interface_name.to_string();
         debug!("Found interface: {}", name);
-        
+
         // Skip loopback and virtual interfaces
         if name.starts_with("lo") || name.starts_with("docker") || name.starts_with("br-") {
             continue;
         }
-        
+
         // Detect WiFi interfaces
         if name.starts_with("wlan") || name.starts_with("wlp") || name.contains("wifi") {
             if wifi_interface.is_none() {
@@ -291,15 +291,18 @@ pub fn detect_network_interfaces() -> (Option<String>, Option<String>) {
                 debug!("Detected WiFi interface: {}", name);
             }
         }
-        // Detect Ethernet interfaces  
-        else if name.starts_with("eth") || name.starts_with("enp") || name.starts_with("eno") || name.starts_with("ens") {
-            if ethernet_interface.is_none() {
-                ethernet_interface = Some(name.clone());
-                debug!("Detected Ethernet interface: {}", name);
-            }
+        // Detect Ethernet interfaces
+        else if (name.starts_with("eth")
+            || name.starts_with("enp")
+            || name.starts_with("eno")
+            || name.starts_with("ens"))
+            && ethernet_interface.is_none()
+        {
+            ethernet_interface = Some(name.clone());
+            debug!("Detected Ethernet interface: {}", name);
         }
     }
-    
+
     (wifi_interface, ethernet_interface)
 }
 
@@ -309,7 +312,7 @@ pub fn get_wifi_interface(provided: Option<&str>) -> String {
         debug!("Using provided WiFi interface: {}", interface);
         return interface.to_string();
     }
-    
+
     #[cfg(feature = "geofencing")]
     {
         let (wifi_iface, _) = detect_network_interfaces();
@@ -318,7 +321,7 @@ pub fn get_wifi_interface(provided: Option<&str>) -> String {
             return interface;
         }
     }
-    
+
     // Fallback to common names
     let fallback_interfaces = ["wlan0", "wlp3s0", "wlo1"];
     for interface in &fallback_interfaces {
@@ -327,7 +330,7 @@ pub fn get_wifi_interface(provided: Option<&str>) -> String {
             return interface.to_string();
         }
     }
-    
+
     debug!("No WiFi interface found, using default: wlan0");
     "wlan0".to_string()
 }
@@ -342,7 +345,7 @@ pub fn get_ethernet_interface() -> String {
             return interface;
         }
     }
-    
+
     // Fallback to common names
     let fallback_interfaces = ["eth0", "enp0s3", "eno1", "ens3"];
     for interface in &fallback_interfaces {
@@ -351,7 +354,7 @@ pub fn get_ethernet_interface() -> String {
             return interface.to_string();
         }
     }
-    
+
     debug!("No Ethernet interface found, using default: eth0");
     "eth0".to_string()
 }

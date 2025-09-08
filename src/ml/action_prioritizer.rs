@@ -564,10 +564,7 @@ impl ActionPrioritizer {
             let general_success_rate = metrics.success_rate();
 
             // Generate context-specific key using time blocks for temporal grouping
-            let context_key = format!(
-                "{}",
-                context.network_type as u8
-            );
+            let context_key = format!("{}", context.network_type as u8);
             let context_success_rate = metrics
                 .context_success_rate
                 .get(&context_key)
@@ -680,10 +677,7 @@ impl ActionPrioritizer {
         context: &NetworkContext,
     ) {
         let action_key = self.normalize_action_key(action_str);
-        let context_key = format!(
-            "{}",
-            context.network_type as u8
-        );
+        let context_key = format!("{}", context.network_type as u8);
 
         let metrics = self.action_metrics.entry(action_key).or_default();
 

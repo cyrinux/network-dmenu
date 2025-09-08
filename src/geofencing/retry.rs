@@ -166,11 +166,19 @@ impl RetryManager {
             // Check if already connected to avoid unnecessary reconnection
             if self.is_wifi_connected_to(wifi_ssid).await {
                 success_count += 1;
-                info!("✅ Already connected to WiFi '{}', skipping connection", wifi_ssid);
-                debug!("WiFi action skipped for zone '{}' - already connected to network '{}'", 
-                       context.zone_name, wifi_ssid);
+                info!(
+                    "✅ Already connected to WiFi '{}', skipping connection",
+                    wifi_ssid
+                );
+                debug!(
+                    "WiFi action skipped for zone '{}' - already connected to network '{}'",
+                    context.zone_name, wifi_ssid
+                );
             } else {
-                info!("📶 [1/{}] WiFi Action: Connecting to SSID '{}'", total_actions, wifi_ssid);
+                info!(
+                    "📶 [1/{}] WiFi Action: Connecting to SSID '{}'",
+                    total_actions, wifi_ssid
+                );
                 let wifi_start = std::time::Instant::now();
                 let action = RetryableAction::WiFiConnection(wifi_ssid.clone());
                 match self.execute_with_retry(action.clone(), context).await {
@@ -420,7 +428,10 @@ impl RetryManager {
             // Check if already connected to avoid unnecessary reconnection
             if self.is_bluetooth_connected_to(device_name).await {
                 success_count += 1;
-                info!("✅ Already connected to Bluetooth device '{}', skipping connection", device_name);
+                info!(
+                    "✅ Already connected to Bluetooth device '{}', skipping connection",
+                    device_name
+                );
                 debug!(
                     "Bluetooth device {} ({}/{}) already connected for zone '{}'",
                     device_name,
@@ -430,7 +441,7 @@ impl RetryManager {
                 );
                 continue;
             }
-            
+
             let bt_start = std::time::Instant::now();
             let action = RetryableAction::BluetoothConnection(device_name.clone());
             match self.execute_with_retry(action.clone(), context).await {
@@ -1251,15 +1262,20 @@ impl RetryManager {
     /// Check if already connected to a specific WiFi network
     async fn is_wifi_connected_to(&self, target_ssid: &str) -> bool {
         debug!("Checking if already connected to WiFi: '{}'", target_ssid);
-        
+
         // Use daemon's function to get current WiFi SSID
-        if let Some(current_ssid) = crate::geofencing::daemon::GeofencingDaemon::get_current_wifi_ssid().await {
+        if let Some(current_ssid) =
+            crate::geofencing::daemon::GeofencingDaemon::get_current_wifi_ssid().await
+        {
             if current_ssid == target_ssid {
-                debug!("Already connected to WiFi '{}' (current: '{}')", target_ssid, current_ssid);
+                debug!(
+                    "Already connected to WiFi '{}' (current: '{}')",
+                    target_ssid, current_ssid
+                );
                 return true;
             }
         }
-        
+
         debug!("Not currently connected to WiFi '{}'", target_ssid);
         false
     }
@@ -1268,14 +1284,17 @@ impl RetryManager {
     async fn is_bluetooth_connected_to(&self, target_device: &str) -> bool {
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
-        debug!("Checking if already connected to Bluetooth device: '{}'", target_device);
-        
+
+        debug!(
+            "Checking if already connected to Bluetooth device: '{}'",
+            target_device
+        );
+
         if !crate::command::is_command_installed("bluetoothctl") {
             debug!("bluetoothctl not available, skipping Bluetooth connection check");
             return false;
         }
-        
+
         // Use bluetoothctl to check connected devices
         if let Ok(output) = command_runner.run_command("bluetoothctl", &["info", target_device]) {
             if output.status.success() {
@@ -1286,8 +1305,11 @@ impl RetryManager {
                 }
             }
         }
-        
-        debug!("Not currently connected to Bluetooth device '{}'", target_device);
+
+        debug!(
+            "Not currently connected to Bluetooth device '{}'",
+            target_device
+        );
         false
     }
 }

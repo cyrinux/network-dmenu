@@ -823,32 +823,6 @@ impl UsagePatternLearner {
         bonus
     }
 
-    /// Calculate temporal consistency of usage patterns
-    fn calculate_temporal_consistency(&self, distribution: &[u32]) -> f32 {
-        let total: u32 = distribution.iter().sum();
-        if total == 0 {
-            return 0.0;
-        }
-
-        // Calculate coefficient of variation (lower = more consistent)
-        let mean = total as f32 / distribution.len() as f32;
-        let variance: f32 = distribution
-            .iter()
-            .map(|&x| {
-                let diff = x as f32 - mean;
-                diff * diff
-            })
-            .sum::<f32>()
-            / distribution.len() as f32;
-
-        let std_dev = variance.sqrt();
-        if mean == 0.0 {
-            0.0
-        } else {
-            1.0 / (1.0 + std_dev / mean) // Higher consistency = higher score
-        }
-    }
-
     /// Calculate context similarity
     fn calculate_context_similarity(&self, action: &UserAction, context: &NetworkContext) -> f32 {
         if let Some(stats) = self.action_stats.get(action) {

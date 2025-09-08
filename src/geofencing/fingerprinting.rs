@@ -40,9 +40,11 @@ pub async fn create_wifi_fingerprint(privacy_mode: PrivacyMode) -> Result<Locati
     fingerprint.confidence_score = calculate_confidence(&fingerprint);
     fingerprint.timestamp = Utc::now();
 
-    debug!("🎯 Location fingerprint created: {} WiFi networks, confidence: {:.2}", 
-           fingerprint.wifi_networks.len(), 
-           fingerprint.confidence_score);
+    debug!(
+        "🎯 Location fingerprint created: {} WiFi networks, confidence: {:.2}",
+        fingerprint.wifi_networks.len(),
+        fingerprint.confidence_score
+    );
 
     Ok(fingerprint)
 }
@@ -53,7 +55,7 @@ fn find_bssid_end(text: &str) -> Option<usize> {
     // Look for pattern: XX\:XX\:XX\:XX\:XX\:XX where XX are hex digits
     // Standard MAC address is 17 chars with escapes: 00\:01\:02\:03\:04\:05
     let mut escaped_colons = 0;
-    
+
     for (i, ch) in text.char_indices() {
         if ch == ':' && i > 0 && text.chars().nth(i - 1) == Some('\\') {
             escaped_colons += 1;
@@ -67,7 +69,7 @@ fn find_bssid_end(text: &str) -> Option<usize> {
             }
         }
     }
-    
+
     // If no unescaped colon found, return None
     None
 }
@@ -99,19 +101,19 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                 if let Some(ssid_end) = line.find(':') {
                     let ssid = line[..ssid_end].trim();
                     let rest = &line[ssid_end + 1..];
-                    
+
                     // Find BSSID by looking for the pattern with escaped colons
                     // BSSID format: XX\:XX\:XX\:XX\:XX\:XX (17 chars with escapes)
                     if let Some(bssid_end) = find_bssid_end(rest) {
                         let bssid_raw = rest[..bssid_end].trim();
                         let remaining = &rest[bssid_end + 1..];
-                        
+
                         // Parse signal and frequency from remaining parts
                         let parts: Vec<&str> = remaining.split(':').collect();
                         if parts.len() >= 2 {
                             let signal_str = parts[0].trim();
                             let freq_str = parts[1].trim();
-                            
+
                             // Clean up BSSID by removing escape characters
                             let bssid = bssid_raw.replace("\\:", ":");
 
@@ -133,7 +135,10 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                                     frequency,
                                     privacy_mode,
                                 ) {
-                                    debug!("📡 Parsed WiFi network: '{}' signal={} freq={}", ssid, signal_strength, frequency);
+                                    debug!(
+                                        "📡 Parsed WiFi network: '{}' signal={} freq={}",
+                                        ssid, signal_strength, frequency
+                                    );
                                     signatures.insert(signature);
                                 }
                             }
@@ -141,14 +146,19 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                     }
                 }
             }
-            debug!("📡 nmcli parsing complete: {} WiFi networks found", signatures.len());
+            debug!(
+                "📡 nmcli parsing complete: {} WiFi networks found",
+                signatures.len()
+            );
             return Ok(signatures);
         }
     }
 
     // Fallback to IWD with iwctl
     let wifi_interface = crate::utils::get_wifi_interface(None);
-    if let Ok(output) = command_runner.run_command("iwctl", &["station", &wifi_interface, "get-networks"]) {
+    if let Ok(output) =
+        command_runner.run_command("iwctl", &["station", &wifi_interface, "get-networks"])
+    {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // Parse iwctl output - simplified version without signal strength
@@ -199,7 +209,11 @@ fn create_network_signature(
             if !bssid.is_empty() && bssid.len() >= 8 {
                 hash_string(bssid)
             } else {
-                debug!("BSSID too short or empty: '{}', length: {}", bssid, bssid.len());
+                debug!(
+                    "BSSID too short or empty: '{}', length: {}",
+                    bssid,
+                    bssid.len()
+                );
                 "unknown".to_string()
             }
         }
@@ -208,7 +222,11 @@ fn create_network_signature(
             if bssid.len() >= 8 {
                 bssid[..8].to_string() // XX:XX:XX format
             } else {
-                debug!("BSSID too short for manufacturer prefix: '{}', length: {}", bssid, bssid.len());
+                debug!(
+                    "BSSID too short for manufacturer prefix: '{}', length: {}",
+                    bssid,
+                    bssid.len()
+                );
                 "unknown".to_string()
             }
         }
@@ -416,7 +434,7 @@ fn calculate_wifi_similarity(
         .iter()
         .map(|net| (&net.ssid_hash, &net.bssid_prefix))
         .collect();
-    
+
     let identifiers2: std::collections::HashSet<_> = networks2
         .iter()
         .map(|net| (&net.ssid_hash, &net.bssid_prefix))

@@ -114,8 +114,12 @@ impl ZoneManager {
             })?;
         }
 
-        // Convert zones to vector for serialization
-        let zones: Vec<&GeofenceZone> = self.zones.values().collect();
+        // Convert zones to vector for serialization, excluding virtual unknown zones
+        let zones: Vec<&GeofenceZone> = self
+            .zones
+            .values()
+            .filter(|zone| zone.id != "unknown_zone") // Exclude virtual unknown zone from persistence
+            .collect();
 
         let content = serde_json::to_string_pretty(&zones)
             .map_err(|e| GeofenceError::Config(format!("Failed to serialize zones: {}", e)))?;
@@ -124,7 +128,10 @@ impl ZoneManager {
             .map_err(|e| GeofenceError::Config(format!("Failed to write zones file: {}", e)))?;
 
         #[cfg(debug_assertions)]
-        eprintln!("Successfully saved {} zones", zones.len());
+        eprintln!(
+            "Successfully saved {} zones (excluded virtual unknown zones)",
+            zones.len()
+        );
 
         Ok(())
     }
@@ -344,13 +351,16 @@ impl ZoneManager {
                     .and_then(|id| self.zones.get(id))
                     .cloned();
 
-                // Update zone statistics
+                // Update zone statistics (but don't persist unknown zone)
                 zone.last_matched = Some(Utc::now());
                 zone.match_count += 1;
-                self.zones.insert(zone.id.clone(), zone.clone());
 
-                // Save updated zone statistics to disk
-                let _ = self.save_zones_to_disk(); // Don't fail location detection on save error
+                // Only persist real zones, not virtual unknown zones
+                if zone.id != "unknown_zone" {
+                    self.zones.insert(zone.id.clone(), zone.clone());
+                    // Save updated zone statistics to disk
+                    let _ = self.save_zones_to_disk(); // Don't fail location detection on save error
+                }
 
                 // Update current zone and daemon state
                 self.current_zone = Some(zone.id.clone());
@@ -385,8 +395,14 @@ impl ZoneManager {
         let mut best_match = None;
         let mut best_similarity = 0.0;
 
-        debug!("🎯 Finding best matching zone from {} configured zones", self.zones.len());
-        debug!("🎯 Current location has {} WiFi networks", fingerprint.wifi_networks.len());
+        debug!(
+            "🎯 Finding best matching zone from {} configured zones",
+            self.zones.len()
+        );
+        debug!(
+            "🎯 Current location has {} WiFi networks",
+            fingerprint.wifi_networks.len()
+        );
 
         for zone in self.zones.values() {
             // Check similarity against all fingerprints in the zone, use the best match
@@ -396,17 +412,27 @@ impl ZoneManager {
                 .enumerate()
                 .map(|(i, zone_fingerprint)| {
                     let similarity = calculate_weighted_similarity(zone_fingerprint, fingerprint);
-                    debug!("🎯 Zone '{}' fingerprint {} similarity: {:.3} (threshold: {:.3})", 
-                           zone.name, i + 1, similarity, zone.confidence_threshold);
+                    debug!(
+                        "🎯 Zone '{}' fingerprint {} similarity: {:.3} (threshold: {:.3})",
+                        zone.name,
+                        i + 1,
+                        similarity,
+                        zone.confidence_threshold
+                    );
                     similarity
                 })
                 .fold(0.0, f64::max);
 
-            debug!("🎯 Zone '{}' max similarity: {:.3} (threshold: {:.3})", 
-                   zone.name, max_similarity, zone.confidence_threshold);
+            debug!(
+                "🎯 Zone '{}' max similarity: {:.3} (threshold: {:.3})",
+                zone.name, max_similarity, zone.confidence_threshold
+            );
 
             if max_similarity > best_similarity && max_similarity >= zone.confidence_threshold {
-                debug!("🎯 Zone '{}' is new best match with similarity {:.3}", zone.name, max_similarity);
+                debug!(
+                    "🎯 Zone '{}' is new best match with similarity {:.3}",
+                    zone.name, max_similarity
+                );
                 best_similarity = max_similarity;
                 best_match = Some(zone.clone());
             }
@@ -415,33 +441,44 @@ impl ZoneManager {
         // If no configured zone matches, check unknown zone protection
         if best_match.is_none() && self.config.unknown_zone.enabled {
             debug!("🛡️ No configured zones match - checking unknown zone protection");
-            debug!("🛡️ Unknown zone confidence threshold: {:.3}", self.config.unknown_zone.confidence_threshold);
-            
+            debug!(
+                "🛡️ Unknown zone confidence threshold: {:.3}",
+                self.config.unknown_zone.confidence_threshold
+            );
+
             // If no zone matches above the unknown zone threshold, trigger protection mode
             if best_similarity < self.config.unknown_zone.confidence_threshold {
-                debug!("🚨 Unknown zone detected! Best similarity {:.3} < threshold {:.3}", 
-                       best_similarity, self.config.unknown_zone.confidence_threshold);
-                
+                debug!(
+                    "🚨 Unknown zone detected! Best similarity {:.3} < threshold {:.3}",
+                    best_similarity, self.config.unknown_zone.confidence_threshold
+                );
+
                 // Create virtual unknown zone with protective actions
+                // NOTE: No fingerprints stored - this is a pure fallback that doesn't persist location data
                 let unknown_zone = GeofenceZone {
                     id: "unknown_zone".to_string(),
                     name: "🛡️ Unknown Zone (Protection Mode)".to_string(),
-                    fingerprints: vec![fingerprint.clone()],
+                    fingerprints: vec![], // Empty - unknown zone is a fallback, not a persistent zone
                     confidence_threshold: self.config.unknown_zone.confidence_threshold,
                     actions: self.config.unknown_zone.protective_actions.clone(),
                     created_at: Utc::now(),
                     last_matched: Some(Utc::now()),
                     match_count: 1,
                 };
-                
-                debug!("🛡️ Activating unknown zone protection with {} actions", 
-                       unknown_zone.actions.custom_commands.len());
+
+                debug!(
+                    "🛡️ Activating unknown zone protection with {} actions",
+                    unknown_zone.actions.custom_commands.len()
+                );
                 return Ok(Some(unknown_zone));
             }
         }
 
         if let Some(ref zone) = best_match {
-            debug!("✅ Best matching zone: '{}' with similarity {:.3}", zone.name, best_similarity);
+            debug!(
+                "✅ Best matching zone: '{}' with similarity {:.3}",
+                zone.name, best_similarity
+            );
         } else {
             debug!("❌ No zone matches above threshold and unknown zone protection not triggered");
         }
@@ -584,26 +621,35 @@ impl ZoneManager {
     /// This ensures zone actions are applied on daemon startup
     pub async fn get_current_zone_for_startup(&mut self) -> Result<Option<LocationChange>> {
         debug!("Getting current zone for startup application");
-        
+
         let current_fingerprint = create_wifi_fingerprint(self.config.privacy_mode).await?;
 
         if current_fingerprint.confidence_score < 0.3 {
-            debug!("Not enough data for reliable zone matching (confidence: {:.2})", current_fingerprint.confidence_score);
+            debug!(
+                "Not enough data for reliable zone matching (confidence: {:.2})",
+                current_fingerprint.confidence_score
+            );
             return Ok(None);
         }
 
         let matched_zone = self.find_best_matching_zone(&current_fingerprint)?;
 
         if let Some(mut zone) = matched_zone {
-            debug!("Current zone detected for startup: '{}' (ID: {})", zone.name, zone.id);
-            
-            // Update zone statistics
+            debug!(
+                "Current zone detected for startup: '{}' (ID: {})",
+                zone.name, zone.id
+            );
+
+            // Update zone statistics (but don't persist unknown zone)
             zone.last_matched = Some(Utc::now());
             zone.match_count += 1;
-            self.zones.insert(zone.id.clone(), zone.clone());
 
-            // Save updated zone statistics to disk
-            let _ = self.save_zones_to_disk(); // Don't fail on save error
+            // Only persist real zones, not virtual unknown zones
+            if zone.id != "unknown_zone" {
+                self.zones.insert(zone.id.clone(), zone.clone());
+                // Save updated zone statistics to disk
+                let _ = self.save_zones_to_disk(); // Don't fail on save error
+            }
 
             // Update current zone tracking
             let previous_zone_id = self.current_zone.clone();
@@ -623,7 +669,11 @@ impl ZoneManager {
                 suggested_actions: zone.actions.clone(),
             };
 
-            info!("🚀 Startup zone application: '{}' (confidence: {:.1}%)", zone.name, current_fingerprint.confidence_score * 100.0);
+            info!(
+                "🚀 Startup zone application: '{}' (confidence: {:.1}%)",
+                zone.name,
+                current_fingerprint.confidence_score * 100.0
+            );
             Ok(Some(location_change))
         } else {
             debug!("No matching zone found for current location");

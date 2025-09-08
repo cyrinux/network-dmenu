@@ -159,7 +159,7 @@ impl GeofencingDaemon {
             let should_shutdown = Arc::clone(&should_shutdown);
             #[cfg(feature = "ml")]
             let ml_manager = Arc::clone(&ml_manager);
-            
+
             tokio::spawn(async move {
                 Self::system_event_monitoring_loop(
                     zone_manager,
@@ -270,7 +270,7 @@ impl GeofencingDaemon {
             debug!("Detecting location change for scan #{}", scan_count);
             let location_change = {
                 let mut manager = zone_manager.lock().await;
-                
+
                 // On first scan, ensure current zone actions are applied (startup behavior)
                 if scan_count == 1 {
                     debug!("First scan - checking for startup zone application");
@@ -300,19 +300,19 @@ impl GeofencingDaemon {
                             if let Some(ref change) = change {
                                 debug!(
                                     "Location change detected: from {:?} to {} (confidence: {:.2})",
-                                change.from.as_ref().map(|z| &z.name),
-                                change.to.name,
-                                change.confidence
-                            );
-                        } else {
-                            debug!("No location change detected in scan #{}", scan_count);
+                                    change.from.as_ref().map(|z| &z.name),
+                                    change.to.name,
+                                    change.confidence
+                                );
+                            } else {
+                                debug!("No location change detected in scan #{}", scan_count);
+                            }
+                            change
                         }
-                        change
-                    }
-                    Err(e) => {
-                        warn!("Location detection failed in scan #{}: {}", scan_count, e);
-                        continue;
-                    }
+                        Err(e) => {
+                            warn!("Location detection failed in scan #{}: {}", scan_count, e);
+                            continue;
+                        }
                     }
                 }
             };
@@ -415,15 +415,22 @@ impl GeofencingDaemon {
                 );
 
                 // Execute zone actions with retry logic and connection optimization
-                debug!("Executing zone actions with retry for zone '{}'", change.to.name);
-                let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                debug!(
+                    "Executing zone actions with retry for zone '{}'",
+                    change.to.name
+                );
+                let mut retry_manager =
+                    super::retry::RetryManager::new(super::retry::RetryConfig::default());
                 let action_context = super::retry::ActionContext {
                     zone_id: change.to.id.clone(),
                     zone_name: change.to.name.clone(),
                     confidence: change.confidence,
                 };
-                
-                if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
+
+                if let Err(e) = retry_manager
+                    .execute_zone_actions_with_retry(&change.suggested_actions, &action_context)
+                    .await
+                {
                     error!(
                         "Failed to execute zone actions for zone '{}': {}",
                         change.to.name, e
@@ -464,57 +471,70 @@ impl GeofencingDaemon {
     async fn system_event_monitoring_loop(
         zone_manager: Arc<Mutex<ZoneManager>>,
         should_shutdown: Arc<RwLock<bool>>,
-        #[cfg(feature = "ml")]
-        _ml_manager: Arc<Mutex<MlManager>>,
+        #[cfg(feature = "ml")] _ml_manager: Arc<Mutex<MlManager>>,
     ) {
         info!("🔋 Starting system event monitoring (suspend/resume detection)");
         debug!("System event monitoring will trigger immediate zone checks on resume");
-        
+
         // Use dbus to monitor logind suspend/resume signals
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         let mut was_suspended = false;
         let mut last_network_check = std::time::Instant::now();
-        
+
         loop {
             // Check for shutdown
             if *should_shutdown.read().await {
                 debug!("Shutdown signal received, exiting system event monitoring loop");
                 break;
             }
-            
+
             // Simple approach: monitor network connectivity changes which often indicate resume
             let current_time = std::time::Instant::now();
             if current_time.duration_since(last_network_check) >= Duration::from_secs(10) {
                 last_network_check = current_time;
-                
+
                 // Check if network connectivity has changed (potential resume indicator)
                 if Self::detect_network_state_change().await {
                     debug!("🔋 Network state change detected - potential resume event");
-                    
+
                     if was_suspended {
                         info!("🔋 System resume detected - performing immediate zone check");
                         was_suspended = false;
-                        
+
                         // Trigger immediate zone check on resume
                         debug!("🔋 Executing immediate post-resume zone detection");
                         let mut manager = zone_manager.lock().await;
                         match manager.get_current_zone_for_startup().await {
                             Ok(Some(change)) => {
-                                info!("🔋 Post-resume zone detected: '{}' (confidence: {:.1}%)", 
-                                     change.to.name, change.confidence * 100.0);
-                                
+                                info!(
+                                    "🔋 Post-resume zone detected: '{}' (confidence: {:.1}%)",
+                                    change.to.name,
+                                    change.confidence * 100.0
+                                );
+
                                 // Execute zone actions immediately after resume
-                                let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                                let mut retry_manager = super::retry::RetryManager::new(
+                                    super::retry::RetryConfig::default(),
+                                );
                                 let action_context = super::retry::ActionContext {
                                     zone_id: change.to.id.clone(),
                                     zone_name: change.to.name.clone(),
                                     confidence: change.confidence,
                                 };
-                                
-                                if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
+
+                                if let Err(e) = retry_manager
+                                    .execute_zone_actions_with_retry(
+                                        &change.suggested_actions,
+                                        &action_context,
+                                    )
+                                    .await
+                                {
                                     error!("🔋 Failed to execute post-resume zone actions for '{}': {}", change.to.name, e);
                                 } else {
-                                    info!("🔋 Successfully applied post-resume zone actions for '{}'", change.to.name);
+                                    info!(
+                                        "🔋 Successfully applied post-resume zone actions for '{}'",
+                                        change.to.name
+                                    );
                                 }
                             }
                             Ok(None) => {
@@ -530,10 +550,10 @@ impl GeofencingDaemon {
                     }
                 }
             }
-            
+
             interval.tick().await;
         }
-        
+
         info!("🔋 System event monitoring stopped");
     }
 
@@ -541,19 +561,22 @@ impl GeofencingDaemon {
     async fn detect_network_state_change() -> bool {
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
+
         // Check if we have active network connections
         if let Ok(output) = command_runner.run_command("ip", &["route", "show", "default"]) {
             if output.status.success() {
                 let routes = String::from_utf8_lossy(&output.stdout);
                 let has_default_route = !routes.trim().is_empty();
-                
+
                 // Simple state tracking - in a real implementation, you'd compare with previous state
-                debug!("Network connectivity check: default route = {}", has_default_route);
+                debug!(
+                    "Network connectivity check: default route = {}",
+                    has_default_route
+                );
                 return has_default_route;
             }
         }
-        
+
         false
     }
 
@@ -583,12 +606,15 @@ impl GeofencingDaemon {
             scan_count += 1;
             ml_update_counter += 1;
 
-            debug!("🧠 Enhanced scan #{} (interval: {:?})", scan_count, current_scan_interval);
+            debug!(
+                "🧠 Enhanced scan #{} (interval: {:?})",
+                scan_count, current_scan_interval
+            );
 
             // Check for shutdown
             if *should_shutdown.read().await {
                 debug!("Shutdown signal received, exiting enhanced monitoring loop");
-                
+
                 // Save ML models before shutdown
                 {
                     let ml = ml_manager.lock().await;
@@ -606,7 +632,10 @@ impl GeofencingDaemon {
                 let manager = zone_manager.lock().await;
                 let zone_count = manager.list_zones().len();
                 if zone_count == 0 {
-                    debug!("No zones configured, skipping enhanced scan #{}", scan_count);
+                    debug!(
+                        "No zones configured, skipping enhanced scan #{}",
+                        scan_count
+                    );
                     // Wait for scan interval even when no zones are configured to prevent CPU spinning
                     tokio::time::sleep(current_scan_interval).await;
                     continue;
@@ -618,44 +647,56 @@ impl GeofencingDaemon {
             if ml_update_counter >= 5 {
                 debug!("🧠 Generating ML-powered zone suggestions");
                 ml_update_counter = 0;
-                
+
                 let (suggestions_generated, auto_suggestions_processed) = {
                     let mut ml = ml_manager.lock().await;
                     let manager = zone_manager.lock().await;
-                    
+
                     // Generate suggestions with auto-acceptance evaluation
-                    let enhanced_suggestions = ml.generate_enhanced_zone_suggestions(&manager.list_zones());
+                    let enhanced_suggestions =
+                        ml.generate_enhanced_zone_suggestions(&manager.list_zones());
                     let suggestion_count = enhanced_suggestions.len();
-                    
+
                     // Process automatic suggestions
                     let auto_results = ml.process_auto_suggestions(&manager.list_zones());
-                    let auto_accepted_count = auto_results.iter()
-                        .filter(|r| r.action == crate::ml_integration::AutoSuggestionAction::CreateZone)
+                    let auto_accepted_count = auto_results
+                        .iter()
+                        .filter(|r| {
+                            r.action == crate::ml_integration::AutoSuggestionAction::CreateZone
+                        })
                         .count();
-                    
+
                     if !enhanced_suggestions.is_empty() {
                         info!("🧠 Generated {} zone suggestions ({} auto-accepted, {} require manual approval)", 
                               suggestion_count, auto_accepted_count, suggestion_count - auto_accepted_count);
-                        
+
                         for (suggestion, should_auto_accept) in &enhanced_suggestions {
-                            let acceptance_status = if *should_auto_accept { "🤖 AUTO-ACCEPT" } else { "👤 MANUAL" };
-                            debug!("  📍 {}: {} (confidence: {:.1}%, priority: {:?})",
-                                   acceptance_status,
-                                   suggestion.suggested_name, 
-                                   suggestion.confidence * 100.0,
-                                   suggestion.priority);
+                            let acceptance_status = if *should_auto_accept {
+                                "🤖 AUTO-ACCEPT"
+                            } else {
+                                "👤 MANUAL"
+                            };
+                            debug!(
+                                "  📍 {}: {} (confidence: {:.1}%, priority: {:?})",
+                                acceptance_status,
+                                suggestion.suggested_name,
+                                suggestion.confidence * 100.0,
+                                suggestion.priority
+                            );
                         }
-                        
+
                         // Log auto-accepted suggestions
                         for result in &auto_results {
-                            if result.action == crate::ml_integration::AutoSuggestionAction::CreateZone {
+                            if result.action
+                                == crate::ml_integration::AutoSuggestionAction::CreateZone
+                            {
                                 info!("🤖 ✨ Auto-suggestion: '{}' would be created automatically (confidence: {:.1}%)",
                                       result.suggestion_name, result.confidence * 100.0);
                                 debug!("   Reasoning: {}", result.reasoning);
                             }
                         }
                     }
-                    
+
                     (suggestion_count as u32, auto_accepted_count as u32)
                 };
 
@@ -669,10 +710,13 @@ impl GeofencingDaemon {
             }
 
             // Check for location change with ML learning (or startup zone application)
-            debug!("🧠 Detecting location change with ML learning for scan #{}", scan_count);
+            debug!(
+                "🧠 Detecting location change with ML learning for scan #{}",
+                scan_count
+            );
             let location_change = {
                 let mut manager = zone_manager.lock().await;
-                
+
                 // On first scan, ensure current zone actions are applied (startup behavior)
                 if scan_count == 1 {
                     debug!("🧠 First enhanced scan - checking for startup zone application");
@@ -696,7 +740,10 @@ impl GeofencingDaemon {
                     let ml_confidence = {
                         let ml = ml_manager.lock().await;
                         let _manager = zone_manager.lock().await;
-                        if let Ok(fingerprint) = super::fingerprinting::create_wifi_fingerprint(super::PrivacyMode::High).await {
+                        if let Ok(fingerprint) =
+                            super::fingerprinting::create_wifi_fingerprint(super::PrivacyMode::High)
+                                .await
+                        {
                             ml.calculate_zone_confidence(&change.to.id, &fingerprint)
                         } else {
                             change.confidence // Fallback to original confidence
@@ -721,7 +768,11 @@ impl GeofencingDaemon {
                         // Track prediction accuracy if we had a previous prediction
                         if let Some(previous_zone_id) = change.from.as_ref().map(|z| &z.id) {
                             let mut ml = ml_manager.lock().await;
-                            ml.track_prediction_accuracy(previous_zone_id, &change.to.id, ml_confidence);
+                            ml.track_prediction_accuracy(
+                                previous_zone_id,
+                                &change.to.id,
+                                ml_confidence,
+                            );
                         }
 
                         // Record zone change for ML learning
@@ -729,7 +780,7 @@ impl GeofencingDaemon {
                             let mut ml = ml_manager.lock().await;
                             ml.record_zone_change(
                                 change.from.as_ref().map(|z| z.id.as_str()),
-                                &change.to.id
+                                &change.to.id,
                             );
                         }
 
@@ -742,73 +793,101 @@ impl GeofencingDaemon {
                         }
 
                         // Execute zone actions with retry logic and connection optimization
-                        debug!("🧠 Executing enhanced zone actions with retry for zone '{}'", change.to.name);
-                        let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                        debug!(
+                            "🧠 Executing enhanced zone actions with retry for zone '{}'",
+                            change.to.name
+                        );
+                        let mut retry_manager =
+                            super::retry::RetryManager::new(super::retry::RetryConfig::default());
                         let action_context = super::retry::ActionContext {
                             zone_id: change.to.id.clone(),
                             zone_name: change.to.name.clone(),
                             confidence: change.confidence,
                         };
-                        
-                        if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
-                            error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
+
+                        if let Err(e) = retry_manager
+                            .execute_zone_actions_with_retry(
+                                &change.suggested_actions,
+                                &action_context,
+                            )
+                            .await
+                        {
+                            error!(
+                                "Failed to execute zone actions for zone '{}': {}",
+                                change.to.name, e
+                            );
                         } else {
-                            debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
+                            debug!(
+                                "Successfully executed all zone actions for zone '{}'",
+                                change.to.name
+                            );
                         }
 
-                    // Send notification if enabled
-                    if change.suggested_actions.notifications {
-                        debug!("Sending enhanced zone change notification for zone '{}'", change.to.name);
-                        Self::send_zone_change_notification(&change);
-                    }
+                        // Send notification if enabled
+                        if change.suggested_actions.notifications {
+                            debug!(
+                                "Sending enhanced zone change notification for zone '{}'",
+                                change.to.name
+                            );
+                            Self::send_zone_change_notification(&change);
+                        }
 
-                    // Adjust scan interval based on zone change
-                    current_scan_interval = Self::calculate_adaptive_scan_interval(
-                        base_scan_interval,
-                        true, // zone changed
-                        scan_start_time.elapsed(),
-                    );
-                    
-                    {
-                        let mut status_data = status.write().await;
-                        status_data.adaptive_scan_interval = current_scan_interval;
-                    }
-                    
-                    debug!("🧠 Adjusted scan interval to {:?} after zone change", current_scan_interval);
+                        // Adjust scan interval based on zone change
+                        current_scan_interval = Self::calculate_adaptive_scan_interval(
+                            base_scan_interval,
+                            true, // zone changed
+                            scan_start_time.elapsed(),
+                        );
+
+                        {
+                            let mut status_data = status.write().await;
+                            status_data.adaptive_scan_interval = current_scan_interval;
+                        }
+
+                        debug!(
+                            "🧠 Adjusted scan interval to {:?} after zone change",
+                            current_scan_interval
+                        );
                     } else {
                         // Confidence below threshold - reject zone change
                         warn!("🧠 Zone change rejected due to low confidence: {:.2}% < {:.2}% threshold", 
                               ml_confidence * 100.0, confidence_threshold * 100.0);
-                        
+
                         // Still update last scan time
                         {
                             let mut status_data = status.write().await;
                             status_data.last_scan = Some(Utc::now());
                         }
-                        
+
                         // Use more frequent scanning when confidence is low
                         current_scan_interval = Self::calculate_adaptive_scan_interval(
                             base_scan_interval,
                             false, // no zone change executed
                             scan_start_time.elapsed(),
                         );
-                        
+
                         // Reduce interval further for low confidence situations
                         current_scan_interval = Duration::from_millis(
-                            (current_scan_interval.as_millis() as f64 * 0.7) as u64
+                            (current_scan_interval.as_millis() as f64 * 0.7) as u64,
                         );
-                        
+
                         {
                             let mut status_data = status.write().await;
                             status_data.adaptive_scan_interval = current_scan_interval;
                         }
-                        
-                        debug!("🧠 Increased scan frequency to {:?} due to low confidence", current_scan_interval);
+
+                        debug!(
+                            "🧠 Increased scan frequency to {:?} due to low confidence",
+                            current_scan_interval
+                        );
                     }
                 }
                 Ok(None) => {
-                    debug!("🧠 No zone change detected in enhanced scan #{}", scan_count);
-                    
+                    debug!(
+                        "🧠 No zone change detected in enhanced scan #{}",
+                        scan_count
+                    );
+
                     // Update status
                     {
                         let mut status_data = status.write().await;
@@ -821,21 +900,27 @@ impl GeofencingDaemon {
                         false, // no zone change
                         scan_start_time.elapsed(),
                     );
-                    
+
                     {
                         let mut status_data = status.write().await;
                         status_data.adaptive_scan_interval = current_scan_interval;
                     }
                 }
                 Err(e) => {
-                    error!("🧠 Enhanced location detection failed in scan #{}: {}", scan_count, e);
-                    
+                    error!(
+                        "🧠 Enhanced location detection failed in scan #{}: {}",
+                        scan_count, e
+                    );
+
                     // Use exponential backoff on errors
                     current_scan_interval = std::cmp::min(
                         current_scan_interval * 2,
-                        Duration::from_secs(300) // Max 5 minutes
+                        Duration::from_secs(300), // Max 5 minutes
                     );
-                    debug!("🧠 Increased scan interval to {:?} due to error", current_scan_interval);
+                    debug!(
+                        "🧠 Increased scan interval to {:?} due to error",
+                        current_scan_interval
+                    );
                 }
             }
 
@@ -845,30 +930,27 @@ impl GeofencingDaemon {
                 let mut ml = ml_manager.lock().await;
                 let manager = zone_manager.lock().await;
                 let zones_detected = manager.list_zones().len();
-                
+
                 ml.record_enhanced_scan_performance(
-                    scan_duration, 
-                    current_scan_interval, 
-                    zones_detected, 
+                    scan_duration,
+                    current_scan_interval,
+                    zones_detected,
                     zone_changed,
-                    confidence_score as f64
+                    confidence_score as f64,
                 );
-                
+
                 // Use ML-enhanced adaptive interval calculation
                 let context = crate::ml_integration::get_current_context();
                 let recent_changes = status.read().await.total_zone_changes % 10; // Recent changes in window
-                current_scan_interval = ml.get_adaptive_scan_interval(
-                    base_scan_interval,
-                    recent_changes,
-                    &context
-                );
-                
+                current_scan_interval =
+                    ml.get_adaptive_scan_interval(base_scan_interval, recent_changes, &context);
+
                 // Update status with ML-calculated interval
                 {
                     let mut status_data = status.write().await;
                     status_data.adaptive_scan_interval = current_scan_interval;
                 }
-                
+
                 debug!("📊 ML-enhanced scan interval updated: {:?} (zone_changed={}, confidence={:.1}%)", 
                        current_scan_interval, zone_changed, confidence_score * 100.0);
             }
@@ -877,7 +959,10 @@ impl GeofencingDaemon {
             tokio::time::sleep(current_scan_interval).await;
         }
 
-        info!("🧠 Enhanced location monitoring loop stopped after {} scans", scan_count);
+        info!(
+            "🧠 Enhanced location monitoring loop stopped after {} scans",
+            scan_count
+        );
     }
 
     /// Calculate adaptive scan interval based on recent activity
@@ -887,7 +972,7 @@ impl GeofencingDaemon {
         last_scan_duration: Duration,
     ) -> Duration {
         let base_seconds = base_interval.as_secs();
-        
+
         let adjusted_seconds = if zone_changed {
             // Increase frequency after zone change to catch rapid transitions
             std::cmp::max(base_seconds / 2, 10) // Minimum 10 seconds
@@ -898,10 +983,10 @@ impl GeofencingDaemon {
             } else {
                 1.2 // Normal backoff
             };
-            
+
             (base_seconds as f64 * performance_factor) as u64
         };
-        
+
         // Clamp to reasonable bounds
         let clamped_seconds = adjusted_seconds.clamp(10, 300);
         Duration::from_secs(clamped_seconds)
@@ -912,8 +997,7 @@ impl GeofencingDaemon {
         zone_manager: Arc<Mutex<ZoneManager>>,
         status: Arc<RwLock<DaemonStatusData>>,
         should_shutdown: Arc<RwLock<bool>>,
-        #[cfg(feature = "ml")]
-        ml_manager: Arc<Mutex<crate::ml_integration::MlManager>>,
+        #[cfg(feature = "ml")] ml_manager: Arc<Mutex<crate::ml_integration::MlManager>>,
         command: DaemonCommand,
     ) -> DaemonResponse {
         debug!("Handling IPC command: {:?}", command);
@@ -998,14 +1082,21 @@ impl GeofencingDaemon {
                             change.to.name
                         );
                         // Execute zone actions with retry logic and connection optimization
-                        let mut retry_manager = super::retry::RetryManager::new(super::retry::RetryConfig::default());
+                        let mut retry_manager =
+                            super::retry::RetryManager::new(super::retry::RetryConfig::default());
                         let action_context = super::retry::ActionContext {
                             zone_id: change.to.id.clone(),
                             zone_name: change.to.name.clone(),
                             confidence: change.confidence,
                         };
-                        
-                        if let Err(e) = retry_manager.execute_zone_actions_with_retry(&change.suggested_actions, &action_context).await {
+
+                        if let Err(e) = retry_manager
+                            .execute_zone_actions_with_retry(
+                                &change.suggested_actions,
+                                &action_context,
+                            )
+                            .await
+                        {
                             warn!(
                                 "Zone '{}' activated but actions failed: {}",
                                 change.to.name, e
@@ -1149,12 +1240,14 @@ impl GeofencingDaemon {
                 let status_data = status.read().await;
                 let metrics = ml_manager.get_ml_metrics(
                     status_data.ml_suggestions_generated,
+                    status_data.ml_auto_suggestions_processed,
+                );
+                debug!(
+                    "Retrieved ML metrics: model_version={}, suggestions={}, auto_processed={}",
+                    metrics.ml_model_version,
+                    status_data.ml_suggestions_generated,
                     status_data.ml_auto_suggestions_processed
                 );
-                debug!("Retrieved ML metrics: model_version={}, suggestions={}, auto_processed={}", 
-                       metrics.ml_model_version, 
-                       status_data.ml_suggestions_generated,
-                       status_data.ml_auto_suggestions_processed);
                 DaemonResponse::MlMetrics { metrics }
             }
         }
@@ -1290,24 +1383,29 @@ impl GeofencingDaemon {
     async fn is_wifi_connected_to(target_ssid: &str) -> bool {
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
+
         debug!("Checking if already connected to WiFi: '{}'", target_ssid);
-        
+
         // Check with NetworkManager first
         if crate::command::is_command_installed("nmcli") {
-            if let Ok(output) = command_runner.run_command("nmcli", &["-t", "connection", "show", "--active"]) {
+            if let Ok(output) =
+                command_runner.run_command("nmcli", &["-t", "connection", "show", "--active"])
+            {
                 if output.status.success() {
                     let connections = String::from_utf8_lossy(&output.stdout);
                     for line in connections.lines() {
                         if line.contains(target_ssid) && line.contains("wifi") {
-                            debug!("Already connected to WiFi '{}' via NetworkManager", target_ssid);
+                            debug!(
+                                "Already connected to WiFi '{}' via NetworkManager",
+                                target_ssid
+                            );
                             return true;
                         }
                     }
                 }
             }
         }
-        
+
         // Check with iwconfig as fallback
         if crate::command::is_command_installed("iwconfig") {
             if let Ok(output) = command_runner.run_command("iwconfig", &[]) {
@@ -1320,7 +1418,7 @@ impl GeofencingDaemon {
                 }
             }
         }
-        
+
         debug!("Not currently connected to WiFi '{}'", target_ssid);
         false
     }
@@ -1329,14 +1427,17 @@ impl GeofencingDaemon {
     async fn is_bluetooth_connected_to(target_device: &str) -> bool {
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
-        debug!("Checking if already connected to Bluetooth device: '{}'", target_device);
-        
+
+        debug!(
+            "Checking if already connected to Bluetooth device: '{}'",
+            target_device
+        );
+
         if !crate::command::is_command_installed("bluetoothctl") {
             debug!("bluetoothctl not available, skipping Bluetooth connection check");
             return false;
         }
-        
+
         // Use bluetoothctl to check connected devices
         if let Ok(output) = command_runner.run_command("bluetoothctl", &["info", target_device]) {
             if output.status.success() {
@@ -1347,8 +1448,11 @@ impl GeofencingDaemon {
                 }
             }
         }
-        
-        debug!("Not currently connected to Bluetooth device '{}'", target_device);
+
+        debug!(
+            "Not currently connected to Bluetooth device '{}'",
+            target_device
+        );
         false
     }
 
@@ -1356,10 +1460,12 @@ impl GeofencingDaemon {
     pub async fn get_current_wifi_ssid() -> Option<String> {
         use crate::command::{CommandRunner, RealCommandRunner};
         let command_runner = RealCommandRunner;
-        
+
         // Try NetworkManager first
         if crate::command::is_command_installed("nmcli") {
-            if let Ok(output) = command_runner.run_command("nmcli", &["-t", "-f", "ACTIVE,SSID", "dev", "wifi"]) {
+            if let Ok(output) =
+                command_runner.run_command("nmcli", &["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+            {
                 if output.status.success() {
                     let wifi_list = String::from_utf8_lossy(&output.stdout);
                     for line in wifi_list.lines() {
@@ -1374,7 +1480,7 @@ impl GeofencingDaemon {
                 }
             }
         }
-        
+
         debug!("No current WiFi connection detected");
         None
     }
@@ -1396,99 +1502,102 @@ impl GeofencingDaemon {
 
             // Check if already connected to avoid unnecessary reconnection
             if Self::is_wifi_connected_to(wifi_ssid).await {
-                info!("Already connected to WiFi '{}', skipping connection", wifi_ssid);
+                info!(
+                    "Already connected to WiFi '{}', skipping connection",
+                    wifi_ssid
+                );
             } else {
                 info!("Connecting to WiFi: {}", wifi_ssid);
                 let command_runner = RealCommandRunner;
 
-            // Try NetworkManager first, then fall back to IWD
-            let success = if crate::command::is_command_installed("nmcli") {
-                debug!("Using NetworkManager (nmcli) for WiFi connection");
-                // Use NetworkManager - attempt connection without password first
-                debug!("Executing nmcli command: device wifi connect {}", wifi_ssid);
-                let result =
-                    command_runner.run_command("nmcli", &["device", "wifi", "connect", wifi_ssid]);
+                // Try NetworkManager first, then fall back to IWD
+                let success = if crate::command::is_command_installed("nmcli") {
+                    debug!("Using NetworkManager (nmcli) for WiFi connection");
+                    // Use NetworkManager - attempt connection without password first
+                    debug!("Executing nmcli command: device wifi connect {}", wifi_ssid);
+                    let result = command_runner
+                        .run_command("nmcli", &["device", "wifi", "connect", wifi_ssid]);
 
-                match result {
-                    Ok(output) if output.status.success() => {
-                        debug!("NetworkManager connection successful: {:?}", output);
-                        info!("Successfully connected to WiFi: {}", wifi_ssid);
-                        true
+                    match result {
+                        Ok(output) if output.status.success() => {
+                            debug!("NetworkManager connection successful: {:?}", output);
+                            info!("Successfully connected to WiFi: {}", wifi_ssid);
+                            true
+                        }
+                        Ok(output) => {
+                            debug!(
+                                "NetworkManager connection failed with status: {:?}, stderr: {:?}",
+                                output.status,
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            warn!(
+                                "Failed to connect to WiFi {} (may need password)",
+                                wifi_ssid
+                            );
+                            false
+                        }
+                        Err(e) => {
+                            debug!("NetworkManager command execution error: {}", e);
+                            warn!(
+                                "Failed to execute nmcli command for WiFi {}: {}",
+                                wifi_ssid, e
+                            );
+                            false
+                        }
                     }
-                    Ok(output) => {
-                        debug!(
-                            "NetworkManager connection failed with status: {:?}, stderr: {:?}",
-                            output.status,
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-                        warn!(
-                            "Failed to connect to WiFi {} (may need password)",
-                            wifi_ssid
-                        );
-                        false
+                } else if crate::command::is_command_installed("iwctl") {
+                    debug!("Using IWD (iwctl) for WiFi connection as NetworkManager not available");
+                    debug!(
+                        "Executing iwctl command: station wlan0 connect {}",
+                        wifi_ssid
+                    );
+                    // Use IWD - attempt connection
+                    let result = command_runner
+                        .run_command("iwctl", &["station", "wlan0", "connect", wifi_ssid]);
+
+                    match result {
+                        Ok(output) if output.status.success() => {
+                            debug!("IWD connection successful: {:?}", output);
+                            info!("Successfully connected to WiFi: {}", wifi_ssid);
+                            true
+                        }
+                        Ok(output) => {
+                            debug!(
+                                "IWD connection failed with status: {:?}, stderr: {:?}",
+                                output.status,
+                                String::from_utf8_lossy(&output.stderr)
+                            );
+                            warn!(
+                                "Failed to connect to WiFi {} (may need password)",
+                                wifi_ssid
+                            );
+                            false
+                        }
+                        Err(e) => {
+                            debug!("IWD command execution error: {}", e);
+                            warn!(
+                                "Failed to execute iwctl command for WiFi {}: {}",
+                                wifi_ssid, e
+                            );
+                            false
+                        }
                     }
-                    Err(e) => {
-                        debug!("NetworkManager command execution error: {}", e);
-                        warn!(
-                            "Failed to execute nmcli command for WiFi {}: {}",
-                            wifi_ssid, e
-                        );
-                        false
-                    }
+                } else {
+                    debug!("No WiFi management tools found (nmcli or iwctl)");
+                    warn!("No WiFi manager (nmcli/iwctl) available");
+                    false
+                };
+
+                if !success {
+                    debug!(
+                        "WiFi connection attempt to '{}' was unsuccessful",
+                        wifi_ssid
+                    );
+                    error!(
+                        "WiFi connection to {} failed - geofencing may not work as expected",
+                        wifi_ssid
+                    );
                 }
-            } else if crate::command::is_command_installed("iwctl") {
-                debug!("Using IWD (iwctl) for WiFi connection as NetworkManager not available");
-                debug!(
-                    "Executing iwctl command: station wlan0 connect {}",
-                    wifi_ssid
-                );
-                // Use IWD - attempt connection
-                let result = command_runner
-                    .run_command("iwctl", &["station", "wlan0", "connect", wifi_ssid]);
-
-                match result {
-                    Ok(output) if output.status.success() => {
-                        debug!("IWD connection successful: {:?}", output);
-                        info!("Successfully connected to WiFi: {}", wifi_ssid);
-                        true
-                    }
-                    Ok(output) => {
-                        debug!(
-                            "IWD connection failed with status: {:?}, stderr: {:?}",
-                            output.status,
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-                        warn!(
-                            "Failed to connect to WiFi {} (may need password)",
-                            wifi_ssid
-                        );
-                        false
-                    }
-                    Err(e) => {
-                        debug!("IWD command execution error: {}", e);
-                        warn!(
-                            "Failed to execute iwctl command for WiFi {}: {}",
-                            wifi_ssid, e
-                        );
-                        false
-                    }
-                }
-            } else {
-                debug!("No WiFi management tools found (nmcli or iwctl)");
-                warn!("No WiFi manager (nmcli/iwctl) available");
-                false
-            };
-
-            if !success {
-                debug!(
-                    "WiFi connection attempt to '{}' was unsuccessful",
-                    wifi_ssid
-                );
-                error!(
-                    "WiFi connection to {} failed - geofencing may not work as expected",
-                    wifi_ssid
-                );
-            }
             } // End of else block (not already connected)
         }
 
@@ -1623,7 +1732,10 @@ impl GeofencingDaemon {
 
             // Check if already connected to avoid unnecessary reconnection
             if Self::is_bluetooth_connected_to(device_name).await {
-                info!("Already connected to Bluetooth device '{}', skipping connection", device_name);
+                info!(
+                    "Already connected to Bluetooth device '{}', skipping connection",
+                    device_name
+                );
                 continue;
             }
 
