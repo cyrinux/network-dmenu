@@ -22,6 +22,14 @@ scan_interval_seconds = 30         # Check location every 30 seconds
 confidence_threshold = 0.8         # How sure to be before switching (0.0-1.0)
 notifications = true               # Show desktop notifications
 
+# Native notification system (v2.14.0+) - notify-send commands auto-converted
+[geofencing.notification_config]
+enabled = true
+timeout_seconds = 5
+default_urgency = "Normal"
+app_name = "Network DMenu"
+icon = "network-wireless"
+
 # Example zone: Home
 # Create this with: network-dmenu --create-zone "home"
 [[geofencing.zones]]
@@ -35,7 +43,7 @@ tailscale_exit_node = "none"               # No exit node at home
 tailscale_shields = false                  # Allow incoming connections at home
 bluetooth = ["Headphones", "Mouse"]        # Auto-connect these devices
 custom_commands = [
-    "notify-send 'Welcome Home!'"
+    "notify-send 'Welcome Home!' 'Network configured automatically'"
 ]
 
 # Example zone: Work/Office
@@ -51,7 +59,7 @@ tailscale_exit_node = "office-server"     # Route through office
 tailscale_shields = true                  # Block incoming for security
 bluetooth = ["Work Headset"]             # Only work devices
 custom_commands = [
-    "notify-send 'At Work' 'VPN connected'"
+    "notify-send 'At Work' 'VPN connected' --urgency=normal"
 ]
 
 # Example zone: Public WiFi (cafe, airport, etc.)
@@ -65,7 +73,7 @@ vpn = "Mullvad"                           # Always use VPN on public WiFi
 tailscale_shields = true                  # Block all incoming connections
 bluetooth = []                            # Don't auto-connect anything
 custom_commands = [
-    "notify-send 'Public WiFi' 'VPN enabled for security'"
+    "notify-send 'Public WiFi' 'VPN enabled for security' --urgency=critical"
 ]
 
 # USAGE:

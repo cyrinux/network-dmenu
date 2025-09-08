@@ -114,7 +114,7 @@
 - 🚀 Background monitoring service with Unix socket IPC
 - 📊 Zone change statistics and confidence tracking
 - 💾 Persistent zone storage in `~/.local/share/network-dmenu/`
-- 🔔 Desktop notifications on zone transitions
+- 🔔 Native desktop notifications with smart notify-send conversion *(v2.14.0+)*
 - 🎮 Complete CLI management interface
 
 #### **CLI Commands**
@@ -290,6 +290,44 @@ hash_salt = "your-unique-salt" # Optional custom salt
 - **Desktop notifications** for all operations
 - **Secure defaults** with proper data directory isolation
 - **Command availability checking** - only shows relevant actions when commands are installed
+
+### 🔔 Native Notification System *(New in v2.14.0+)*
+
+#### **Enhanced Desktop Notifications**
+- 🎯 **Native API Integration** - Uses `notify-rust` crate instead of shell commands
+- 🔄 **Automatic Migration** - Existing `notify-send` commands in config work seamlessly
+- 🛡️ **Improved Security** - No shell execution for notifications
+- ⚡ **Better Performance** - Direct API calls vs subprocess overhead
+- 🎨 **Consistent Appearance** - Uniform notifications across desktop environments
+
+#### **Smart notify-send Conversion**
+```bash
+# These commands in custom_commands are automatically converted:
+notify-send 'Welcome Home' 'Network configured'
+notify-send 'Security Alert' 'VPN enabled' --urgency=critical
+notify-send "Zone Change" "At Office" --urgency=normal
+```
+
+#### **Configuration Options**
+```toml
+[geofencing.notification_config]
+enabled = true              # Enable/disable notifications globally
+timeout_seconds = 5         # Auto-dismiss after 5 seconds (0 = never)
+default_urgency = "Normal"  # "Low", "Normal", or "Critical"
+app_name = "Network DMenu"  # App name shown in notifications
+icon = "network-wireless"   # System icon or file path
+```
+
+#### **Urgency Levels**
+- **`--urgency=low`** → Minimal interruption, quiet notification
+- **`--urgency=normal`** → Standard notification (default)
+- **`--urgency=critical`** → High priority, persistent until dismissed
+
+#### **Migration & Fallback**
+- ✅ **Zero Breaking Changes** - All existing configs continue to work
+- 🔄 **Automatic Detection** - `notify-send` commands converted transparently
+- 🛟 **Graceful Fallback** - Falls back to shell execution if native fails
+- 🔧 **Easy Testing** - Test notifications work before deploying
 
 ## 📦 Installation
 

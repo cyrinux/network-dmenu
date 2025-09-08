@@ -64,6 +64,19 @@ confidence_threshold = 0.8
 # Send desktop notifications on zone changes
 notifications = true
 
+# Notification system configuration (new in v2.14.0+)
+[geofencing.notification_config]
+# Enable/disable notifications globally
+enabled = true
+# Notification timeout in seconds (0 = no timeout)
+timeout_seconds = 5
+# Default notification urgency ("Low", "Normal", "Critical")
+default_urgency = "Normal"
+# Application name shown in notifications
+app_name = "Network DMenu"
+# Icon to use for notifications (system icon name or path)
+icon = "network-wireless"
+
 # ============================================================================
 # GEOFENCE ZONES
 # ============================================================================
@@ -97,6 +110,7 @@ tailscale_shields = false
 bluetooth = ["WH-1000XM4", "Magic Mouse", "AirPods Pro"]
 
 # Execute custom commands when entering zone
+# Note: notify-send commands are automatically converted to native notifications (v2.14.0+)
 custom_commands = [
     "systemctl --user start syncthing",
     "notify-send 'Welcome Home' 'Network configured for home use'",
@@ -125,7 +139,7 @@ tailscale_shields = true
 bluetooth = ["Work Headset"]
 custom_commands = [
     "systemctl --user stop syncthing",
-    "notify-send 'At Office' 'Corporate network configured'",
+    "notify-send 'At Office' 'Corporate network configured' --urgency=normal",
     "slack --startup"
 ]
 
@@ -147,7 +161,7 @@ vpn = "Mullvad-Public"
 tailscale_shields = true
 bluetooth = []  # Don't auto-connect Bluetooth on public networks
 custom_commands = [
-    "notify-send 'Public WiFi' 'Secure VPN connection enabled'",
+    "notify-send 'Public WiFi' 'Secure VPN connection enabled' --urgency=critical",
     "mullvad connect"
 ]
 
@@ -170,7 +184,7 @@ tailscale_exit_node = "auto"
 tailscale_shields = true
 bluetooth = ["AirPods Pro"]  # Keep essential devices only
 custom_commands = [
-    "notify-send 'On Mobile Data' 'Data-saving mode activated'",
+    "notify-send 'On Mobile Data' 'Data-saving mode activated' --urgency=low",
     "systemctl --user stop backup-sync"
 ]
 
@@ -279,6 +293,37 @@ min_level = "info"
 buffer_size = 1000
 # Include source code locations in logs
 include_source = false
+
+# ============================================================================
+# NOTIFICATION SYSTEM (New in v2.14.0+)
+# ============================================================================
+
+# The notification system now uses native desktop notifications instead of shell commands.
+# This provides better reliability, security, and customization options.
+
+# SUPPORTED notify-send FORMATS:
+# These commands are automatically converted to native notifications:
+# notify-send 'Title' 'Message'
+# notify-send "Title" "Message"
+# notify-send 'Security Alert' 'Entered unknown location' --urgency=critical
+# notify-send "Zone Change" "Welcome Home!" --urgency=normal
+
+# URGENCY LEVELS:
+# --urgency=low       → Low priority, minimal interruption
+# --urgency=normal    → Standard priority (default)
+# --urgency=critical  → High priority, persistent notification
+
+# MIGRATION FROM OLD CONFIGURATIONS:
+# Existing notify-send commands in custom_commands continue to work seamlessly.
+# They are automatically detected and converted to native notifications.
+# If native notification fails, it falls back to the original shell command.
+
+# BENEFITS OF NATIVE NOTIFICATIONS:
+# ✓ Better security (no shell command execution for notifications)
+# ✓ Improved reliability (direct API calls vs process spawning)
+# ✓ Consistent appearance across different desktop environments
+# ✓ Configurable timeouts, icons, and urgency levels
+# ✓ Better performance (no subprocess overhead)
 
 # ============================================================================
 # USAGE EXAMPLES AND CLI COMMANDS
