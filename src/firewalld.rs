@@ -90,11 +90,18 @@ pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<Firewall
     actions
 }
 
+/// Result of firewalld action execution
+#[derive(Debug)]
+pub struct FirewalldActionResult {
+    pub success: bool,
+    pub message: Option<String>,
+}
+
 /// Handle firewalld action execution
 pub async fn handle_firewalld_action(
     action: &FirewalldAction,
     command_runner: &dyn CommandRunner,
-) -> Result<bool, Box<dyn Error>> {
+) -> Result<FirewalldActionResult, Box<dyn Error>> {
     if !is_firewalld_available() {
         return Err("firewall-cmd command not found. Please install firewalld.".into());
     }
@@ -104,20 +111,37 @@ pub async fn handle_firewalld_action(
     match action {
         FirewalldAction::SetZone(zone) => {
             set_default_zone(zone, command_runner)?;
-            Ok(true)
+            Ok(FirewalldActionResult {
+                success: true,
+                message: Some(format!("Switched to firewalld zone: {}", zone)),
+            })
         }
         FirewalldAction::TogglePanicMode(enable) => {
             set_panic_mode(*enable, command_runner)?;
-            Ok(true)
+            let message = if *enable {
+                "Firewalld panic mode enabled - all connections blocked"
+            } else {
+                "Firewalld panic mode disabled"
+            };
+            Ok(FirewalldActionResult {
+                success: true,
+                message: Some(message.to_string()),
+            })
         }
         FirewalldAction::GetCurrentZone => {
             let zone = get_current_zone(command_runner)?;
-            println!("Current firewalld zone: {}", zone);
-            Ok(true)
+            debug!("Current firewalld zone: {}", zone);
+            Ok(FirewalldActionResult {
+                success: true,
+                message: Some(format!("Current firewalld zone: {}", zone)),
+            })
         }
         FirewalldAction::OpenConfigEditor => {
             open_firewall_config_editor()?;
-            Ok(true)
+            Ok(FirewalldActionResult {
+                success: true,
+                message: Some("Firewalld configuration editor opened".to_string()),
+            })
         }
     }
 }

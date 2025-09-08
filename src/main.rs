@@ -1346,30 +1346,14 @@ async fn set_action(
         #[cfg(feature = "firewalld")]
         ActionType::Firewalld(firewalld_action) => {
             match handle_firewalld_action(firewalld_action, command_runner).await {
-                Ok(success) => {
-                    let message = match firewalld_action {
-                        FirewalldAction::SetZone(zone) => {
-                            format!("Switched to firewalld zone: {}", zone)
-                        }
-                        FirewalldAction::TogglePanicMode(enable) => {
-                            if *enable {
-                                "Firewalld panic mode enabled - all connections blocked".to_string()
-                            } else {
-                                "Firewalld panic mode disabled".to_string()
-                            }
-                        }
-                        FirewalldAction::GetCurrentZone => {
-                            "Current firewalld zone displayed".to_string()
-                        }
-                        FirewalldAction::OpenConfigEditor => {
-                            "Firewalld configuration editor opened".to_string()
-                        }
-                    };
-                    let _ = Notification::new()
-                        .summary("🔥 Firewalld")
-                        .body(&message)
-                        .show();
-                    Ok(success)
+                Ok(result) => {
+                    if let Some(message) = result.message {
+                        let _ = Notification::new()
+                            .summary("🔥 Firewalld")
+                            .body(&message)
+                            .show();
+                    }
+                    Ok(result.success)
                 }
                 Err(e) => {
                     let error_msg = format!("Firewalld operation failed: {}", e);

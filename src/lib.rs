@@ -44,7 +44,7 @@ pub use dns_cache::{
     DnsCacheStorage,
 };
 #[cfg(feature = "firewalld")]
-pub use firewalld::{get_firewalld_actions, handle_firewalld_action, FirewalldAction};
+pub use firewalld::{get_firewalld_actions, handle_firewalld_action, FirewalldAction, FirewalldActionResult};
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
