@@ -301,7 +301,7 @@ async fn stream_actions_simple(
             // Send all actions directly without any loop
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
-            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode(!cache_data.panic_mode)));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode));
             
             // Inline all zone actions manually (your exact zones)
             if cache_data.zones.contains(&"block".to_string()) {
@@ -496,7 +496,7 @@ async fn produce_actions_streaming(
             // Send all actions directly without any loop
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
-            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode(!cache_data.panic_mode)));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode));
             
             // Inline all zone actions manually (your exact zones)
             if cache_data.zones.contains(&"block".to_string()) {

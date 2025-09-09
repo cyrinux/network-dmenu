@@ -20,8 +20,8 @@ use tokio::process::Command as TokioCommand;
 pub enum FirewalldAction {
     /// Change to a specific zone
     SetZone(String),
-    /// Toggle panic mode on/off
-    TogglePanicMode(bool),
+    /// Toggle panic mode
+    TogglePanicMode,
     /// Get current zone
     GetCurrentZone,
     /// Open firewalld configuration editor
@@ -48,8 +48,13 @@ pub struct FirewalldCache {
 
 
 impl FirewalldAction {
-    /// Convert action to display string with current zone information
+    /// Convert action to display string with current zone and panic mode information
     pub fn to_display_string(&self, current_zone: Option<&str>) -> String {
+        self.to_display_string_with_panic(current_zone, None)
+    }
+
+    /// Convert action to display string with current zone and panic mode information
+    pub fn to_display_string_with_panic(&self, current_zone: Option<&str>, panic_mode: Option<bool>) -> String {
         match self {
             FirewalldAction::SetZone(zone) => {
                 let is_current = current_zone.is_some_and(|current| current == zone);
@@ -65,11 +70,20 @@ impl FirewalldAction {
                     )
                 }
             }
-            FirewalldAction::TogglePanicMode(enable) => {
-                if *enable {
-                    format!("firewalld  - {} Enable panic mode", ICON_FIREWALL_BLOCK)
+            FirewalldAction::TogglePanicMode => {
+                // Use provided panic mode state or check it
+                let is_panic_on = panic_mode.unwrap_or_else(|| {
+                    std::process::Command::new("firewall-cmd")
+                        .arg("--query-panic")
+                        .output()
+                        .map(|output| output.status.success())
+                        .unwrap_or(false)
+                });
+                
+                if is_panic_on {
+                    format!("firewalld  - {} Disable panic mode", ICON_FIREWALL_ALLOW)
                 } else {
-                    format!("firewalld  - {} Disable panic mode (enabled)", ICON_FIREWALL_ALLOW)
+                    format!("firewalld  - {} Enable panic mode", ICON_FIREWALL_BLOCK)
                 }
             }
             FirewalldAction::GetCurrentZone => {
@@ -82,7 +96,7 @@ impl FirewalldAction {
     }
 
     /// Convert action to display string (backwards compatibility)
-    /// This version dynamically fetches the current zone to show proper state
+    /// This version dynamically fetches the current zone and panic mode to show proper state
     pub fn to_display_string_simple(&self) -> String {
         // Try to get current zone synchronously for better display
         let current_zone = std::process::Command::new("firewall-cmd")
@@ -98,7 +112,18 @@ impl FirewalldAction {
                 }
             });
         
-        self.to_display_string(current_zone.as_deref())
+        // Try to get panic mode state for toggle action
+        let panic_mode = if matches!(self, FirewalldAction::TogglePanicMode) {
+            std::process::Command::new("firewall-cmd")
+                .arg("--query-panic")
+                .output()
+                .ok()
+                .map(|output| output.status.success())
+        } else {
+            None
+        };
+        
+        self.to_display_string_with_panic(current_zone.as_deref(), panic_mode)
     }
 }
 
@@ -127,8 +152,8 @@ fn generate_firewalld_actions_from_cache(cache_data: &FirewalldCache) -> Vec<Fir
         FirewalldAction::OpenConfigEditor,
     ];
 
-    // Add panic mode action based on cached state
-    actions.push(FirewalldAction::TogglePanicMode(!cache_data.panic_mode));
+    // Add panic mode toggle action  
+    actions.push(FirewalldAction::TogglePanicMode);
 
     // Add simple zone switching actions for all cached zones
     for zone_name in &cache_data.zones {
@@ -136,6 +161,40 @@ fn generate_firewalld_actions_from_cache(cache_data: &FirewalldCache) -> Vec<Fir
     }
 
     debug!("Generated {} instant firewalld actions", actions.len());
+    actions
+}
+
+/// Generate firewalld actions with display strings from cached data
+pub fn generate_firewalld_actions_with_display_from_cache(cache_data: &FirewalldCache, current_zone: Option<&str>) -> Vec<(FirewalldAction, String)> {
+    debug!("Generating instant firewalld actions with display from cache");
+
+    let mut actions = vec![];
+
+    // Add zone information action
+    let zone_action = FirewalldAction::GetCurrentZone;
+    actions.push((zone_action.clone(), zone_action.to_display_string_with_panic(current_zone, Some(cache_data.panic_mode))));
+
+    // Add config editor action
+    let config_action = FirewalldAction::OpenConfigEditor;
+    actions.push((config_action.clone(), config_action.to_display_string_with_panic(current_zone, Some(cache_data.panic_mode))));
+
+    // Add zone switching actions
+    for zone_name in &cache_data.zones {
+        let action = FirewalldAction::SetZone(zone_name.clone());
+        let display = if Some(zone_name.as_str()) == current_zone {
+            format!("firewalld  - ✅ Switch to zone: {} (current)", zone_name)
+        } else {
+            format!("firewalld  - {} Switch to zone: {}", ICON_FIREWALL_ALLOW, zone_name)
+        };
+        actions.push((action, display));
+    }
+
+    // Add panic mode toggle action with cached state
+    let panic_action = FirewalldAction::TogglePanicMode;
+    let panic_display = panic_action.to_display_string_with_panic(current_zone, Some(cache_data.panic_mode));
+    actions.push((panic_action, panic_display));
+
+    debug!("Generated {} instant firewalld actions with display", actions.len());
     actions
 }
 
@@ -159,8 +218,7 @@ pub fn get_firewalld_actions(command_runner: &dyn CommandRunner) -> Vec<Firewall
     }
 
     // Add panic mode toggle
-    let panic_enabled = is_panic_mode_enabled(command_runner).unwrap_or(false);
-    actions.push(FirewalldAction::TogglePanicMode(!panic_enabled));
+    actions.push(FirewalldAction::TogglePanicMode);
 
     actions
 }
@@ -174,13 +232,8 @@ pub async fn get_firewalld_actions_with_display() -> Vec<(FirewalldAction, Strin
 
     let mut actions = vec![];
     
-    // Fetch current zone and panic mode in parallel for better performance
-    let (current_zone, panic_enabled) = tokio::join!(
-        get_current_zone_async(),
-        is_panic_mode_enabled_async()
-    );
-    let current_zone = current_zone.ok();
-    let panic_enabled = panic_enabled.unwrap_or(false);
+    // Fetch current zone for better performance  
+    let current_zone = get_current_zone_async().await.ok();
 
     // Add zone information action
     let zone_action = FirewalldAction::GetCurrentZone;
@@ -218,10 +271,17 @@ pub async fn get_firewalld_actions_with_display() -> Vec<(FirewalldAction, Strin
         }
     }
 
-    // Add panic mode toggle with proper state indicator
-    let panic_action = FirewalldAction::TogglePanicMode(!panic_enabled);
-    let panic_display = if panic_enabled {
-        format!("firewalld  - {} Disable panic mode (currently enabled)", ICON_FIREWALL_ALLOW)
+    // Add panic mode toggle action with state-aware display
+    let panic_action = FirewalldAction::TogglePanicMode;
+    let is_panic_on = tokio::process::Command::new("firewall-cmd")
+        .arg("--query-panic")
+        .output()
+        .await
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    
+    let panic_display = if is_panic_on {
+        format!("firewalld  - {} Disable panic mode", ICON_FIREWALL_ALLOW)
     } else {
         format!("firewalld  - {} Enable panic mode", ICON_FIREWALL_BLOCK)
     };
@@ -256,9 +316,13 @@ pub async fn handle_firewalld_action(
                 message: Some(format!("Switched to firewalld zone: {}", zone)),
             })
         }
-        FirewalldAction::TogglePanicMode(enable) => {
-            set_panic_mode(*enable, command_runner)?;
-            let message = if *enable {
+        FirewalldAction::TogglePanicMode => {
+            // Check current panic mode state and toggle it
+            let current_panic = is_panic_mode_enabled(command_runner).unwrap_or(false);
+            let new_panic_state = !current_panic;
+            
+            set_panic_mode(new_panic_state, command_runner)?;
+            let message = if new_panic_state {
                 "Firewalld panic mode enabled - all connections blocked"
             } else {
                 "Firewalld panic mode disabled"
@@ -540,19 +604,6 @@ fn set_default_zone(zone: &str, command_runner: &dyn CommandRunner) -> Result<()
     Ok(())
 }
 
-/// Check if panic mode is enabled (async version)
-async fn is_panic_mode_enabled_async() -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let output = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        tokio::process::Command::new("firewall-cmd")
-            .arg("--query-panic")
-            .output()
-    ).await
-    .map_err(|_| "firewall-cmd panic mode timeout")??;
-
-    // firewall-cmd returns 0 if panic mode is on, 1 if off
-    Ok(output.status.success())
-}
 
 /// Check if panic mode is enabled (sync version)
 fn is_panic_mode_enabled(command_runner: &dyn CommandRunner) -> Result<bool, Box<dyn Error>> {
@@ -873,11 +924,8 @@ mod tests {
             .to_display_string(Some("public"))
             .contains("✅ Switch to zone: public (current)"));
 
-        let panic_on = FirewalldAction::TogglePanicMode(true);
-        assert!(panic_on.to_display_string(None).contains("Enable panic mode"));
-
-        let panic_off = FirewalldAction::TogglePanicMode(false);
-        assert!(panic_off.to_display_string(None).contains("Disable panic mode"));
+        let panic_toggle = FirewalldAction::TogglePanicMode;
+        assert!(panic_toggle.to_display_string(None).contains("Toggle panic mode"));
 
         let current_zone = FirewalldAction::GetCurrentZone;
         assert!(current_zone
