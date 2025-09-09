@@ -943,7 +943,7 @@ impl RetryManager {
 
                 // Check if this is a notify-send command that we can handle with our notification system
                 let notification_manager = NotificationManager::default();
-                if let Some(_) = notification_manager.parse_notify_send_command(command) {
+                if notification_manager.parse_notify_send_command(command).is_some() {
                     debug!("Converting notify-send command to native notification: {}", command);
                     let notification_result = notification_manager.execute_notification_command(command);
                     match notification_result {
@@ -952,7 +952,7 @@ impl RetryManager {
                             return Ok(());
                         }
                         Err(e) => {
-                            debug!("Failed to send notification via native system, falling back to shell command: {}", e.to_string());
+                            debug!("Failed to send notification via native system, falling back to shell command: {}", e);
                             // Fall through to execute as shell command
                         }
                     }

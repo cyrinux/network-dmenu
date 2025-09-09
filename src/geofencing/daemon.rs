@@ -31,7 +31,6 @@ pub struct GeofencingDaemon {
     should_shutdown: Arc<RwLock<bool>>,
     #[cfg(feature = "ml")]
     ml_manager: Arc<Mutex<MlManager>>,
-    notification_manager: NotificationManager,
 }
 
 /// Internal daemon status data
@@ -79,7 +78,6 @@ impl GeofencingDaemon {
             last_ml_update: None,
         }));
 
-        let notification_manager = NotificationManager::new(config.notification_config.clone());
         debug!("Geofencing daemon created successfully");
         Self {
             zone_manager,
@@ -88,7 +86,6 @@ impl GeofencingDaemon {
             should_shutdown: Arc::new(RwLock::new(false)),
             #[cfg(feature = "ml")]
             ml_manager,
-            notification_manager,
         }
     }
 
@@ -1490,10 +1487,6 @@ impl GeofencingDaemon {
         None
     }
 
-    /// Execute zone actions (connect to WiFi, VPN, etc.)
-    async fn execute_zone_actions(&self, actions: &ZoneActions) -> Result<()> {
-        Self::execute_zone_actions_static(actions, &self.notification_manager).await
-    }
 
     /// Execute zone actions (connect to WiFi, VPN, etc.) - static version for IPC
     async fn execute_zone_actions_static(actions: &ZoneActions, notification_manager: &NotificationManager) -> Result<()> {
@@ -1856,7 +1849,7 @@ impl GeofencingDaemon {
             info!("Executing custom command: {}", command);
 
             // Check if this is a notify-send command that we can handle with our notification system
-            if let Some(_) = notification_manager.parse_notify_send_command(command) {
+            if notification_manager.parse_notify_send_command(command).is_some() {
                 debug!("Converting notify-send command to native notification: {}", command);
                 let notification_result = notification_manager.execute_notification_command(command);
                 match notification_result {
@@ -1865,7 +1858,7 @@ impl GeofencingDaemon {
                         continue;
                     }
                     Err(e) => {
-                        warn!("Failed to send notification via native system, falling back to shell command: {}", e.to_string());
+                        warn!("Failed to send notification via native system, falling back to shell command: {}", e);
                         // Fall through to execute as shell command
                     }
                 }
@@ -1885,10 +1878,6 @@ impl GeofencingDaemon {
         Ok(())
     }
 
-    /// Execute a shell command with proper logging
-    async fn execute_shell_command(&self, command: &str) {
-        Self::execute_shell_command_static(command).await;
-    }
 
     /// Execute a shell command with proper logging - static version
     async fn execute_shell_command_static(command: &str) {

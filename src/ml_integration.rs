@@ -732,6 +732,7 @@ pub enum AutoSuggestionAction {
 }
 
 /// Zone transition smoothing to prevent rapid zone changes
+#[cfg(feature = "ml")]
 #[derive(Debug, Clone)]
 pub struct ZoneTransitionSmoother {
     current_zone_id: Option<String>,
@@ -742,6 +743,7 @@ pub struct ZoneTransitionSmoother {
     confidence_decay_rate: f64,
 }
 
+#[cfg(feature = "ml")]
 #[derive(Debug, Clone)]
 struct ZoneTransition {
     from_zone_id: Option<String>,
@@ -751,12 +753,14 @@ struct ZoneTransition {
     was_applied: bool,
 }
 
+#[cfg(feature = "ml")]
 impl Default for ZoneTransitionSmoother {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "ml")]
 impl ZoneTransitionSmoother {
     pub fn new() -> Self {
         Self {

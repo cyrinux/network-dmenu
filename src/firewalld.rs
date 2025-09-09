@@ -3,13 +3,17 @@
 //! This module provides functionality to interact with firewalld zones and panic mode
 //! using the firewall-cmd command.
 
-use crate::command::CommandRunner;
+use crate::command::{CommandRunner, is_command_installed};
 use crate::constants::{ICON_FIREWALL_ALLOW, ICON_FIREWALL_BLOCK, ICON_LOCK};
 use crate::privilege::wrap_privileged_command;
 use log::debug;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
+use std::fs;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::process::Command as TokioCommand;
 
 /// Firewalld-related actions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,12 +37,22 @@ pub struct FirewalldZone {
     pub is_default: bool,
 }
 
+/// Cached firewalld data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewalldCache {
+    pub zones: Vec<String>,
+    pub active_zones: HashMap<String, Vec<String>>, // zone_name -> interfaces
+    pub panic_mode: bool,
+    pub cached_at: u64,
+}
+
+
 impl FirewalldAction {
     /// Convert action to display string with current zone information
     pub fn to_display_string(&self, current_zone: Option<&str>) -> String {
         match self {
             FirewalldAction::SetZone(zone) => {
-                let is_current = current_zone.map_or(false, |current| current == zone);
+                let is_current = current_zone.is_some_and(|current| current == zone);
                 if is_current {
                     format!(
                         "firewalld  - ✅ Switch to zone: {} (current)",
@@ -88,45 +102,40 @@ impl FirewalldAction {
     }
 }
 
-/// Get available firewalld actions (async version)
+/// Get available firewalld actions (async version) - INSTANT VERSION  
 pub async fn get_firewalld_actions_async() -> Vec<FirewalldAction> {
-    if !is_firewalld_available_async().await {
-        debug!("firewall-cmd not available, skipping firewalld actions");
+    // Quick check if firewall-cmd exists
+    if !is_command_installed("firewall-cmd") {
+        debug!("firewall-cmd not installed, skipping firewalld actions");
         return vec![];
     }
+
+    // Get cached firewalld data (no extra calls)
+    let cache_data = get_or_refresh_firewalld_cache().await;
+
+    // Generate actions instantly from cache (no more async calls)
+    generate_firewalld_actions_from_cache(&cache_data)
+}
+
+
+/// Generate firewalld actions from cached data (pure function, no async)
+fn generate_firewalld_actions_from_cache(cache_data: &FirewalldCache) -> Vec<FirewalldAction> {
+    debug!("Generating instant firewalld actions from cache");
 
     let mut actions = vec![
         FirewalldAction::GetCurrentZone,
         FirewalldAction::OpenConfigEditor,
     ];
 
-    // Add zone switching actions
-    debug!("Attempting to get available zones");
-    match get_available_zones_async().await {
-        Ok(zones) => {
-            debug!("Successfully got {} zones", zones.len());
-            let current_zone = get_current_zone_async().await.unwrap_or_default();
-            debug!("Current zone: {}", current_zone);
+    // Add panic mode action based on cached state
+    actions.push(FirewalldAction::TogglePanicMode(!cache_data.panic_mode));
 
-            for zone in zones {
-                debug!("Adding zone switching action for: {}", zone.name);
-                actions.push(FirewalldAction::SetZone(zone.name));
-            }
-        }
-        Err(e) => {
-            debug!("Failed to get zones: {}, adding fallback zones", e);
-            // Add common zones as fallback when zone enumeration fails
-            let fallback_zones = vec!["public", "home", "work", "trusted", "block", "drop"];
-            for zone in fallback_zones {
-                actions.push(FirewalldAction::SetZone(zone.to_string()));
-            }
-        }
+    // Add simple zone switching actions for all cached zones
+    for zone_name in &cache_data.zones {
+        actions.push(FirewalldAction::SetZone(zone_name.clone()));
     }
 
-    // Add panic mode toggle
-    let panic_enabled = is_panic_mode_enabled_async().await.unwrap_or(false);
-    actions.push(FirewalldAction::TogglePanicMode(!panic_enabled));
-
+    debug!("Generated {} instant firewalld actions", actions.len());
     actions
 }
 
@@ -164,8 +173,14 @@ pub async fn get_firewalld_actions_with_display() -> Vec<(FirewalldAction, Strin
     }
 
     let mut actions = vec![];
-    let current_zone = get_current_zone_async().await.ok();
-    let panic_enabled = is_panic_mode_enabled_async().await.unwrap_or(false);
+    
+    // Fetch current zone and panic mode in parallel for better performance
+    let (current_zone, panic_enabled) = tokio::join!(
+        get_current_zone_async(),
+        is_panic_mode_enabled_async()
+    );
+    let current_zone = current_zone.ok();
+    let panic_enabled = panic_enabled.unwrap_or(false);
 
     // Add zone information action
     let zone_action = FirewalldAction::GetCurrentZone;
@@ -412,23 +427,9 @@ async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error
     let mut zones = Vec::new();
 
     for zone_name in zone_names {
-        // Get zone description with timeout
-        let info_output = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            tokio::process::Command::new("firewall-cmd")
-                .args(["--zone", zone_name, "--get-description"])
-                .output()
-        ).await
-        .map_err(|_| "firewall-cmd zone description timeout")??;
-
-        let description = if info_output.status.success() {
-            String::from_utf8(info_output.stdout)
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        } else {
-            format!("Zone: {}", zone_name)
-        };
+        // Skip individual zone description calls for performance
+        // Use simple zone name as description to avoid multiple firewall-cmd calls
+        let description = get_zone_description_simple(zone_name);
 
         let is_active = active_zones_str.contains(zone_name);
         let is_default = zone_name == current_zone;
@@ -441,8 +442,26 @@ async fn get_available_zones_async() -> Result<Vec<FirewalldZone>, Box<dyn Error
         });
     }
 
-    debug!("Found {} firewalld zones", zones.len());
+    debug!("Found {} firewalld zones (fast mode)", zones.len());
     Ok(zones)
+}
+
+/// Get simple zone description without external calls for performance
+fn get_zone_description_simple(zone_name: &str) -> String {
+    match zone_name {
+        "public" => "For use in public areas with limited trust",
+        "home" => "For use in home environments with trusted devices",
+        "work" => "For use in work environments with some trust",
+        "trusted" => "All network connections are accepted",
+        "block" => "All incoming network connections are rejected",
+        "drop" => "All incoming packets are dropped without reply",
+        "dmz" => "For computers in demilitarized zone with limited access",
+        "external" => "For use on external networks with masquerading enabled",
+        "internal" => "For use on internal networks when you trust other computers",
+        "libvirt" => "For libvirt virtual machine networks",
+        "libvirt-routed" => "For libvirt routed virtual machine networks",
+        _ => "Firewall zone",
+    }.to_string()
 }
 
 /// Get available firewalld zones with information (sync version)
@@ -655,6 +674,156 @@ fn open_firewall_config_editor() -> Result<(), Box<dyn Error>> {
 
     Err("No firewall configuration tool found. Please install firewall-config, gufw, or a system settings app.".into())
 }
+
+/// Get firewalld cache directory
+fn get_firewalld_cache_dir() -> Result<std::path::PathBuf, String> {
+    let cache_dir = if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
+        std::path::PathBuf::from(dir)
+    } else if let Some(dir) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(dir).join(".cache")
+    } else {
+        return Err("Cannot determine cache directory".to_string());
+    };
+    
+    let firewalld_cache = cache_dir.join("network-dmenu").join("firewalld");
+    if !firewalld_cache.exists() {
+        std::fs::create_dir_all(&firewalld_cache).map_err(|e| e.to_string())?;
+    }
+    
+    Ok(firewalld_cache)
+}
+
+/// Get cached firewalld data or refresh if expired (1 day)
+pub async fn get_or_refresh_firewalld_cache() -> FirewalldCache {
+    let cache_path = match get_firewalld_cache_dir() {
+        Ok(dir) => dir.join("cache.json"),
+        Err(_) => return refresh_firewalld_cache().await,
+    };
+
+    // Try to load existing cache
+    if let Ok(cache_content) = fs::read_to_string(&cache_path) {
+        if let Ok(cache) = serde_json::from_str::<FirewalldCache>(&cache_content) {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            
+            // Cache valid for 1 day (86400 seconds)
+            if now - cache.cached_at < 86400 {
+                debug!("Using cached firewalld data");
+                return cache;
+            }
+        }
+    }
+
+    debug!("Cache expired or missing, refreshing firewalld data");
+    let fresh_cache = refresh_firewalld_cache().await;
+    
+    // Save fresh cache
+    if let Ok(json) = serde_json::to_string_pretty(&fresh_cache) {
+        let _ = fs::write(&cache_path, json);
+    }
+    
+    fresh_cache
+}
+
+/// Refresh firewalld cache by calling firewall-cmd
+async fn refresh_firewalld_cache() -> FirewalldCache {
+    let mut cache = FirewalldCache {
+        zones: Vec::new(),
+        active_zones: HashMap::new(),
+        panic_mode: false,
+        cached_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+
+    // Get zones: firewall-cmd --get-zones
+    if let Ok(output) = TokioCommand::new("firewall-cmd")
+        .arg("--get-zones")
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let zones_str = String::from_utf8_lossy(&output.stdout);
+            cache.zones = zones_str
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            debug!("Cached {} zones", cache.zones.len());
+        }
+    }
+
+    // Get active zones: firewall-cmd --get-active-zones
+    if let Ok(output) = TokioCommand::new("firewall-cmd")
+        .arg("--get-active-zones")
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let active_str = String::from_utf8_lossy(&output.stdout);
+            cache.active_zones = parse_active_zones_output(&active_str);
+            debug!("Cached {} active zones", cache.active_zones.len());
+        }
+    }
+
+    // Get panic mode: firewall-cmd --query-panic
+    if let Ok(output) = TokioCommand::new("firewall-cmd")
+        .arg("--query-panic")
+        .output()
+        .await
+    {
+        // firewall-cmd returns 0 if panic mode is on, 1 if off
+        cache.panic_mode = output.status.success();
+        debug!("Panic mode: {}", cache.panic_mode);
+    }
+
+    cache
+}
+
+/// Parse active zones output like:
+/// home (default)
+///   interfaces: wlan0
+/// public
+///   interfaces: docker0
+/// trusted
+///   interfaces: tailscale0
+fn parse_active_zones_output(output: &str) -> HashMap<String, Vec<String>> {
+    let mut zones = HashMap::new();
+    let mut current_zone: Option<String> = None;
+    
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        
+        if line.starts_with("interfaces:") {
+            // Parse interfaces line
+            if let Some(zone) = &current_zone {
+                let interfaces: Vec<String> = line
+                    .strip_prefix("interfaces:")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+                zones.insert(zone.clone(), interfaces);
+            }
+        } else {
+            // This is a zone line, extract zone name
+            let zone_name = if line.contains(" (default)") {
+                line.replace(" (default)", "")
+            } else {
+                line.to_string()
+            };
+            current_zone = Some(zone_name);
+        }
+    }
+    
+    zones
+}
+
 
 #[cfg(test)]
 mod tests {

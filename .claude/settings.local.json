@@ -33,7 +33,11 @@
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics)",
       "Bash(time:*)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics --stdout)",
-      "Bash(firewall-cmd:*)"
+      "Bash(firewall-cmd:*)",
+      "Read(//tmp/**)",
+      "Bash(cat:*)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics --no-vpn)",
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi)"
     ],
     "deny": [],
     "ask": []

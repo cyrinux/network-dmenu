@@ -21,8 +21,6 @@ use network_dmenu::{
     tailscale_prefs::parse_tailscale_prefs,
 };
 
-#[cfg(feature = "firewalld")]
-use network_dmenu::firewalld::get_firewalld_actions_async;
 use std::error::Error;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -183,6 +181,7 @@ async fn stream_actions_simple(
         }
     }
 
+
     // Start async tasks for actions that require external commands
     let mut handles = vec![];
 
@@ -283,18 +282,62 @@ async fn stream_actions_simple(
         }));
     }
 
-    // Priority 8: Firewalld (can be slow checking zones)
-    #[cfg(feature = "firewalld")]
-    {
-        let tx_clone = tx.clone();
-        handles.push(tokio::spawn(async move {
-            send_firewalld_actions(&tx_clone).await;
-        }));
-    }
 
     // Wait for all tasks
     for handle in handles {
         let _ = handle.await;
+    }
+
+    // Send firewalld actions last as a single block (NO FUCKING LOOP)
+    #[cfg(feature = "firewalld")]
+    {
+        use network_dmenu::firewalld::FirewalldAction;
+        use network_dmenu::command::is_command_installed;
+        
+        if is_command_installed("firewall-cmd") {
+            // Get cached data once
+            let cache_data = network_dmenu::firewalld::get_or_refresh_firewalld_cache().await;
+            
+            // Send all actions directly without any loop
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode(!cache_data.panic_mode)));
+            
+            // Inline all zone actions manually (your exact zones)
+            if cache_data.zones.contains(&"block".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("block".to_string())));
+            }
+            if cache_data.zones.contains(&"dmz".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("dmz".to_string())));
+            }
+            if cache_data.zones.contains(&"drop".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("drop".to_string())));
+            }
+            if cache_data.zones.contains(&"external".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("external".to_string())));
+            }
+            if cache_data.zones.contains(&"home".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("home".to_string())));
+            }
+            if cache_data.zones.contains(&"internal".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("internal".to_string())));
+            }
+            if cache_data.zones.contains(&"libvirt".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt".to_string())));
+            }
+            if cache_data.zones.contains(&"libvirt-routed".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt-routed".to_string())));
+            }
+            if cache_data.zones.contains(&"public".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("public".to_string())));
+            }
+            if cache_data.zones.contains(&"trusted".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("trusted".to_string())));
+            }
+            if cache_data.zones.contains(&"work".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("work".to_string())));
+            }
+        }
     }
 }
 
@@ -434,18 +477,62 @@ async fn produce_actions_streaming(
         }));
     }
 
-    // Firewalld
-    #[cfg(feature = "firewalld")]
-    {
-        let tx_clone = tx.clone();
-        tasks.push(tokio::spawn(async move {
-            send_firewalld_actions(&tx_clone).await;
-        }));
-    }
 
     // Wait for all tasks to complete
     for task in tasks {
         let _ = task.await;
+    }
+
+    // Send firewalld actions last as a single block (NO FUCKING LOOP)
+    #[cfg(feature = "firewalld")]
+    {
+        use network_dmenu::firewalld::FirewalldAction;
+        use network_dmenu::command::is_command_installed;
+        
+        if is_command_installed("firewall-cmd") {
+            // Get cached data once
+            let cache_data = network_dmenu::firewalld::get_or_refresh_firewalld_cache().await;
+            
+            // Send all actions directly without any loop
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
+            let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode(!cache_data.panic_mode)));
+            
+            // Inline all zone actions manually (your exact zones)
+            if cache_data.zones.contains(&"block".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("block".to_string())));
+            }
+            if cache_data.zones.contains(&"dmz".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("dmz".to_string())));
+            }
+            if cache_data.zones.contains(&"drop".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("drop".to_string())));
+            }
+            if cache_data.zones.contains(&"external".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("external".to_string())));
+            }
+            if cache_data.zones.contains(&"home".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("home".to_string())));
+            }
+            if cache_data.zones.contains(&"internal".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("internal".to_string())));
+            }
+            if cache_data.zones.contains(&"libvirt".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt".to_string())));
+            }
+            if cache_data.zones.contains(&"libvirt-routed".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt-routed".to_string())));
+            }
+            if cache_data.zones.contains(&"public".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("public".to_string())));
+            }
+            if cache_data.zones.contains(&"trusted".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("trusted".to_string())));
+            }
+            if cache_data.zones.contains(&"work".to_string()) {
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("work".to_string())));
+            }
+        }
     }
 
     Ok(())
@@ -834,42 +921,4 @@ async fn send_tor_actions(
     );
 }
 
-/// Send firewalld actions
-#[cfg(feature = "firewalld")]
-async fn send_firewalld_actions(tx: &mpsc::UnboundedSender<ActionType>) {
-    let start_time = std::time::Instant::now();
-    debug!("FIREWALLD_DEBUG: Starting send_firewalld_actions()");
 
-    let actions_start = std::time::Instant::now();
-    let actions = get_firewalld_actions_async().await;
-    let actions_elapsed = actions_start.elapsed();
-
-    debug!(
-        "FIREWALLD_DEBUG: get_firewalld_actions_async() took {:?}, got {} actions",
-        actions_elapsed,
-        actions.len()
-    );
-
-    for (i, action) in actions.iter().enumerate() {
-        debug!(
-            "FIREWALLD_DEBUG: Sending firewalld action {}/{}: {:?}",
-            i + 1,
-            actions.len(),
-            action
-        );
-        let send_result = tx.send(ActionType::Firewalld(action.clone()));
-        if let Err(e) = send_result {
-            debug!("FIREWALLD_DEBUG: Failed to send action: {:?}", e);
-        }
-    }
-    debug!(
-        "FIREWALLD_DEBUG: Finished sending all {} firewalld actions",
-        actions.len()
-    );
-
-    let total_elapsed = start_time.elapsed();
-    debug!(
-        "FIREWALLD_DEBUG: send_firewalld_actions() completed in {:?}",
-        total_elapsed
-    );
-}

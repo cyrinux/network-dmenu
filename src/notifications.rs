@@ -57,6 +57,12 @@ pub struct NotificationManager {
     config: NotificationConfig,
 }
 
+impl Default for NotificationManager {
+    fn default() -> Self {
+        Self::new(NotificationConfig::default())
+    }
+}
+
 impl NotificationManager {
     /// Create new notification manager with configuration
     pub fn new(config: NotificationConfig) -> Self {
@@ -65,10 +71,6 @@ impl NotificationManager {
         Self { config }
     }
 
-    /// Create default notification manager
-    pub fn default() -> Self {
-        Self::new(NotificationConfig::default())
-    }
 
     /// Send a notification with title and message
     pub fn notify(&self, title: &str, message: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -217,8 +219,7 @@ impl NotificationManager {
                     current_part.push(' ');
                     current_part.push_str(part);
                 }
-            } else if part.starts_with("--urgency=") {
-                let urgency_str = &part[10..];
+            } else if let Some(urgency_str) = part.strip_prefix("--urgency=") {
                 urgency = match urgency_str.to_lowercase().as_str() {
                     "low" => NotificationUrgency::Low,
                     "normal" => NotificationUrgency::Normal,
@@ -231,7 +232,7 @@ impl NotificationManager {
         }
 
         // Extract title and message
-        if parsed_parts.len() >= 1 {
+        if !parsed_parts.is_empty() {
             title = parsed_parts[0].clone();
         }
         if parsed_parts.len() >= 2 {
