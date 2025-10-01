@@ -14,6 +14,7 @@
         libs = with pkgs; [
           pkg-config
           openssl
+          perl
           dbus
           glib
           glib.dev
