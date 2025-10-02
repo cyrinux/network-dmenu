@@ -50,27 +50,46 @@ pub async fn create_wifi_fingerprint(privacy_mode: PrivacyMode) -> Result<Locati
 }
 
 /// Find the end position of a BSSID in nmcli output format
-/// BSSID format: XX\:XX\:XX\:XX\:XX\:XX followed by non-escaped colon
+/// BSSID format: XX\:XX\:XX\:XX\:XX\:XX or XX:XX:XX:XX:XX:XX (depending on nmcli version)
 fn find_bssid_end(text: &str) -> Option<usize> {
-    // Look for pattern: XX\:XX\:XX\:XX\:XX\:XX where XX are hex digits
-    // Standard MAC address is 17 chars with escapes: 00\:01\:02\:03\:04\:05
-    let mut escaped_colons = 0;
+    // Try both escaped and unescaped formats for compatibility
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    let mut segments = 0;
 
-    for (i, ch) in text.char_indices() {
-        if ch == ':' && i > 0 && text.chars().nth(i - 1) == Some('\\') {
-            escaped_colons += 1;
-        } else if ch == ':' && (i == 0 || text.chars().nth(i - 1) != Some('\\')) {
-            // Found unescaped colon - this should be end of BSSID
-            if escaped_colons == 5 && i >= 17 {
-                // Valid MAC address has 5 escaped colons
-                return Some(i);
-            } else {
-                return Some(i); // Best guess at BSSID end
+    while pos < bytes.len() {
+        // Check for hex segment (2 hex digits)
+        if pos + 1 < bytes.len()
+            && bytes[pos].is_ascii_hexdigit()
+            && bytes[pos + 1].is_ascii_hexdigit()
+        {
+            segments += 1;
+            pos += 2;
+
+            // Check for separator
+            if pos < bytes.len() {
+                // Handle escaped colon (\:) or regular colon
+                if pos + 1 < bytes.len() && bytes[pos] == b'\\' && bytes[pos + 1] == b':' {
+                    pos += 2;
+                } else if bytes[pos] == b':' {
+                    pos += 1;
+                } else if segments == 6 {
+                    // No separator after 6th segment = end of BSSID
+                    return Some(pos);
+                } else {
+                    break; // Invalid format
+                }
             }
+
+            // Valid MAC address has 6 segments
+            if segments == 6 {
+                return Some(pos);
+            }
+        } else {
+            break;
         }
     }
 
-    // If no unescaped colon found, return None
     None
 }
 
@@ -119,14 +138,22 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
 
                             if !ssid.is_empty() {
                                 // Parse signal strength (default to -50 if parsing fails)
-                                let signal_strength = signal_str.parse::<i8>().unwrap_or(-50);
+                                let signal_strength = match signal_str.parse::<i8>() {
+                                    Ok(s) => s,
+                                    Err(_) => {
+                                        debug!("⚠️  Failed to parse signal strength '{}', using default", signal_str);
+                                        -50
+                                    }
+                                };
 
                                 // Parse frequency - remove " MHz" suffix if present
-                                let frequency = freq_str
-                                    .replace(" MHz", "")
-                                    .trim()
-                                    .parse::<u32>()
-                                    .unwrap_or(2412);
+                                let frequency = match freq_str.replace(" MHz", "").trim().parse::<u32>() {
+                                    Ok(f) => f,
+                                    Err(_) => {
+                                        debug!("⚠️  Failed to parse frequency '{}', using default 2412", freq_str);
+                                        2412
+                                    }
+                                };
 
                                 if let Some(signature) = create_network_signature(
                                     ssid,
@@ -142,7 +169,11 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                                     signatures.insert(signature);
                                 }
                             }
+                        } else {
+                            debug!("⚠️  Failed to parse line (insufficient fields): {}", line);
                         }
+                    } else {
+                        debug!("⚠️  Failed to find BSSID end in: {}", rest);
                     }
                 }
             }
@@ -268,16 +299,34 @@ async fn scan_bluetooth_beacons(privacy_mode: PrivacyMode) -> Result<BTreeSet<St
     let command_runner = RealCommandRunner;
     let mut beacons = BTreeSet::new();
 
-    // Use bluetoothctl to scan for nearby devices
+    // Check if bluetoothctl is available
+    if command_runner.run_command("which", &["bluetoothctl"]).is_err() {
+        debug!("🔵 bluetoothctl not available, skipping Bluetooth scan");
+        return Ok(beacons);
+    }
+
+    // Check if Bluetooth is available and powered on
+    if let Ok(output) = command_runner.run_command("bluetoothctl", &["show"]) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.contains("Powered: yes") {
+            debug!("🔵 Bluetooth is not powered on, skipping scan");
+            return Ok(beacons);
+        }
+    } else {
+        debug!("🔵 Cannot query Bluetooth status, skipping scan");
+        return Ok(beacons);
+    }
+
+    // Use bluetoothctl to scan for nearby devices (non-blocking)
     if let Ok(output) = command_runner.run_command("bluetoothctl", &["scan", "on"]) {
         if !output.status.success() {
-            // If Bluetooth is not available or disabled, return empty set
+            debug!("🔵 Failed to start Bluetooth scan");
             return Ok(beacons);
         }
     }
 
-    // Give scan a moment to populate
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    // Give scan a moment to populate (reduced from 2s to prevent hangs)
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // Get list of discovered devices
     if let Ok(output) = command_runner.run_command("bluetoothctl", &["devices"]) {

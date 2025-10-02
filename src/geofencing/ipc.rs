@@ -457,6 +457,12 @@ mod tests {
             last_scan: Some(chrono::Utc::now()),
             total_zone_changes: 5,
             uptime_seconds: 3600,
+            #[cfg(feature = "ml")]
+            ml_suggestions_generated: 0,
+            #[cfg(feature = "ml")]
+            adaptive_scan_interval_seconds: 60,
+            #[cfg(feature = "ml")]
+            last_ml_update: None,
         };
 
         assert!(status.monitoring);
