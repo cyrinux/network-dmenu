@@ -360,7 +360,7 @@ pub enum OptimizationType {
     FingerprintOptimization,
     /// Merge similar zones
     ZoneMerging,
-    /// Split overly broad zones  
+    /// Split overly broad zones
     ZoneSplitting,
     /// Optimize action sequences
     ActionOptimization,
@@ -929,10 +929,10 @@ impl ZoneSuggestionEngine {
             evidence,
             suggestion_type: SuggestionType::CreateZone,
             created_at: Utc::now(),
-            priority: if is_high_priority { 
-                SuggestionPriority::High 
-            } else { 
-                SuggestionPriority::Medium 
+            priority: if is_high_priority {
+                SuggestionPriority::High
+            } else {
+                SuggestionPriority::Medium
             },
         })
     }
@@ -1015,7 +1015,7 @@ impl LocationClusterer {
         }
     }
 
-    /// Get clusters that meet minimum size for zone suggestions  
+    /// Get clusters that meet minimum size for zone suggestions
     fn get_mature_clusters(&self) -> Vec<&LocationCluster> {
         self.clusters
             .iter()
@@ -2267,7 +2267,7 @@ impl ZoneOptimizer for FingerprintOptimizer {
                         confidence: 0.8,
                         suggested_fingerprint: LocationFingerprint::default(),
                         suggested_actions: zone.actions.clone(),
-                        reasoning: format!("Zone '{}' has {} visits but only {} fingerprints. Adding more fingerprints could improve accuracy.", 
+                        reasoning: format!("Zone '{}' has {} visits but only {} fingerprints. Adding more fingerprints could improve accuracy.",
                                          zone.name, usage_stats.total_visits, zone.fingerprints.len()),
                         evidence: SuggestionEvidence {
                             visit_count: usage_stats.total_visits,
@@ -2334,7 +2334,7 @@ impl ZoneOptimizer for ActionOptimizer {
                         confidence: 0.7,
                         suggested_fingerprint: LocationFingerprint::default(),
                         suggested_actions: zone.actions.clone(),
-                        reasoning: format!("Zone '{}' has {} visits but no configured actions. Consider adding WiFi, VPN, or Bluetooth actions.", 
+                        reasoning: format!("Zone '{}' has {} visits but no configured actions. Consider adding WiFi, VPN, or Bluetooth actions.",
                                          zone.name, usage_stats.total_visits),
                         evidence: SuggestionEvidence {
                             visit_count: usage_stats.total_visits,
@@ -2410,7 +2410,7 @@ impl ZoneOptimizer for ZoneMergeOptimizer {
                         confidence: 0.6,
                         suggested_fingerprint: LocationFingerprint::default(),
                         suggested_actions: zone.actions.clone(),
-                        reasoning: format!("Zone '{}' has low usage ({} visits, {:?} total time). Consider merging with similar zones.", 
+                        reasoning: format!("Zone '{}' has low usage ({} visits, {:?} total time). Consider merging with similar zones.",
                                          zone.name, usage_stats.total_visits, usage_stats.total_time),
                         evidence: SuggestionEvidence {
                             visit_count: usage_stats.total_visits,
@@ -2492,6 +2492,7 @@ impl ZoneMergeOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geofencing::NetworkSignature;
     use std::collections::BTreeSet;
 
     fn create_test_fingerprint(networks: Vec<&str>) -> LocationFingerprint {

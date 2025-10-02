@@ -100,7 +100,7 @@ impl ZoneManager {
         Ok(zone_map)
     }
 
-    /// Save zones to disk
+    /// Save zones to disk with atomic write (prevents corruption)
     fn save_zones_to_disk(&self) -> Result<()> {
         let path = self.get_zones_file_path();
 
@@ -124,8 +124,14 @@ impl ZoneManager {
         let content = serde_json::to_string_pretty(&zones)
             .map_err(|e| GeofenceError::Config(format!("Failed to serialize zones: {}", e)))?;
 
-        std::fs::write(&path, content)
-            .map_err(|e| GeofenceError::Config(format!("Failed to write zones file: {}", e)))?;
+        // Atomic write: write to temporary file, then rename
+        let temp_path = path.with_extension("tmp");
+        std::fs::write(&temp_path, &content)
+            .map_err(|e| GeofenceError::Config(format!("Failed to write temp zones file: {}", e)))?;
+
+        // Atomic rename (POSIX guarantees atomicity)
+        std::fs::rename(&temp_path, &path)
+            .map_err(|e| GeofenceError::Config(format!("Failed to rename zones file: {}", e)))?;
 
         #[cfg(debug_assertions)]
         eprintln!(
@@ -165,7 +171,7 @@ impl ZoneManager {
         Ok(state)
     }
 
-    /// Save daemon state to disk
+    /// Save daemon state to disk with atomic write (prevents corruption)
     fn save_daemon_state(&self) -> Result<()> {
         let path = self.get_daemon_state_path();
 
@@ -180,8 +186,15 @@ impl ZoneManager {
             GeofenceError::Config(format!("Failed to serialize daemon state: {}", e))
         })?;
 
-        std::fs::write(&path, content).map_err(|e| {
-            GeofenceError::Config(format!("Failed to write daemon state file: {}", e))
+        // Atomic write: write to temporary file, then rename
+        let temp_path = path.with_extension("tmp");
+        std::fs::write(&temp_path, &content).map_err(|e| {
+            GeofenceError::Config(format!("Failed to write temp daemon state file: {}", e))
+        })?;
+
+        // Atomic rename (POSIX guarantees atomicity)
+        std::fs::rename(&temp_path, &path).map_err(|e| {
+            GeofenceError::Config(format!("Failed to rename daemon state file: {}", e))
         })?;
 
         Ok(())

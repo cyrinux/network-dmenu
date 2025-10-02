@@ -521,8 +521,6 @@ mod tests {
 
     fn create_test_context() -> NetworkContext {
         NetworkContext {
-            time_of_day: 12,
-            day_of_week: 3,
             location_hash: 12345,
             network_type: NetworkType::WiFi,
             signal_strength: Some(0.8),

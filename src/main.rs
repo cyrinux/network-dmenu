@@ -1884,17 +1884,23 @@ mod tests {
             no_wifi: false,
             no_vpn: false,
             no_bluetooth: false,
+            #[cfg(feature = "tailscale")]
             no_tailscale: false,
             no_nextdns: false,
             no_tor: false,
+            #[cfg(feature = "firewalld")]
+            no_firewalld: false,
             nextdns_api_key: String::new(),
             validate_nextdns_key: false,
             refresh_nextdns_profiles: false,
             no_diagnostics: false,
             profile: false,
             log_level: "warn".to_string(),
+            #[cfg(feature = "tailscale")]
             max_nodes_per_country: None,
+            #[cfg(feature = "tailscale")]
             max_nodes_per_city: None,
+            #[cfg(feature = "tailscale")]
             country: None,
             stdin: false,
             stdout: false,
@@ -1917,6 +1923,7 @@ mod tests {
             where_am_i: false,
             #[cfg(feature = "geofencing")]
             geofence_daemon_internal: false,
+            validate_config: false,
         };
 
         let max_per_country = args.max_nodes_per_country.or(config.max_nodes_per_country);
@@ -2224,10 +2231,10 @@ async fn handle_geofencing_commands(
             || !actions.bluetooth.is_empty()
             || !actions.custom_commands.is_empty();
 
-        debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}", 
-               zone_name, 
+        debug!("🎯 Creating zone '{}' with actions: wifi={:?}, vpn={:?}, tailscale_exit_node={:?}, tailscale_shields={:?}, bluetooth={:?}, custom_commands={:?}",
+               zone_name,
                actions.wifi,
-               actions.vpn, 
+               actions.vpn,
                actions.tailscale_exit_node,
                actions.tailscale_shields,
                actions.bluetooth,
