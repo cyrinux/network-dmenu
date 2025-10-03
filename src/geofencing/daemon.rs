@@ -14,6 +14,9 @@ use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
+#[cfg(feature = "ml")]
+use crate::ml_integration::MlManager;
+#[cfg(not(feature = "ml"))]
 use tokio::time::interval;
 
 // Import network functions from the main codebase
@@ -36,6 +39,14 @@ struct DaemonStatusData {
     total_zone_changes: u32,
     startup_time: Instant,
     current_zone_id: Option<String>,
+    #[cfg(feature = "ml")]
+    ml_suggestions_generated: u32,
+    #[cfg(feature = "ml")]
+    ml_auto_suggestions_processed: u32,
+    #[cfg(feature = "ml")]
+    adaptive_scan_interval: Duration,
+    #[cfg(feature = "ml")]
+    last_ml_update: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl GeofencingDaemon {
@@ -52,6 +63,14 @@ impl GeofencingDaemon {
             total_zone_changes: 0,
             startup_time: Instant::now(),
             current_zone_id: None,
+            #[cfg(feature = "ml")]
+            ml_suggestions_generated: 0,
+            #[cfg(feature = "ml")]
+            ml_auto_suggestions_processed: 0,
+            #[cfg(feature = "ml")]
+            adaptive_scan_interval: Duration::from_secs(30),
+            #[cfg(feature = "ml")]
+            last_ml_update: None,
         }));
 
         debug!("Geofencing daemon created successfully");
@@ -93,20 +112,35 @@ impl GeofencingDaemon {
         let scan_interval = Duration::from_secs(self.config.scan_interval_seconds);
         debug!("Scan interval set to {:?}", scan_interval);
 
-        // Start location monitoring task - simplified
+        // Start location monitoring task - choose based on ML features
         let monitor_task = {
             let zone_manager = Arc::clone(&zone_manager);
             let status = Arc::clone(&status);
             let should_shutdown = Arc::clone(&should_shutdown);
 
             tokio::spawn(async move {
-                Self::location_monitoring_loop(
-                    zone_manager,
-                    status,
-                    should_shutdown,
-                    scan_interval,
-                )
-                .await;
+                #[cfg(feature = "ml")]
+                {
+                    let ml_manager = Arc::new(Mutex::new(crate::ml_integration::MlManager::new()));
+                    Self::enhanced_location_monitoring_loop(
+                        zone_manager,
+                        status,
+                        should_shutdown,
+                        ml_manager,
+                        scan_interval,
+                    )
+                    .await;
+                }
+                #[cfg(not(feature = "ml"))]
+                {
+                    Self::location_monitoring_loop(
+                        zone_manager,
+                        status,
+                        should_shutdown,
+                        scan_interval,
+                    )
+                    .await;
+                }
             })
         };
 
@@ -479,6 +513,7 @@ impl GeofencingDaemon {
         false
     }
 
+
     /// Enhanced location monitoring loop with ML-powered intelligence
     #[cfg(feature = "ml")]
     async fn enhanced_location_monitoring_loop(
@@ -843,6 +878,34 @@ impl GeofencingDaemon {
         );
     }
 
+    /// Calculate adaptive scan interval based on recent activity (ML feature)
+    #[cfg(feature = "ml")]
+    fn calculate_adaptive_scan_interval(
+        base_interval: Duration,
+        zone_changed: bool,
+        last_scan_duration: Duration,
+    ) -> Duration {
+        let base_seconds = base_interval.as_secs();
+
+        let adjusted_seconds = if zone_changed {
+            // Increase frequency after zone change to catch rapid transitions
+            std::cmp::max(base_seconds / 2, 10) // Minimum 10 seconds
+        } else {
+            // Decrease frequency when stable, but consider scan performance
+            let performance_factor = if last_scan_duration > Duration::from_secs(5) {
+                1.5 // Slower scans if previous scan took long
+            } else {
+                1.2 // Normal backoff
+            };
+
+            (base_seconds as f64 * performance_factor) as u64
+        };
+
+        // Clamp to reasonable bounds
+        let clamped_seconds = adjusted_seconds.clamp(10, 300);
+        Duration::from_secs(clamped_seconds)
+    }
+
 
 
     /// Handle IPC commands from clients - simplified without ML
@@ -953,6 +1016,12 @@ impl GeofencingDaemon {
                         manager.get_total_zone_changes()
                     },
                     uptime_seconds: status_data.startup_time.elapsed().as_secs(),
+                    #[cfg(feature = "ml")]
+                    ml_suggestions_generated: status_data.ml_suggestions_generated,
+                    #[cfg(feature = "ml")]
+                    adaptive_scan_interval_seconds: status_data.adaptive_scan_interval.as_secs(),
+                    #[cfg(feature = "ml")]
+                    last_ml_update: status_data.last_ml_update,
                 };
                 debug!("Daemon status: monitoring={}, {} zones, active_zone={:?}, {} zone changes, uptime={}s", daemon_status.monitoring, daemon_status.zone_count, daemon_status.active_zone_id, daemon_status.total_zone_changes, daemon_status.uptime_seconds);
                 DaemonResponse::Status {
@@ -1032,6 +1101,34 @@ impl GeofencingDaemon {
                 *should_shutdown.write().await = true;
                 debug!("Shutdown flag set to true");
                 DaemonResponse::Success
+            }
+
+            #[cfg(feature = "ml")]
+            DaemonCommand::GetZoneSuggestions => {
+                debug!("Processing GetZoneSuggestions command");
+                // For now, return empty suggestions as simplified daemon doesn't have ML integration
+                DaemonResponse::ZoneSuggestions { suggestions: vec![] }
+            }
+
+            #[cfg(feature = "ml")]
+            DaemonCommand::GetMlMetrics => {
+                debug!("Processing GetMlMetrics command");
+                // Return default ML metrics for simplified daemon
+                let metrics = crate::geofencing::ipc::MlDaemonMetrics {
+                    total_suggestions_generated: 0,
+                    suggestion_accuracy_rate: 0.0,
+                    zone_prediction_confidence: 0.0,
+                    adaptive_scan_effectiveness: 0.0,
+                    ml_model_version: "simplified-1.0".to_string(),
+                    last_model_training: None,
+                    performance_metrics: crate::geofencing::ipc::MlPerformanceMetrics {
+                        average_prediction_time_ms: 0.0,
+                        memory_usage_mb: 0.0,
+                        cache_hit_rate: 0.0,
+                        training_data_size: 0,
+                    },
+                };
+                DaemonResponse::MlMetrics { metrics }
             }
         }
     }
