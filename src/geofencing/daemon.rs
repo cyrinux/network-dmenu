@@ -46,23 +46,12 @@ impl GeofencingDaemon {
 
         let zone_manager = Arc::new(Mutex::new(ZoneManager::new(config.clone())));
 
-        #[cfg(feature = "ml")]
-        let ml_manager = Arc::new(Mutex::new(MlManager::new()));
-
         let status = Arc::new(RwLock::new(DaemonStatusData {
             monitoring: false,
             last_scan: None,
             total_zone_changes: 0,
             startup_time: Instant::now(),
             current_zone_id: None,
-            #[cfg(feature = "ml")]
-            ml_suggestions_generated: 0,
-            #[cfg(feature = "ml")]
-            ml_auto_suggestions_processed: 0,
-            #[cfg(feature = "ml")]
-            adaptive_scan_interval: Duration::from_secs(config.scan_interval_seconds),
-            #[cfg(feature = "ml")]
-            last_ml_update: None,
         }));
 
         debug!("Geofencing daemon created successfully");
@@ -71,8 +60,6 @@ impl GeofencingDaemon {
             config,
             status,
             should_shutdown: Arc::new(RwLock::new(false)),
-            #[cfg(feature = "ml")]
-            ml_manager,
         }
     }
 
@@ -104,84 +91,44 @@ impl GeofencingDaemon {
         let status = Arc::clone(&self.status);
         let should_shutdown = Arc::clone(&self.should_shutdown);
         let scan_interval = Duration::from_secs(self.config.scan_interval_seconds);
-        #[cfg(feature = "ml")]
-        let ml_manager = Arc::clone(&self.ml_manager);
         debug!("Scan interval set to {:?}", scan_interval);
 
-        // Start location monitoring task
+        // Start location monitoring task - simplified
         let monitor_task = {
             let zone_manager = Arc::clone(&zone_manager);
             let status = Arc::clone(&status);
             let should_shutdown = Arc::clone(&should_shutdown);
-            #[cfg(feature = "ml")]
-            let ml_manager = Arc::clone(&ml_manager);
 
             tokio::spawn(async move {
-                #[cfg(feature = "ml")]
-                {
-                    Self::enhanced_location_monitoring_loop(
-                        zone_manager,
-                        status,
-                        should_shutdown,
-                        ml_manager,
-                        scan_interval,
-                    )
-                    .await;
-                }
-                #[cfg(not(feature = "ml"))]
-                {
-                    Self::location_monitoring_loop(
-                        zone_manager,
-                        status,
-                        should_shutdown,
-                        scan_interval,
-                    )
-                    .await;
-                }
-            })
-        };
-
-        // Start system event monitoring task (suspend/resume)
-        let system_event_task = {
-            let zone_manager = Arc::clone(&zone_manager);
-            let should_shutdown = Arc::clone(&should_shutdown);
-            #[cfg(feature = "ml")]
-            let ml_manager = Arc::clone(&ml_manager);
-
-            tokio::spawn(async move {
-                Self::system_event_monitoring_loop(
+                Self::location_monitoring_loop(
                     zone_manager,
+                    status,
                     should_shutdown,
-                    #[cfg(feature = "ml")]
-                    ml_manager,
+                    scan_interval,
                 )
                 .await;
             })
         };
 
-        // Handle IPC commands
+        // Start system event monitoring task (suspend/resume) - simplified
+        let system_event_task = {
+            let zone_manager = Arc::clone(&zone_manager);
+            let should_shutdown = Arc::clone(&should_shutdown);
+
+            tokio::spawn(async move {
+                Self::system_event_monitoring_loop(zone_manager, should_shutdown).await;
+            })
+        };
+
+        // Handle IPC commands - simplified
         let ipc_task = {
             let zone_manager = Arc::clone(&self.zone_manager);
             let status = Arc::clone(&self.status);
             let should_shutdown = Arc::clone(&self.should_shutdown);
-            #[cfg(feature = "ml")]
-            let ml_manager = Arc::clone(&self.ml_manager);
 
             tokio::spawn(async move {
-                #[cfg(feature = "ml")]
                 let command_handler = move |cmd| {
-                    Self::handle_ipc_command(
-                        Arc::clone(&zone_manager),
-                        Arc::clone(&status),
-                        Arc::clone(&should_shutdown),
-                        Arc::clone(&ml_manager),
-                        cmd,
-                    )
-                };
-
-                #[cfg(not(feature = "ml"))]
-                let command_handler = move |cmd| {
-                    Self::handle_ipc_command(
+                    Self::handle_ipc_command_simple(
                         Arc::clone(&zone_manager),
                         Arc::clone(&status),
                         Arc::clone(&should_shutdown),
@@ -402,32 +349,14 @@ impl GeofencingDaemon {
                     }
                 );
 
-                // Execute zone actions with retry logic and connection optimization
-                debug!(
-                    "Executing zone actions with retry for zone '{}'",
-                    change.to.name
-                );
-                let mut retry_manager =
-                    super::retry::RetryManager::new(super::retry::RetryConfig::default());
-                let action_context = super::retry::ActionContext {
-                    zone_id: change.to.id.clone(),
-                    zone_name: change.to.name.clone(),
-                    confidence: change.confidence,
-                };
+                // Execute zone actions - simplified without retry logic
+                debug!("Executing zone actions for zone '{}'", change.to.name);
 
-                if let Err(e) = retry_manager
-                    .execute_zone_actions_with_retry(&change.suggested_actions, &action_context)
-                    .await
-                {
-                    error!(
-                        "Failed to execute zone actions for zone '{}': {}",
-                        change.to.name, e
-                    );
+                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                    error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
                 } else {
-                    debug!(
-                        "Successfully executed all zone actions for zone '{}'",
-                        change.to.name
-                    );
+                    debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
                 }
 
                 // Send notification if enabled
@@ -459,7 +388,6 @@ impl GeofencingDaemon {
     async fn system_event_monitoring_loop(
         zone_manager: Arc<Mutex<ZoneManager>>,
         should_shutdown: Arc<RwLock<bool>>,
-        #[cfg(feature = "ml")] _ml_manager: Arc<Mutex<MlManager>>,
     ) {
         info!("🔋 Starting system event monitoring (suspend/resume detection)");
         debug!("System event monitoring will trigger immediate zone checks on resume");
@@ -500,29 +428,12 @@ impl GeofencingDaemon {
                                     change.confidence * 100.0
                                 );
 
-                                // Execute zone actions immediately after resume
-                                let mut retry_manager = super::retry::RetryManager::new(
-                                    super::retry::RetryConfig::default(),
-                                );
-                                let action_context = super::retry::ActionContext {
-                                    zone_id: change.to.id.clone(),
-                                    zone_name: change.to.name.clone(),
-                                    confidence: change.confidence,
-                                };
-
-                                if let Err(e) = retry_manager
-                                    .execute_zone_actions_with_retry(
-                                        &change.suggested_actions,
-                                        &action_context,
-                                    )
-                                    .await
-                                {
+                                // Execute zone actions immediately after resume - simplified
+                                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                                if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
                                     error!("🔋 Failed to execute post-resume zone actions for '{}': {}", change.to.name, e);
                                 } else {
-                                    info!(
-                                        "🔋 Successfully applied post-resume zone actions for '{}'",
-                                        change.to.name
-                                    );
+                                    info!("🔋 Successfully applied post-resume zone actions for '{}'", change.to.name);
                                 }
                             }
                             Ok(None) => {
@@ -780,35 +691,14 @@ impl GeofencingDaemon {
                             status_data.current_zone_id = Some(change.to.id.clone());
                         }
 
-                        // Execute zone actions with retry logic and connection optimization
-                        debug!(
-                            "🧠 Executing enhanced zone actions with retry for zone '{}'",
-                            change.to.name
-                        );
-                        let mut retry_manager =
-                            super::retry::RetryManager::new(super::retry::RetryConfig::default());
-                        let action_context = super::retry::ActionContext {
-                            zone_id: change.to.id.clone(),
-                            zone_name: change.to.name.clone(),
-                            confidence: change.confidence,
-                        };
+                        // Execute zone actions - simplified
+                        debug!("Executing zone actions for zone '{}'", change.to.name);
 
-                        if let Err(e) = retry_manager
-                            .execute_zone_actions_with_retry(
-                                &change.suggested_actions,
-                                &action_context,
-                            )
-                            .await
-                        {
-                            error!(
-                                "Failed to execute zone actions for zone '{}': {}",
-                                change.to.name, e
-                            );
+                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                            error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
                         } else {
-                            debug!(
-                                "Successfully executed all zone actions for zone '{}'",
-                                change.to.name
-                            );
+                            debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
                         }
 
                         // Send notification if enabled
@@ -980,12 +870,11 @@ impl GeofencingDaemon {
         Duration::from_secs(clamped_seconds)
     }
 
-    /// Handle IPC commands from clients
+    /// Handle IPC commands from clients - simplified
     async fn handle_ipc_command(
         zone_manager: Arc<Mutex<ZoneManager>>,
         status: Arc<RwLock<DaemonStatusData>>,
         should_shutdown: Arc<RwLock<bool>>,
-        #[cfg(feature = "ml")] ml_manager: Arc<Mutex<crate::ml_integration::MlManager>>,
         command: DaemonCommand,
     ) -> DaemonResponse {
         debug!("Handling IPC command: {:?}", command);
@@ -1069,26 +958,10 @@ impl GeofencingDaemon {
                             "Zone '{}' activated successfully, executing actions",
                             change.to.name
                         );
-                        // Execute zone actions with retry logic and connection optimization
-                        let mut retry_manager =
-                            super::retry::RetryManager::new(super::retry::RetryConfig::default());
-                        let action_context = super::retry::ActionContext {
-                            zone_id: change.to.id.clone(),
-                            zone_name: change.to.name.clone(),
-                            confidence: change.confidence,
-                        };
-
-                        if let Err(e) = retry_manager
-                            .execute_zone_actions_with_retry(
-                                &change.suggested_actions,
-                                &action_context,
-                            )
-                            .await
-                        {
-                            warn!(
-                                "Zone '{}' activated but actions failed: {}",
-                                change.to.name, e
-                            );
+                        // Execute zone actions - simplified
+                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                            warn!("Zone '{}' activated but actions failed: {}", change.to.name, e);
                             return DaemonResponse::Error {
                                 message: format!("Zone activated but actions failed: {}", e),
                             };
@@ -1242,9 +1115,8 @@ impl GeofencingDaemon {
         }
     }
 
-    /// Handle IPC commands from clients (non-ML version)
-    #[cfg(not(feature = "ml"))]
-    async fn handle_ipc_command(
+    /// Handle IPC commands from clients - simplified without ML
+    async fn handle_ipc_command_simple(
         zone_manager: Arc<Mutex<ZoneManager>>,
         status: Arc<RwLock<DaemonStatusData>>,
         should_shutdown: Arc<RwLock<bool>>,
@@ -1294,7 +1166,7 @@ impl GeofencingDaemon {
             DaemonCommand::CreateZone { name, actions } => {
                 debug!("Processing CreateZone command for zone: {}", name);
                 let mut manager = zone_manager.lock().await;
-                match manager.create_zone(name, actions) {
+                match manager.create_zone_from_current_location(name, actions).await {
                     Ok(zone) => {
                         debug!("Successfully created zone: {} (ID: {})", zone.name, zone.id);
                         DaemonResponse::ZoneCreated { zone }
@@ -1355,6 +1227,72 @@ impl GeofencingDaemon {
                 debug!("Daemon status: monitoring={}, {} zones, active_zone={:?}, {} zone changes, uptime={}s", daemon_status.monitoring, daemon_status.zone_count, daemon_status.active_zone_id, daemon_status.total_zone_changes, daemon_status.uptime_seconds);
                 DaemonResponse::Status {
                     status: daemon_status,
+                }
+            }
+
+            DaemonCommand::RemoveZone { zone_id } => {
+                debug!("Processing RemoveZone command for zone: {}", zone_id);
+                let mut manager = zone_manager.lock().await;
+                match manager.remove_zone(&zone_id) {
+                    Ok(_) => {
+                        debug!("Successfully removed zone: {}", zone_id);
+                        DaemonResponse::Success
+                    },
+                    Err(e) => {
+                        debug!("Failed to remove zone {}: {}", zone_id, e);
+                        DaemonResponse::Error {
+                            message: format!("Failed to remove zone: {}", e),
+                        }
+                    },
+                }
+            }
+
+            DaemonCommand::ActivateZone { zone_id } => {
+                debug!("Processing ActivateZone command for zone: {}", zone_id);
+                let mut manager = zone_manager.lock().await;
+                match manager.activate_zone(&zone_id) {
+                    Ok(change) => {
+                        debug!("Zone '{}' activated successfully, executing actions", change.to.name);
+
+                        // Execute zone actions - simplified
+                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                            warn!("Zone '{}' activated but actions failed: {}", change.to.name, e);
+                            return DaemonResponse::Error {
+                                message: format!("Zone activated but actions failed: {}", e),
+                            };
+                        }
+
+                        debug!("Successfully executed all actions for zone '{}'", change.to.name);
+                        DaemonResponse::ZoneChanged {
+                            from_zone_id: change.from.map(|z| z.id),
+                            to_zone: change.to,
+                            confidence: change.confidence,
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to activate zone {}: {}", zone_id, e);
+                        DaemonResponse::Error {
+                            message: format!("Failed to activate zone: {}", e),
+                        }
+                    }
+                }
+            }
+
+            DaemonCommand::ExecuteActions { actions } => {
+                debug!("Processing ExecuteActions command");
+                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                match Self::execute_zone_actions_static(&actions, &notification_manager).await {
+                    Ok(_) => {
+                        debug!("Successfully executed custom actions");
+                        DaemonResponse::Success
+                    }
+                    Err(e) => {
+                        debug!("Failed to execute custom actions: {}", e);
+                        DaemonResponse::Error {
+                            message: format!("Failed to execute actions: {}", e),
+                        }
+                    }
                 }
             }
 
