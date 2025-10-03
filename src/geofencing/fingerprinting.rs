@@ -300,14 +300,20 @@ pub fn calculate_fingerprint_similarity(
     calculate_wifi_similarity(&fingerprint1.wifi_networks, &fingerprint2.wifi_networks)
 }
 
-/// Calculate Jaccard similarity for WiFi networks
-/// Compares networks by SSID hash and BSSID prefix only, ignoring signal strength and frequency variations
+/// Calculate enhanced WiFi similarity with stability improvements
+/// Uses weighted matching that prioritizes core networks and handles fluctuations better
 fn calculate_wifi_similarity(
     networks1: &BTreeSet<NetworkSignature>,
     networks2: &BTreeSet<NetworkSignature>,
 ) -> f64 {
+    if networks1.is_empty() && networks2.is_empty() {
+        return 1.0;
+    }
+    if networks1.is_empty() || networks2.is_empty() {
+        return 0.0;
+    }
+
     // Create sets of network identifiers (SSID hash + BSSID prefix) ignoring signal strength and frequency
-    // Frequency can change for dual-band routers (2.4GHz vs 5GHz), so we ignore it for network identity
     let identifiers1: std::collections::HashSet<_> = networks1
         .iter()
         .map(|net| (&net.ssid_hash, &net.bssid_prefix))
@@ -321,11 +327,45 @@ fn calculate_wifi_similarity(
     let intersection_size = identifiers1.intersection(&identifiers2).count() as f64;
     let union_size = identifiers1.union(&identifiers2).count() as f64;
 
-    if union_size == 0.0 {
+    // Standard Jaccard similarity
+    let jaccard_similarity = if union_size == 0.0 {
         0.0
     } else {
         intersection_size / union_size
-    }
+    };
+
+    // Boost similarity if we have strong core network matches
+    // This makes detection more stable by prioritizing reliable networks
+    let strong_networks1: std::collections::HashSet<_> = networks1
+        .iter()
+        .filter(|net| net.signal_strength > -65) // Strong signal threshold
+        .map(|net| (&net.ssid_hash, &net.bssid_prefix))
+        .collect();
+
+    let strong_networks2: std::collections::HashSet<_> = networks2
+        .iter()
+        .filter(|net| net.signal_strength > -65) // Strong signal threshold
+        .map(|net| (&net.ssid_hash, &net.bssid_prefix))
+        .collect();
+
+    let strong_intersection = strong_networks1.intersection(&strong_networks2).count() as f64;
+
+    // Bonus for strong network matches (up to 0.3 bonus)
+    let strong_bonus = if !strong_networks1.is_empty() && !strong_networks2.is_empty() {
+        (strong_intersection / strong_networks1.len().max(strong_networks2.len()) as f64) * 0.3
+    } else {
+        0.0
+    };
+
+    // Stability boost: if we have at least 2 matching networks, give significant bonus
+    let stability_bonus = if intersection_size >= 2.0 {
+        0.2 // 20% bonus for having multiple matching networks
+    } else {
+        0.0
+    };
+
+    // Combine all factors, capped at 1.0
+    (jaccard_similarity + strong_bonus + stability_bonus).min(1.0)
 }
 
 // Bluetooth and IP similarity functions removed for simplification

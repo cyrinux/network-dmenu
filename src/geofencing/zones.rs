@@ -439,10 +439,19 @@ impl ZoneManager {
                 zone.name, max_similarity, zone.confidence_threshold
             );
 
-            if max_similarity > best_similarity && max_similarity >= zone.confidence_threshold {
+            // Apply hysteresis: different thresholds for entering vs staying in a zone
+            let effective_threshold = if Some(&zone.id) == self.current_zone.as_ref() {
+                // Currently IN this zone: use lower threshold to stay (hysteresis)
+                zone.confidence_threshold - 0.15  // 15% lower threshold to stay
+            } else {
+                // Not in this zone: use normal threshold to enter
+                zone.confidence_threshold
+            };
+
+            if max_similarity > best_similarity && max_similarity >= effective_threshold {
                 debug!(
-                    "🎯 Zone '{}' is new best match with similarity {:.3}",
-                    zone.name, max_similarity
+                    "🎯 Zone '{}' is new best match with similarity {:.3} (threshold: {:.3}, effective: {:.3})",
+                    zone.name, max_similarity, zone.confidence_threshold, effective_threshold
                 );
                 best_similarity = max_similarity;
                 best_match = Some(zone.clone());
