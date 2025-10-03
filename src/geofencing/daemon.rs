@@ -9,31 +9,26 @@ use super::{
     GeofencingConfig, LocationChange, Result, ZoneActions,
 };
 
-#[cfg(feature = "ml")]
-use crate::ml_integration::MlManager;
 use chrono::Utc;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
-#[cfg(not(feature = "ml"))]
 use tokio::time::interval;
 
 // Import network functions from the main codebase
 use crate::command::{CommandRunner, RealCommandRunner};
 use crate::notifications::NotificationManager;
 
-/// Main geofencing daemon
+/// Main geofencing daemon - simplified without ML integration
 pub struct GeofencingDaemon {
     zone_manager: Arc<Mutex<ZoneManager>>,
     config: GeofencingConfig,
     status: Arc<RwLock<DaemonStatusData>>,
     should_shutdown: Arc<RwLock<bool>>,
-    #[cfg(feature = "ml")]
-    ml_manager: Arc<Mutex<MlManager>>,
 }
 
-/// Internal daemon status data
+/// Internal daemon status data - simplified
 #[derive(Debug)]
 struct DaemonStatusData {
     monitoring: bool,
@@ -41,14 +36,6 @@ struct DaemonStatusData {
     total_zone_changes: u32,
     startup_time: Instant,
     current_zone_id: Option<String>,
-    #[cfg(feature = "ml")]
-    ml_suggestions_generated: u32,
-    #[cfg(feature = "ml")]
-    ml_auto_suggestions_processed: u32,
-    #[cfg(feature = "ml")]
-    adaptive_scan_interval: Duration,
-    #[cfg(feature = "ml")]
-    last_ml_update: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl GeofencingDaemon {

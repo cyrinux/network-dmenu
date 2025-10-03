@@ -4,8 +4,7 @@
 //! with their associated network configurations.
 
 use super::{
-    advanced_zones::{SuggestionEvidence, SuggestionPriority, SuggestionType},
-    fingerprinting::{calculate_weighted_similarity, create_wifi_fingerprint},
+    fingerprinting::{calculate_fingerprint_similarity, create_wifi_fingerprint},
     GeofenceError, GeofenceZone, GeofencingConfig, LocationChange, LocationFingerprint,
     PrivacyMode, Result, ZoneActions,
 };
@@ -299,11 +298,11 @@ impl ZoneManager {
 
         if let Some(id) = zone_id {
             if let Some(zone) = self.zones.get_mut(&id) {
-                // Check if this fingerprint is too similar to existing ones
+                // Check if this fingerprint is too similar to existing ones - simplified
                 let is_significantly_different = zone
                     .fingerprints
                     .iter()
-                    .all(|existing| calculate_weighted_similarity(&fingerprint, existing) < 0.9);
+                    .all(|existing| calculate_fingerprint_similarity(&fingerprint, existing) < 0.9);
 
                 if is_significantly_different {
                     zone.fingerprints.push(fingerprint);
@@ -418,13 +417,13 @@ impl ZoneManager {
         );
 
         for zone in self.zones.values() {
-            // Check similarity against all fingerprints in the zone, use the best match
+            // Check similarity against all fingerprints in the zone - simplified
             let max_similarity = zone
                 .fingerprints
                 .iter()
                 .enumerate()
                 .map(|(i, zone_fingerprint)| {
-                    let similarity = calculate_weighted_similarity(zone_fingerprint, fingerprint);
+                    let similarity = calculate_fingerprint_similarity(zone_fingerprint, fingerprint);
                     debug!(
                         "🎯 Zone '{}' fingerprint {} similarity: {:.3} (threshold: {:.3})",
                         zone.name,

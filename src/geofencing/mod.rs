@@ -1,7 +1,6 @@
-//! Advanced geofencing module for intelligent location-aware network management
+//! Simplified geofencing module for basic location-aware network management
 //!
-//! Provides privacy-first location detection using WiFi fingerprinting,
-//! ML-powered zone suggestions, adaptive scanning, comprehensive security,
+//! Provides privacy-first location detection using WiFi fingerprinting
 //! and automatic network configuration based on detected zones.
 
 #[cfg(feature = "geofencing")]
@@ -13,46 +12,30 @@ pub mod ipc;
 #[cfg(feature = "geofencing")]
 pub mod zones;
 
-// Advanced components
-#[cfg(feature = "geofencing")]
-pub mod adaptive;
-#[cfg(feature = "geofencing")]
-pub mod advanced_zones;
-#[cfg(feature = "geofencing")]
-pub mod config;
-#[cfg(feature = "geofencing")]
-pub mod lifecycle;
-#[cfg(feature = "geofencing")]
-pub mod observability;
-#[cfg(feature = "geofencing")]
-pub mod performance;
-#[cfg(feature = "geofencing")]
-pub mod retry;
-#[cfg(feature = "geofencing")]
-pub mod security;
+// Advanced components - commented out for simplification
+// #[cfg(feature = "geofencing")]
+// pub mod adaptive;
+// #[cfg(feature = "geofencing")]
+// pub mod advanced_zones;
+// #[cfg(feature = "geofencing")]
+// pub mod config;
+// #[cfg(feature = "geofencing")]
+// pub mod lifecycle;
+// #[cfg(feature = "geofencing")]
+// pub mod observability;
+// #[cfg(feature = "geofencing")]
+// pub mod performance;
+// #[cfg(feature = "geofencing")]
+// pub mod retry;
+// #[cfg(feature = "geofencing")]
+// pub mod security;
 
 #[cfg(feature = "geofencing")]
 pub use fingerprinting::*;
 #[cfg(feature = "geofencing")]
 pub use zones::*;
 
-// Re-export key types from advanced components
-#[cfg(feature = "geofencing")]
-pub use adaptive::{AdaptiveScanner, MovementState, PowerState, ScanFrequency};
-#[cfg(feature = "geofencing")]
-pub use advanced_zones::{AdvancedZoneManager, ZoneHierarchy, ZoneSuggestion};
-#[cfg(feature = "geofencing")]
-pub use config::{ConfigManager, EnhancedConfig, ValidationResult};
-#[cfg(feature = "geofencing")]
-pub use lifecycle::{DaemonState, LifecycleManager, SystemEvent};
-#[cfg(feature = "geofencing")]
-pub use observability::{DaemonMetrics, HealthStatus, ObservabilityManager};
-#[cfg(feature = "geofencing")]
-pub use performance::{BatchProcessor, CacheManager, ConnectionPool, PerformanceOptimizer};
-#[cfg(feature = "geofencing")]
-pub use retry::{RetryConfig, RetryManager, RetryableAction};
-#[cfg(feature = "geofencing")]
-pub use security::{SecureCommandExecutor, SecurityPolicy};
+// Advanced components exports removed for simplification
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
