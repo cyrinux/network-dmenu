@@ -587,7 +587,7 @@ impl ZoneManager {
         if let Some(zone) = self.zones.get_mut(zone_id) {
             // Check if this fingerprint is significantly different from existing ones
             let is_significantly_different = zone.fingerprints.iter().all(|existing| {
-                calculate_weighted_similarity(&current_fingerprint, existing) < 0.9
+                calculate_fingerprint_similarity(&current_fingerprint, existing) < 0.9
             });
 
             if is_significantly_different {
@@ -596,8 +596,8 @@ impl ZoneManager {
             } else {
                 // Merge with the most similar existing fingerprint
                 if let Some(most_similar_fp) = zone.fingerprints.iter_mut().max_by(|a, b| {
-                    let sim_a = calculate_weighted_similarity(&current_fingerprint, a);
-                    let sim_b = calculate_weighted_similarity(&current_fingerprint, b);
+                    let sim_a = calculate_fingerprint_similarity(&current_fingerprint, a);
+                    let sim_b = calculate_fingerprint_similarity(&current_fingerprint, b);
                     sim_a
                         .partial_cmp(&sim_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -737,68 +737,13 @@ impl ZoneSuggestionEngine {
         }
     }
 
-    /// Analyze if current location should become a new zone
+    /// Analyze if current location should become a new zone - disabled for simplification
     pub async fn analyze_location_for_zone_suggestion(
         &mut self,
-        privacy_mode: PrivacyMode,
-    ) -> Result<Option<super::advanced_zones::ZoneSuggestion>> {
-        let fingerprint = create_wifi_fingerprint(privacy_mode).await?;
-
-        if fingerprint.confidence_score < 0.5 {
-            return Ok(None); // Not enough data
-        }
-
-        // Create a simple hash of the fingerprint for tracking
-        let fingerprint_hash = format!("{:?}", fingerprint.wifi_networks)
-            .chars()
-            .take(16)
-            .collect::<String>();
-
-        // Track visit pattern
-        let pattern = self
-            .visit_history
-            .entry(fingerprint_hash.clone())
-            .or_insert(VisitPattern {
-                fingerprint_hash: fingerprint_hash.clone(),
-                visit_count: 0,
-                total_duration_minutes: 0,
-                typical_actions: Vec::new(),
-            });
-
-        pattern.visit_count += 1;
-
-        // Suggest zone creation if visited frequently
-        if pattern.visit_count >= 3 && pattern.total_duration_minutes > 30 {
-            Ok(Some(super::advanced_zones::ZoneSuggestion {
-                suggested_name: suggest_zone_name(pattern.visit_count),
-                confidence: (pattern.visit_count as f64 / 10.0).min(0.9),
-                suggested_fingerprint: fingerprint.clone(),
-                suggested_actions: ZoneActions {
-                    notifications: true,
-                    ..Default::default()
-                },
-                reasoning: format!(
-                    "Visited {} times, suggesting zone creation",
-                    pattern.visit_count
-                ),
-                evidence: SuggestionEvidence {
-                    visit_count: pattern.visit_count,
-                    total_time: Duration::from_secs(pattern.total_duration_minutes as u64 * 60),
-                    average_visit_duration: Duration::from_secs(
-                        pattern.total_duration_minutes as u64 * 60
-                            / pattern.visit_count.max(1) as u64,
-                    ),
-                    common_visit_times: vec![],
-                    common_actions: vec![],
-                    similar_zones: vec![],
-                },
-                suggestion_type: SuggestionType::CreateZone,
-                created_at: Utc::now(),
-                priority: SuggestionPriority::Medium,
-            }))
-        } else {
-            Ok(None)
-        }
+        _privacy_mode: PrivacyMode,
+    ) -> Result<Option<()>> {
+        // Simplified: no zone suggestions to avoid advanced_zones dependency
+        Ok(None)
     }
 }
 
