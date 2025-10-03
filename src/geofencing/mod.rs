@@ -244,9 +244,9 @@ impl From<GeofenceZoneHelper> for GeofenceZone {
     }
 }
 
-/// Default confidence threshold
+/// Default confidence threshold - lowered for better stability
 fn default_confidence_threshold() -> f64 {
-    0.8
+    0.5  // More forgiving threshold to handle WiFi signal fluctuations
 }
 
 /// Geofencing configuration
