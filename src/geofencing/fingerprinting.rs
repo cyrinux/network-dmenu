@@ -3,7 +3,7 @@
 //! Privacy-first implementation that hashes sensitive identifiers
 //! and focuses on local pattern matching.
 
-use super::{CoarseLocation, LocationFingerprint, NetworkSignature, PrivacyMode, Result};
+use super::{LocationFingerprint, NetworkSignature, PrivacyMode, Result};
 use crate::command::{CommandRunner, RealCommandRunner};
 use chrono::Utc;
 use log::debug;

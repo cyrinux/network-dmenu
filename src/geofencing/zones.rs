@@ -13,7 +13,6 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[cfg(feature = "geofencing")]
 use uuid::Uuid;
@@ -711,9 +710,7 @@ fn generate_zone_id() -> String {
 }
 
 /// Zone suggestion engine for ML-driven zone creation
-pub struct ZoneSuggestionEngine {
-    visit_history: HashMap<String, VisitPattern>,
-}
+pub struct ZoneSuggestionEngine {}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -732,9 +729,7 @@ impl Default for ZoneSuggestionEngine {
 
 impl ZoneSuggestionEngine {
     pub fn new() -> Self {
-        Self {
-            visit_history: HashMap::new(),
-        }
+        Self {}
     }
 
     /// Analyze if current location should become a new zone - disabled for simplification
@@ -747,14 +742,6 @@ impl ZoneSuggestionEngine {
     }
 }
 
-/// Suggest a name for a new zone based on patterns
-fn suggest_zone_name(visit_count: u32) -> String {
-    match visit_count {
-        3..=5 => "🏢 Frequent Location".to_string(),
-        6..=10 => "⭐ Important Place".to_string(),
-        _ => "🎯 Regular Spot".to_string(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
