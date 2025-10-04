@@ -37,7 +37,11 @@
       "Read(//tmp/**)",
       "Bash(cat:*)",
       "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi --no-bluetooth --no-tailscale --no-nextdns --no-tor --no-diagnostics --no-vpn)",
-      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi)"
+      "Bash(RUST_LOG=debug ./target/debug/network-dmenu --stdout --no-wifi)",
+      "Read(///**)",
+      "Bash(./target/release/network-dmenu:*)",
+      "Bash(dbus-send:*)",
+      "Bash(nmcli device:*)"
     ],
     "deny": [],
     "ask": []
