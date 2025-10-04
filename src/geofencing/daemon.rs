@@ -6,18 +6,19 @@
 use super::{
     ipc::{DaemonCommand, DaemonIpcServer, DaemonResponse, DaemonStatus},
     zones::ZoneManager,
-    GeofencingConfig, LocationChange, Result, ZoneActions,
+    GeofencingConfig, Result, ZoneActions,
+};
+#[cfg(feature = "ml")]
+use super::{
+    LocationChange,
 };
 
-use chrono::Utc;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 #[cfg(feature = "ml")]
 use crate::ml_integration::MlManager;
-#[cfg(not(feature = "ml"))]
-use tokio::time::interval;
 
 // Import network functions from the main codebase
 use crate::command::{CommandRunner, RealCommandRunner};
@@ -170,321 +171,7 @@ impl GeofencingDaemon {
         Ok(())
     }
 
-    /// Main location monitoring loop (non-ML version)
-    #[cfg(not(feature = "ml"))]
-    async fn location_monitoring_loop(
-        zone_manager: Arc<Mutex<ZoneManager>>,
-        status: Arc<RwLock<DaemonStatusData>>,
-        should_shutdown: Arc<RwLock<bool>>,
-        scan_interval: Duration,
-    ) {
-        debug!(
-            "Starting location monitoring loop with interval {:?}",
-            scan_interval
-        );
-        let mut interval = interval(scan_interval);
-        let mut scan_count = 0u64;
 
-        loop {
-            scan_count += 1;
-            debug!("Location scan #{} starting", scan_count);
-
-            // Check for shutdown
-            if *should_shutdown.read().await {
-                debug!("Shutdown signal received, exiting monitoring loop");
-                break;
-            }
-
-            // Skip if no zones configured
-            {
-                let manager = zone_manager.lock().await;
-                let zone_count = manager.list_zones().len();
-                if zone_count == 0 {
-                    debug!("No zones configured, skipping scan #{}", scan_count);
-                    // Wait for interval even when no zones are configured to prevent CPU spinning
-                    interval.tick().await;
-                    continue;
-                }
-                debug!("Scanning with {} configured zones", zone_count);
-            }
-
-            // Check for location change (or startup zone application)
-            debug!("Detecting location change for scan #{}", scan_count);
-            let location_change = {
-                let mut manager = zone_manager.lock().await;
-
-                // On first scan, ensure current zone actions are applied (startup behavior)
-                if scan_count == 1 {
-                    debug!("First scan - checking for startup zone application");
-                    match manager.get_current_zone_for_startup().await {
-                        Ok(change) => {
-                            if let Some(ref change) = change {
-                                debug!(
-                                    "Startup zone application: from {:?} to {} (confidence: {:.2})",
-                                    change.from.as_ref().map(|z| &z.name),
-                                    change.to.name,
-                                    change.confidence
-                                );
-                            } else {
-                                debug!("No zone detected for startup application");
-                            }
-                            change
-                        }
-                        Err(e) => {
-                            warn!("Startup zone detection failed: {}", e);
-                            None
-                        }
-                    }
-                } else {
-                    // Regular location change detection for subsequent scans
-                    match manager.detect_location_change().await {
-                        Ok(change) => {
-                            if let Some(ref change) = change {
-                                debug!(
-                                    "Location change detected: from {:?} to {} (confidence: {:.2})",
-                                    change.from.as_ref().map(|z| &z.name),
-                                    change.to.name,
-                                    change.confidence
-                                );
-                            } else {
-                                debug!("No location change detected in scan #{}", scan_count);
-                            }
-                            change
-                        }
-                        Err(e) => {
-                            warn!("Location detection failed in scan #{}: {}", scan_count, e);
-                            continue;
-                        }
-                    }
-                }
-            };
-
-            // Update status
-            {
-                let mut status_data = status.write().await;
-                status_data.last_scan = Some(Utc::now());
-                debug!(
-                    "Updated last scan time to {}",
-                    status_data.last_scan.unwrap()
-                );
-
-                if let Some(ref change) = location_change {
-                    status_data.total_zone_changes += 1;
-                    status_data.current_zone_id = Some(change.to.id.clone());
-                    debug!(
-                        "Total zone changes now: {}, current zone: {}",
-                        status_data.total_zone_changes, change.to.id
-                    );
-                }
-            }
-
-            // Handle zone change
-            if let Some(change) = location_change {
-                info!(
-                    "🌍 ZONE CHANGE DETECTED: {} -> {} (confidence: {:.2}%)",
-                    change
-                        .from
-                        .as_ref()
-                        .map(|z| z.name.as_str())
-                        .unwrap_or("None"),
-                    change.to.name,
-                    change.confidence * 100.0
-                );
-
-                debug!("🔍 Zone change analysis:");
-                debug!(
-                    "  • From Zone: {}",
-                    change
-                        .from
-                        .as_ref()
-                        .map(|z| format!("'{}' (ID: {})", z.name, z.id))
-                        .unwrap_or("None".to_string())
-                );
-                debug!("  • To Zone: '{}' (ID: {})", change.to.name, change.to.id);
-                debug!("  • Confidence Score: {:.2}%", change.confidence * 100.0);
-                debug!("  • Threshold: {:.2}", change.to.confidence_threshold);
-
-                debug!("📋 Zone '{}' action summary:", change.to.name);
-                debug!(
-                    "  • WiFi: {}",
-                    change.suggested_actions.wifi.as_deref().unwrap_or("None")
-                );
-                debug!(
-                    "  • VPN: {}",
-                    change.suggested_actions.vpn.as_deref().unwrap_or("None")
-                );
-                debug!(
-                    "  • Tailscale Exit Node: {}",
-                    change
-                        .suggested_actions
-                        .tailscale_exit_node
-                        .as_deref()
-                        .unwrap_or("None")
-                );
-                debug!(
-                    "  • Tailscale Shields: {}",
-                    match change.suggested_actions.tailscale_shields {
-                        Some(true) => "Enable",
-                        Some(false) => "Disable",
-                        None => "No change",
-                    }
-                );
-                debug!(
-                    "  • Bluetooth Devices: {} ({})",
-                    change.suggested_actions.bluetooth.len(),
-                    if change.suggested_actions.bluetooth.is_empty() {
-                        "none".to_string()
-                    } else {
-                        change.suggested_actions.bluetooth.join(", ")
-                    }
-                );
-                debug!(
-                    "  • Custom Commands: {} ({})",
-                    change.suggested_actions.custom_commands.len(),
-                    if change.suggested_actions.custom_commands.is_empty() {
-                        "none".to_string()
-                    } else {
-                        change.suggested_actions.custom_commands.join("; ")
-                    }
-                );
-                debug!(
-                    "  • Notifications: {}",
-                    if change.suggested_actions.notifications {
-                        "Enabled"
-                    } else {
-                        "Disabled"
-                    }
-                );
-
-                // Execute zone actions - simplified without retry logic
-                debug!("Executing zone actions for zone '{}'", change.to.name);
-
-                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
-                    error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
-                } else {
-                    debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
-                }
-
-                // Send notification if enabled
-                if change.suggested_actions.notifications {
-                    debug!(
-                        "Sending zone change notification for zone '{}'",
-                        change.to.name
-                    );
-                    Self::send_zone_change_notification(&change);
-                } else {
-                    debug!(
-                        "Notifications disabled for zone '{}', skipping notification",
-                        change.to.name
-                    );
-                }
-            }
-
-            // Wait for next interval (moved to end so first scan is immediate)
-            interval.tick().await;
-        }
-
-        info!(
-            "Location monitoring loop stopped after {} scans",
-            scan_count
-        );
-    }
-
-    /// System event monitoring loop for suspend/resume detection
-    async fn system_event_monitoring_loop(
-        zone_manager: Arc<Mutex<ZoneManager>>,
-        should_shutdown: Arc<RwLock<bool>>,
-    ) {
-        info!("🔋 Starting system event monitoring (suspend/resume detection)");
-        debug!("System event monitoring will trigger immediate zone checks on resume");
-
-        // Use dbus to monitor logind suspend/resume signals
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        let mut was_suspended = false;
-        let mut last_network_check = std::time::Instant::now();
-
-        loop {
-            // Check for shutdown
-            if *should_shutdown.read().await {
-                debug!("Shutdown signal received, exiting system event monitoring loop");
-                break;
-            }
-
-            // Simple approach: monitor network connectivity changes which often indicate resume
-            let current_time = std::time::Instant::now();
-            if current_time.duration_since(last_network_check) >= Duration::from_secs(10) {
-                last_network_check = current_time;
-
-                // Check if network connectivity has changed (potential resume indicator)
-                if Self::detect_network_state_change().await {
-                    debug!("🔋 Network state change detected - potential resume event");
-
-                    if was_suspended {
-                        info!("🔋 System resume detected - performing immediate zone check");
-                        was_suspended = false;
-
-                        // Trigger immediate zone check on resume
-                        debug!("🔋 Executing immediate post-resume zone detection");
-                        let mut manager = zone_manager.lock().await;
-                        match manager.get_current_zone_for_startup().await {
-                            Ok(Some(change)) => {
-                                info!(
-                                    "🔋 Post-resume zone detected: '{}' (confidence: {:.1}%)",
-                                    change.to.name,
-                                    change.confidence * 100.0
-                                );
-
-                                // Execute zone actions immediately after resume - simplified
-                                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                                if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
-                                    error!("🔋 Failed to execute post-resume zone actions for '{}': {}", change.to.name, e);
-                                } else {
-                                    info!("🔋 Successfully applied post-resume zone actions for '{}'", change.to.name);
-                                }
-                            }
-                            Ok(None) => {
-                                debug!("🔋 No zone detected after resume");
-                            }
-                            Err(e) => {
-                                warn!("🔋 Failed to detect zone after resume: {}", e);
-                            }
-                        }
-                    } else {
-                        debug!("🔋 Network state change detected - marking potential suspend");
-                        was_suspended = true;
-                    }
-                }
-            }
-
-            interval.tick().await;
-        }
-
-        info!("🔋 System event monitoring stopped");
-    }
-
-    /// Detect network state changes (simple heuristic for suspend/resume)
-    async fn detect_network_state_change() -> bool {
-        use crate::command::{CommandRunner, RealCommandRunner};
-        let command_runner = RealCommandRunner;
-
-        // Check if we have active network connections
-        if let Ok(output) = command_runner.run_command("ip", &["route", "show", "default"]) {
-            if output.status.success() {
-                let routes = String::from_utf8_lossy(&output.stdout);
-                let has_default_route = !routes.trim().is_empty();
-
-                // Simple state tracking - in a real implementation, you'd compare with previous state
-                debug!(
-                    "Network connectivity check: default route = {}",
-                    has_default_route
-                );
-                return has_default_route;
-            }
-        }
-
-        false
-    }
 
 
     /// Event-driven location monitoring using D-Bus signals (battery efficient)
@@ -755,7 +442,7 @@ impl GeofencingDaemon {
                     let mut status_data = status.write().await;
                     status_data.ml_suggestions_generated += suggestions_generated;
                     status_data.ml_auto_suggestions_processed += auto_suggestions_processed;
-                    status_data.last_ml_update = Some(Utc::now());
+                    status_data.last_ml_update = Some(chrono::Utc::now());
                 }
             }
 
@@ -837,7 +524,7 @@ impl GeofencingDaemon {
                         // Update status
                         {
                             let mut status_data = status.write().await;
-                            status_data.last_scan = Some(Utc::now());
+                            status_data.last_scan = Some(chrono::Utc::now());
                             status_data.total_zone_changes += 1;
                             status_data.current_zone_id = Some(change.to.id.clone());
                         }
@@ -885,7 +572,7 @@ impl GeofencingDaemon {
                         // Still update last scan time
                         {
                             let mut status_data = status.write().await;
-                            status_data.last_scan = Some(Utc::now());
+                            status_data.last_scan = Some(chrono::Utc::now());
                         }
 
                         // Use more frequent scanning when confidence is low
@@ -920,7 +607,7 @@ impl GeofencingDaemon {
                     // Update status
                     {
                         let mut status_data = status.write().await;
-                        status_data.last_scan = Some(Utc::now());
+                        status_data.last_scan = Some(chrono::Utc::now());
                     }
 
                     // Adjust scan interval for stable location
@@ -1866,6 +1553,7 @@ impl GeofencingDaemon {
     }
 
     /// Send zone change notification
+    #[cfg(feature = "ml")]
     fn send_zone_change_notification(change: &LocationChange) {
         debug!("Preparing to send zone change notification");
         let title = "Network Zone Changed";

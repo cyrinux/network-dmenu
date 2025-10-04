@@ -5,18 +5,15 @@
 //! - SystemD login1 signals for suspend/resume events
 //! - Device state changes and access point additions/removals
 
-use super::{GeofenceError, Result};
+use super::Result;
 use log::{debug, info};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[cfg(feature = "geofencing")]
-use zbus::Connection;
 
 /// Event-driven network monitor using D-Bus signals
 #[cfg(feature = "geofencing")]
 pub struct NetworkEventMonitor {
-    system_connection: Connection,
     is_monitoring: Arc<RwLock<bool>>,
 }
 
@@ -24,11 +21,7 @@ pub struct NetworkEventMonitor {
 impl NetworkEventMonitor {
     /// Create new network event monitor
     pub async fn new() -> Result<Self> {
-        let system_connection = Connection::system().await
-            .map_err(|e| GeofenceError::SystemError(format!("Failed to connect to system D-Bus: {}", e)))?;
-
         Ok(Self {
-            system_connection,
             is_monitoring: Arc::new(RwLock::new(false)),
         })
     }
@@ -80,7 +73,7 @@ impl NetworkEventMonitor {
 
             // Simple state change detection using nmcli
             if let Ok(output) = tokio::process::Command::new("nmcli")
-                .args(&["-t", "-f", "STATE", "general", "status"])
+                .args(["-t", "-f", "STATE", "general", "status"])
                 .output()
                 .await
             {
