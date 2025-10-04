@@ -24,6 +24,7 @@ geofencing = [
   "tracing",
   "tracing-subscriber",
   "sysinfo",
+  "zbus",
 ]
 firewalld = []
 tailscale = []
@@ -79,6 +80,7 @@ libc = { version = "0.2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 sysinfo = { version = "0.36", optional = true }
+zbus = { version = "5.1", optional = true }
 
 [dev-dependencies]
 mockall = "0.12"

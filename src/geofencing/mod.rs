@@ -6,6 +6,8 @@
 #[cfg(feature = "geofencing")]
 pub mod daemon;
 #[cfg(feature = "geofencing")]
+pub mod events;
+#[cfg(feature = "geofencing")]
 pub mod fingerprinting;
 #[cfg(feature = "geofencing")]
 pub mod ipc;
@@ -328,6 +330,12 @@ pub enum GeofenceError {
 
     #[error("Action execution failed: {0}")]
     ActionExecution(String),
+
+    #[error("System error: {0}")]
+    SystemError(String),
+
+    #[error("D-Bus error: {0}")]
+    DBusError(String),
 
     #[error("IPC communication error: {0}")]
     Ipc(String),

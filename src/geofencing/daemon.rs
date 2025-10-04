@@ -112,47 +112,23 @@ impl GeofencingDaemon {
         let scan_interval = Duration::from_secs(self.config.scan_interval_seconds);
         debug!("Scan interval set to {:?}", scan_interval);
 
-        // Start location monitoring task - choose based on ML features
+        // Start battery-efficient event-driven location monitoring
         let monitor_task = {
             let zone_manager = Arc::clone(&zone_manager);
             let status = Arc::clone(&status);
             let should_shutdown = Arc::clone(&should_shutdown);
 
             tokio::spawn(async move {
-                #[cfg(feature = "ml")]
-                {
-                    let ml_manager = Arc::new(Mutex::new(crate::ml_integration::MlManager::new()));
-                    Self::enhanced_location_monitoring_loop(
-                        zone_manager,
-                        status,
-                        should_shutdown,
-                        ml_manager,
-                        scan_interval,
-                    )
-                    .await;
-                }
-                #[cfg(not(feature = "ml"))]
-                {
-                    Self::location_monitoring_loop(
-                        zone_manager,
-                        status,
-                        should_shutdown,
-                        scan_interval,
-                    )
-                    .await;
-                }
+                Self::event_driven_monitoring_loop(
+                    zone_manager,
+                    status,
+                    should_shutdown,
+                )
+                .await;
             })
         };
 
-        // Start system event monitoring task (suspend/resume) - simplified
-        let system_event_task = {
-            let zone_manager = Arc::clone(&zone_manager);
-            let should_shutdown = Arc::clone(&should_shutdown);
-
-            tokio::spawn(async move {
-                Self::system_event_monitoring_loop(zone_manager, should_shutdown).await;
-            })
-        };
+        // System event monitoring is now handled by the event-driven loop
 
         // Handle IPC commands - simplified
         let ipc_task = {
@@ -179,10 +155,7 @@ impl GeofencingDaemon {
         // Wait for shutdown signal or tasks to complete
         tokio::select! {
             _ = monitor_task => {
-                info!("Location monitoring task completed");
-            },
-            _ = system_event_task => {
-                info!("System event monitoring task completed");
+                info!("Event-driven monitoring task completed");
             },
             _ = ipc_task => {
                 info!("IPC task completed");
@@ -513,6 +486,149 @@ impl GeofencingDaemon {
         false
     }
 
+
+    /// Event-driven location monitoring using D-Bus signals (battery efficient)
+    async fn event_driven_monitoring_loop(
+        zone_manager: Arc<Mutex<ZoneManager>>,
+        status: Arc<RwLock<DaemonStatusData>>,
+        should_shutdown: Arc<RwLock<bool>>,
+    ) {
+        info!("🎯 Starting battery-efficient event-driven geofencing");
+
+        // Create network event monitor
+        let event_monitor = match super::events::NetworkEventMonitor::new().await {
+            Ok(monitor) => monitor,
+            Err(e) => {
+                error!("Failed to create network event monitor: {}", e);
+                warn!("Falling back to polling mode...");
+                Self::fallback_polling_loop(zone_manager, status, should_shutdown).await;
+                return;
+            }
+        };
+
+        // Define callback for network change events
+        let zone_manager_clone = Arc::clone(&zone_manager);
+        let status_clone = Arc::clone(&status);
+
+        let on_network_change = move || {
+            info!("📡 Network change detected - checking location");
+
+            // Spawn task to handle location check
+            let zone_manager = Arc::clone(&zone_manager_clone);
+            let status = Arc::clone(&status_clone);
+
+            tokio::spawn(async move {
+                let mut manager = zone_manager.lock().await;
+
+                // Update scan timestamp
+                {
+                    let mut status_data = status.write().await;
+                    status_data.last_scan = Some(chrono::Utc::now());
+                }
+
+                match manager.detect_location_change().await {
+                    Ok(Some(change)) => {
+                        info!("📍 Event-triggered zone change: {} -> {}",
+                              change.from.map(|z| z.name).unwrap_or_else(|| "None".to_string()),
+                              change.to.name);
+
+                        // Update status
+                        {
+                            let mut status_data = status.write().await;
+                            status_data.total_zone_changes += 1;
+                            status_data.current_zone_id = Some(change.to.id.clone());
+                        }
+
+                        // Execute zone actions
+                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                            warn!("Failed to execute zone actions: {}", e);
+                        } else {
+                            debug!("Successfully executed actions for zone '{}'", change.to.name);
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("Event check: No zone change detected");
+                    }
+                    Err(e) => {
+                        warn!("Error during event-triggered location check: {}", e);
+                    }
+                }
+            });
+        };
+
+        // Start event monitoring (this will run until shutdown)
+        if let Err(e) = event_monitor.start_monitoring(on_network_change).await {
+            error!("Event monitoring failed: {}", e);
+            warn!("Falling back to polling mode...");
+            Self::fallback_polling_loop(zone_manager, status, should_shutdown).await;
+        }
+
+        info!("🛑 Event-driven monitoring stopped");
+    }
+
+    /// Fallback polling loop when D-Bus events are not available
+    async fn fallback_polling_loop(
+        zone_manager: Arc<Mutex<ZoneManager>>,
+        status: Arc<RwLock<DaemonStatusData>>,
+        should_shutdown: Arc<RwLock<bool>>,
+    ) {
+        info!("⏰ Starting fallback polling mode (checking every 60 seconds)");
+        let mut interval = tokio::time::interval(Duration::from_secs(60)); // Less frequent polling as fallback
+        let mut scan_count = 0u32;
+
+        loop {
+            interval.tick().await;
+
+            // Check shutdown flag
+            if *should_shutdown.read().await {
+                debug!("Shutdown flag detected, stopping fallback polling");
+                break;
+            }
+
+            scan_count += 1;
+            debug!("⏰ Fallback scan #{}", scan_count);
+
+            // Update scan timestamp
+            {
+                let mut status_data = status.write().await;
+                status_data.last_scan = Some(chrono::Utc::now());
+            }
+
+            // Check for zone changes
+            let mut manager = zone_manager.lock().await;
+            match manager.detect_location_change().await {
+                Ok(Some(change)) => {
+                    info!("📍 Polling detected zone change: {} -> {}",
+                          change.from.map(|z| z.name).unwrap_or_else(|| "None".to_string()),
+                          change.to.name);
+
+                    // Update status
+                    {
+                        let mut status_data = status.write().await;
+                        status_data.total_zone_changes += 1;
+                        status_data.current_zone_id = Some(change.to.id.clone());
+                    }
+
+                    // Execute zone actions
+                    let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                    if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                        warn!("Failed to execute zone actions: {}", e);
+                    } else {
+                        debug!("Successfully executed actions for zone '{}'", change.to.name);
+                    }
+                }
+                Ok(None) => {
+                    debug!("Polling check: No zone change detected");
+                }
+                Err(e) => {
+                    warn!("Error during polling location check: {}", e);
+                }
+            }
+        }
+
+        info!("⏰ Fallback polling stopped after {} scans", scan_count);
+    }
 
     /// Enhanced location monitoring loop with ML-powered intelligence
     #[cfg(feature = "ml")]
