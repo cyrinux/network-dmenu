@@ -126,6 +126,7 @@ fn attempt_connection(
     ];
 
     if let Some(pass) = passphrase {
+        command_args.push("--passphrase");
         command_args.push(pass);
     }
 
