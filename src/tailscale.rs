@@ -237,7 +237,7 @@ impl TailscaleState {
 
                 // Get lock status and locked nodes in one call
                 if let Ok(lock_output) =
-                    command_runner.run_command("tailscale", &["lock", "status"])
+                    command_runner.run_command("tailscale", &["lock"])
                 {
                     if lock_output.status.success() {
                         // Store the entire output to avoid repeated calls
@@ -245,7 +245,7 @@ impl TailscaleState {
                         state.lock_output = Some(stdout.clone());
 
                         // Check if lock is enabled
-                        if stdout.contains("Tailnet lock is ENABLED") {
+                        if stdout.to_ascii_lowercase().contains("tailnet lock is enabled") {
                             // Extract this node's signing key
                             for line in stdout.lines() {
                                 if line.contains("This node's tailnet-lock key:") {
@@ -1411,7 +1411,7 @@ pub fn is_tailscale_lock_enabled(
     // If state is provided, use the cached lock_output
     if let Some(state) = state {
         if let Some(lock_output) = &state.lock_output {
-            return Ok(lock_output.contains("Tailnet lock is ENABLED"));
+            return Ok(lock_output.to_ascii_lowercase().contains("tailnet lock is enabled"));
         }
     }
 
@@ -1419,7 +1419,7 @@ pub fn is_tailscale_lock_enabled(
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(stdout.contains("Tailnet lock is ENABLED"));
+        return Ok(stdout.to_ascii_lowercase().contains("tailnet lock is enabled"));
     }
     Ok(false)
 }
@@ -1437,14 +1437,14 @@ pub fn can_sign_nodes(
     }
 
     // Otherwise, we need to examine the lock output and check if our key is trusted
-    let output = command_runner.run_command("tailscale", &["lock", "status"])?;
+    let output = command_runner.run_command("tailscale", &["lock"])?;
 
     if !output.status.success() {
         return Ok(false);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.contains("Tailnet lock is ENABLED") {
+    if !stdout.to_ascii_lowercase().contains("tailnet lock is enabled") {
         return Ok(false);
     }
 
@@ -1527,30 +1527,41 @@ pub fn get_locked_nodes(
 
 /// Parses a locked node line from tailscale lock output.
 fn parse_locked_node_line(line: &str) -> Option<LockedNode> {
-    // Example line:
-    // us-atl-wg-302.mullvad.ts.net.	100.117.10.73,fd7a:115c:a1e0::cc01:a51	ncqp5kyPF311CNTRL	nodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48
-
-    let parts: Vec<&str> = line.split('\t').collect();
-    if parts.len() >= 4 {
-        let hostname = parts[0].trim();
-        let ip_addresses = parts[1].trim();
-        let machine_name = parts[2].trim();
-        let node_key_part = parts[3].trim();
-
-        if let Some(node_key) = node_key_part.strip_prefix("nodekey:") {
-            // Extract country code from hostname
-            let country_code = extract_country_code_from_hostname(hostname);
-
-            return Some(LockedNode {
-                hostname: hostname.to_string(),
-                ip_addresses: ip_addresses.to_string(),
-                machine_name: machine_name.to_string(),
-                node_key: node_key.to_string(),
-                country_code: country_code.to_string(),
-            });
-        }
+    let node_key = line.split("nodekey:").nth(1)?.trim().to_string();
+    if node_key.is_empty() {
+        return None;
     }
-    None
+
+    let before_key = line.split("nodekey:").next()?;
+
+    let (hostname, rest) = if let Some(pos) = before_key.find(".net.") {
+        let end = pos + ".net.".len();
+        (&before_key[..end], &before_key[end..])
+    } else if let Some(pos) = before_key.find('\t') {
+        (&before_key[..pos], &before_key[pos + 1..])
+    } else {
+        return None;
+    };
+
+    let hostname = hostname.trim();
+
+    let (ip_addresses, machine_name) = if let Some(tab_pos) = rest.find('\t') {
+        let ips = rest[..tab_pos].trim().to_string();
+        let machine = rest[tab_pos + 1..].split('\t').next().unwrap_or("").trim().to_string();
+        (ips, machine)
+    } else {
+        (rest.trim().to_string(), String::new())
+    };
+
+    let country_code = extract_country_code_from_hostname(hostname);
+
+    Some(LockedNode {
+        hostname: hostname.to_string(),
+        ip_addresses,
+        machine_name,
+        node_key,
+        country_code: country_code.to_string(),
+    })
 }
 
 /// Gets the current node's signing key from lock status.
@@ -1989,7 +2000,7 @@ mod tests {
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["status", "--json"], status_output.clone()),
             ("tailscale", &["exit-node", "suggest"], suggest_output),
-            ("tailscale", &["lock", "status"], lock_output),
+            ("tailscale", &["lock"], lock_output),
         ]);
 
         // Create TailscaleState with the mock runner
@@ -2076,7 +2087,7 @@ mod tests {
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["status", "--json"], status_output.clone()),
             ("tailscale", &["exit-node", "suggest"], suggest_output),
-            ("tailscale", &["lock", "status"], lock_output),
+            ("tailscale", &["lock"], lock_output),
         ]);
 
         let _state = TailscaleState {
@@ -2119,7 +2130,7 @@ mod tests {
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["status", "--json"], status_output),
             ("tailscale", &["exit-node", "suggest"], suggest_output),
-            ("tailscale", &["lock", "status"], lock_output),
+            ("tailscale", &["lock"], lock_output),
         ]);
 
         // Create a TailscaleState with the failed command runner
@@ -2562,28 +2573,15 @@ mod tests {
 
     #[test]
     fn test_sign_locked_node_success() {
-        // We need a mock that can handle multiple calls
-        // First call: get signing key
-        let lock_stdout = b"Tailnet lock is ENABLED.\n\nThis node's tailnet-lock key: tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30\n";
+        let lock_stdout = b"Tailnet lock is ENABLED.\n\nThis node's tailnet-lock key: tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30\n\nTrusted signing keys:\n\ttlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30\n";
         let lock_output = Output {
             status: ExitStatus::from_raw(0),
             stdout: lock_stdout.to_vec(),
             stderr: vec![],
         };
 
-        let lock_status_output = Output {
-            status: ExitStatus::from_raw(0),
-            stdout: "Tailnet lock is enabled.".as_bytes().to_vec(),
-            stderr: vec![],
-        };
+        let mock_runner = MockCommandRunner::new("tailscale", &["lock"], lock_output);
 
-        // Create a mock that will handle multiple commands
-        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
-            ("tailscale", &["lock"], lock_output),
-            ("tailscale", &["lock", "status"], lock_status_output),
-        ]);
-
-        // Test just the get_signing_key function for now
         let signing_key_result = get_signing_key(&mock_runner, None);
         assert!(signing_key_result.is_ok());
         assert_eq!(
@@ -2591,10 +2589,8 @@ mod tests {
             "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30"
         );
 
-        // Test that sign_locked_node can be called with None for state
         let node_key = "nodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48";
         let _ = sign_locked_node(node_key, &mock_runner, None);
-        // We don't verify the result because we're only testing the signature, not the functionality
     }
 
     // Disabled test because it needs to be updated for TailscaleState implementation
@@ -2968,7 +2964,7 @@ mod tests {
         let mock_runner = MockCommandRunner::with_multiple_calls(vec![
             ("tailscale", &["status", "--json"], status_output),
             ("tailscale", &["exit-node", "suggest"], suggest_output),
-            ("tailscale", &["lock", "status"], lock_output),
+            ("tailscale", &["lock"], lock_output),
         ]);
 
         // Create TailscaleState with the mock runner

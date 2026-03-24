@@ -696,19 +696,31 @@ async fn send_tailscale_actions_simple(
         )));
 
         // Add Tailscale Lock actions if enabled
-        if is_tailscale_lock_enabled(&command_runner, Some(&tailscale_state)).unwrap_or(false) {
+        let lock_enabled = is_tailscale_lock_enabled(&command_runner, Some(&tailscale_state)).unwrap_or(false);
+        debug!("Tailscale lock enabled: {lock_enabled}");
+        debug!("Tailscale lock_output present: {}", tailscale_state.lock_output.is_some());
+        if let Some(ref lo) = tailscale_state.lock_output {
+            debug!("Tailscale lock_output content: {lo}");
+        }
+        if lock_enabled {
             let _ = tx.send(ActionType::Tailscale(TailscaleAction::ListLockedNodes));
 
-            // Add sign all nodes action and individual node actions
-            if let Ok(locked_nodes) = get_locked_nodes(&command_runner, Some(&tailscale_state)) {
-                if !locked_nodes.is_empty() {
-                    let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignAllNodes));
+            match get_locked_nodes(&command_runner, Some(&tailscale_state)) {
+                Ok(locked_nodes) => {
+                    debug!("Locked nodes count: {}", locked_nodes.len());
+                    if !locked_nodes.is_empty() {
+                        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignAllNodes));
 
-                    for node in locked_nodes {
-                        let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignLockedNode(
-                            node.node_key,
-                        )));
+                        for node in locked_nodes {
+                            debug!("Adding sign action for node: {}", &node.node_key);
+                            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignLockedNode(
+                                node.node_key,
+                            )));
+                        }
                     }
+                }
+                Err(e) => {
+                    debug!("Failed to get locked nodes: {e}");
                 }
             }
         }
