@@ -66,11 +66,12 @@ impl Default for NotificationManager {
 impl NotificationManager {
     /// Create new notification manager with configuration
     pub fn new(config: NotificationConfig) -> Self {
-        debug!("Creating notification manager with config: enabled={}, app_name={}", 
-               config.enabled, config.app_name);
+        debug!(
+            "Creating notification manager with config: enabled={}, app_name={}",
+            config.enabled, config.app_name
+        );
         Self { config }
     }
-
 
     /// Send a notification with title and message
     pub fn notify(&self, title: &str, message: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -164,9 +165,12 @@ impl NotificationManager {
     }
 
     /// Check if a command string is a notify-send command and extract its content
-    pub fn parse_notify_send_command(&self, command: &str) -> Option<(String, String, NotificationUrgency)> {
+    pub fn parse_notify_send_command(
+        &self,
+        command: &str,
+    ) -> Option<(String, String, NotificationUrgency)> {
         let command = command.trim();
-        
+
         // Check if it's a notify-send command
         if !command.starts_with("notify-send") {
             return None;
@@ -178,11 +182,11 @@ impl NotificationManager {
         // notify-send 'title' 'message'
         // notify-send 'title' 'message' --urgency=critical
         // notify-send "title" "message" --urgency=normal
-        
+
         let mut title = String::new();
         let mut message = String::new();
         let mut urgency = NotificationUrgency::Normal;
-        
+
         // Split command and extract parts
         let parts: Vec<&str> = command.split_whitespace().collect();
         let mut in_quotes = false;
@@ -191,16 +195,17 @@ impl NotificationManager {
         let mut parsed_parts = Vec::new();
 
         // Simple parser for quoted strings
-        for part in parts.iter().skip(1) { // Skip "notify-send"
+        for part in parts.iter().skip(1) {
+            // Skip "notify-send"
             if part.starts_with('"') || part.starts_with('\'') {
                 if !in_quotes {
                     in_quotes = true;
                     quote_char = part.chars().next().unwrap();
                     current_part = part[1..].to_string();
-                    
+
                     if part.ends_with(quote_char) && part.len() > 1 {
                         // Single-word quoted string
-                        parsed_parts.push(current_part[..current_part.len()-1].to_string());
+                        parsed_parts.push(current_part[..current_part.len() - 1].to_string());
                         current_part.clear();
                         in_quotes = false;
                     }
@@ -211,7 +216,7 @@ impl NotificationManager {
             } else if in_quotes {
                 if part.ends_with(quote_char) {
                     current_part.push(' ');
-                    current_part.push_str(&part[..part.len()-1]);
+                    current_part.push_str(&part[..part.len() - 1]);
                     parsed_parts.push(current_part.clone());
                     current_part.clear();
                     in_quotes = false;
@@ -240,8 +245,10 @@ impl NotificationManager {
         }
 
         if !title.is_empty() {
-            debug!("Parsed notify-send: title='{}', message='{}', urgency={:?}", 
-                   title, message, urgency);
+            debug!(
+                "Parsed notify-send: title='{}', message='{}', urgency={:?}",
+                title, message, urgency
+            );
             Some((title, message, urgency))
         } else {
             warn!("Failed to parse notify-send command: {}", command);
@@ -250,9 +257,15 @@ impl NotificationManager {
     }
 
     /// Execute a custom notification (replaces notify-send commands)
-    pub fn execute_notification_command(&self, command: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn execute_notification_command(
+        &self,
+        command: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some((title, message, urgency)) = self.parse_notify_send_command(command) {
-            debug!("Converting notify-send to custom notification: {} - {}", title, message);
+            debug!(
+                "Converting notify-send to custom notification: {} - {}",
+                title, message
+            );
             self.notify_with_urgency(&title, &message, urgency)
         } else {
             Err(format!("Invalid notification command: {}", command).into())
@@ -276,10 +289,10 @@ mod tests {
     #[test]
     fn test_parse_notify_send_basic() {
         let manager = NotificationManager::default();
-        
+
         let result = manager.parse_notify_send_command("notify-send 'Hello' 'World'");
         assert!(result.is_some());
-        
+
         let (title, message, urgency) = result.unwrap();
         assert_eq!(title, "Hello");
         assert_eq!(message, "World");
@@ -289,25 +302,29 @@ mod tests {
     #[test]
     fn test_parse_notify_send_with_urgency() {
         let manager = NotificationManager::default();
-        
+
         let result = manager.parse_notify_send_command(
             "notify-send 'Security Alert' 'Entered unknown location - protection mode activated' --urgency=critical"
         );
         assert!(result.is_some());
-        
+
         let (title, message, urgency) = result.unwrap();
         assert_eq!(title, "Security Alert");
-        assert_eq!(message, "Entered unknown location - protection mode activated");
+        assert_eq!(
+            message,
+            "Entered unknown location - protection mode activated"
+        );
         assert_eq!(urgency, NotificationUrgency::Critical);
     }
 
     #[test]
     fn test_parse_notify_send_double_quotes() {
         let manager = NotificationManager::default();
-        
-        let result = manager.parse_notify_send_command("notify-send \"Zone Change\" \"Welcome Home!\"");
+
+        let result =
+            manager.parse_notify_send_command("notify-send \"Zone Change\" \"Welcome Home!\"");
         assert!(result.is_some());
-        
+
         let (title, message, urgency) = result.unwrap();
         assert_eq!(title, "Zone Change");
         assert_eq!(message, "Welcome Home!");
@@ -317,7 +334,7 @@ mod tests {
     #[test]
     fn test_parse_non_notify_send() {
         let manager = NotificationManager::default();
-        
+
         let result = manager.parse_notify_send_command("echo 'not a notification'");
         assert!(result.is_none());
     }

@@ -39,10 +39,10 @@ pub use zones::*;
 
 // Advanced components exports removed for simplification
 
+use crate::notifications::NotificationConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use crate::notifications::NotificationConfig;
 
 /// Privacy mode for location detection
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
@@ -248,7 +248,7 @@ impl From<GeofenceZoneHelper> for GeofenceZone {
 
 /// Default confidence threshold - lowered for better stability
 fn default_confidence_threshold() -> f64 {
-    0.5  // More forgiving threshold to handle WiFi signal fluctuations
+    0.5 // More forgiving threshold to handle WiFi signal fluctuations
 }
 
 /// Geofencing configuration

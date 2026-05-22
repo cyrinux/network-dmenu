@@ -124,8 +124,9 @@ impl ZoneManager {
 
         // Atomic write: write to temporary file, then rename
         let temp_path = path.with_extension("tmp");
-        std::fs::write(&temp_path, &content)
-            .map_err(|e| GeofenceError::Config(format!("Failed to write temp zones file: {}", e)))?;
+        std::fs::write(&temp_path, &content).map_err(|e| {
+            GeofenceError::Config(format!("Failed to write temp zones file: {}", e))
+        })?;
 
         // Atomic rename (POSIX guarantees atomicity)
         std::fs::rename(&temp_path, &path)
@@ -422,7 +423,8 @@ impl ZoneManager {
                 .iter()
                 .enumerate()
                 .map(|(i, zone_fingerprint)| {
-                    let similarity = calculate_fingerprint_similarity(zone_fingerprint, fingerprint);
+                    let similarity =
+                        calculate_fingerprint_similarity(zone_fingerprint, fingerprint);
                     debug!(
                         "🎯 Zone '{}' fingerprint {} similarity: {:.3} (threshold: {:.3})",
                         zone.name,
@@ -442,7 +444,7 @@ impl ZoneManager {
             // Apply hysteresis: different thresholds for entering vs staying in a zone
             let effective_threshold = if Some(&zone.id) == self.current_zone.as_ref() {
                 // Currently IN this zone: use lower threshold to stay (hysteresis)
-                zone.confidence_threshold - 0.15  // 15% lower threshold to stay
+                zone.confidence_threshold - 0.15 // 15% lower threshold to stay
             } else {
                 // Not in this zone: use normal threshold to enter
                 zone.confidence_threshold
@@ -750,7 +752,6 @@ impl ZoneSuggestionEngine {
         Ok(None)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

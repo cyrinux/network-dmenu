@@ -10,7 +10,6 @@ use log::{debug, info};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-
 /// Event-driven network monitor using D-Bus signals
 #[cfg(feature = "geofencing")]
 pub struct NetworkEventMonitor {
@@ -80,7 +79,10 @@ impl NetworkEventMonitor {
                 if output.status.success() {
                     let current_state = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if current_state != last_state && !last_state.is_empty() {
-                        debug!("📡 NetworkManager state changed: {} -> {}", last_state, current_state);
+                        debug!(
+                            "📡 NetworkManager state changed: {} -> {}",
+                            last_state, current_state
+                        );
                         on_network_change();
                     }
                     last_state = current_state;

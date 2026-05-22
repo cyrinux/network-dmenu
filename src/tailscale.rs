@@ -236,16 +236,17 @@ impl TailscaleState {
                     get_exit_node_suggested(command_runner).unwrap_or_default();
 
                 // Get lock status and locked nodes in one call
-                if let Ok(lock_output) =
-                    command_runner.run_command("tailscale", &["lock"])
-                {
+                if let Ok(lock_output) = command_runner.run_command("tailscale", &["lock"]) {
                     if lock_output.status.success() {
                         // Store the entire output to avoid repeated calls
                         let stdout = String::from_utf8_lossy(&lock_output.stdout).to_string();
                         state.lock_output = Some(stdout.clone());
 
                         // Check if lock is enabled
-                        if stdout.to_ascii_lowercase().contains("tailnet lock is enabled") {
+                        if stdout
+                            .to_ascii_lowercase()
+                            .contains("tailnet lock is enabled")
+                        {
                             // Extract this node's signing key
                             for line in stdout.lines() {
                                 if line.contains("This node's tailnet-lock key:") {
@@ -1411,7 +1412,9 @@ pub fn is_tailscale_lock_enabled(
     // If state is provided, use the cached lock_output
     if let Some(state) = state {
         if let Some(lock_output) = &state.lock_output {
-            return Ok(lock_output.to_ascii_lowercase().contains("tailnet lock is enabled"));
+            return Ok(lock_output
+                .to_ascii_lowercase()
+                .contains("tailnet lock is enabled"));
         }
     }
 
@@ -1419,7 +1422,9 @@ pub fn is_tailscale_lock_enabled(
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(stdout.to_ascii_lowercase().contains("tailnet lock is enabled"));
+        return Ok(stdout
+            .to_ascii_lowercase()
+            .contains("tailnet lock is enabled"));
     }
     Ok(false)
 }
@@ -1444,7 +1449,10 @@ pub fn can_sign_nodes(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.to_ascii_lowercase().contains("tailnet lock is enabled") {
+    if !stdout
+        .to_ascii_lowercase()
+        .contains("tailnet lock is enabled")
+    {
         return Ok(false);
     }
 
@@ -1547,7 +1555,12 @@ fn parse_locked_node_line(line: &str) -> Option<LockedNode> {
 
     let (ip_addresses, machine_name) = if let Some(tab_pos) = rest.find('\t') {
         let ips = rest[..tab_pos].trim().to_string();
-        let machine = rest[tab_pos + 1..].split('\t').next().unwrap_or("").trim().to_string();
+        let machine = rest[tab_pos + 1..]
+            .split('\t')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         (ips, machine)
     } else {
         (rest.trim().to_string(), String::new())

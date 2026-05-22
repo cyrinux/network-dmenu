@@ -154,7 +154,7 @@ async fn stream_actions_simple(
     tx: mpsc::UnboundedSender<ActionType>,
 ) {
     // Send fastest actions first for immediate response
-    
+
     // 1. Custom actions (already available, no computation needed)
     for action in &config.actions {
         let _ = tx.send(ActionType::Custom(action.clone()));
@@ -180,7 +180,6 @@ async fn stream_actions_simple(
             let _ = tx.send(ActionType::Ssh(action));
         }
     }
-
 
     // Start async tasks for actions that require external commands
     let mut handles = vec![];
@@ -282,7 +281,6 @@ async fn stream_actions_simple(
         }));
     }
 
-
     // Wait for all tasks
     for handle in handles {
         let _ = handle.await;
@@ -291,51 +289,73 @@ async fn stream_actions_simple(
     // Send firewalld actions last as a single block (NO FUCKING LOOP)
     #[cfg(feature = "firewalld")]
     {
-        use network_dmenu::firewalld::FirewalldAction;
         use network_dmenu::command::is_command_installed;
-        
+        use network_dmenu::firewalld::FirewalldAction;
+
         if is_command_installed("firewall-cmd") {
             // Get cached data once
             let cache_data = network_dmenu::firewalld::get_or_refresh_firewalld_cache().await;
-            
+
             // Send all actions directly without any loop
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode));
-            
+
             // Inline all zone actions manually (your exact zones)
             if cache_data.zones.contains(&"block".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("block".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "block".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"dmz".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("dmz".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "dmz".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"drop".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("drop".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "drop".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"external".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("external".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "external".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"home".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("home".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "home".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"internal".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("internal".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "internal".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"libvirt".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "libvirt".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"libvirt-routed".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt-routed".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "libvirt-routed".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"public".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("public".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "public".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"trusted".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("trusted".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "trusted".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"work".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("work".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "work".to_string(),
+                )));
             }
         }
     }
@@ -477,7 +497,6 @@ async fn produce_actions_streaming(
         }));
     }
 
-
     // Wait for all tasks to complete
     for task in tasks {
         let _ = task.await;
@@ -486,51 +505,73 @@ async fn produce_actions_streaming(
     // Send firewalld actions last as a single block (NO FUCKING LOOP)
     #[cfg(feature = "firewalld")]
     {
-        use network_dmenu::firewalld::FirewalldAction;
         use network_dmenu::command::is_command_installed;
-        
+        use network_dmenu::firewalld::FirewalldAction;
+
         if is_command_installed("firewall-cmd") {
             // Get cached data once
             let cache_data = network_dmenu::firewalld::get_or_refresh_firewalld_cache().await;
-            
+
             // Send all actions directly without any loop
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::GetCurrentZone));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::OpenConfigEditor));
             let _ = tx.send(ActionType::Firewalld(FirewalldAction::TogglePanicMode));
-            
+
             // Inline all zone actions manually (your exact zones)
             if cache_data.zones.contains(&"block".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("block".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "block".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"dmz".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("dmz".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "dmz".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"drop".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("drop".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "drop".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"external".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("external".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "external".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"home".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("home".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "home".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"internal".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("internal".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "internal".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"libvirt".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "libvirt".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"libvirt-routed".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("libvirt-routed".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "libvirt-routed".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"public".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("public".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "public".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"trusted".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("trusted".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "trusted".to_string(),
+                )));
             }
             if cache_data.zones.contains(&"work".to_string()) {
-                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone("work".to_string())));
+                let _ = tx.send(ActionType::Firewalld(FirewalldAction::SetZone(
+                    "work".to_string(),
+                )));
             }
         }
     }
@@ -696,9 +737,13 @@ async fn send_tailscale_actions_simple(
         )));
 
         // Add Tailscale Lock actions if enabled
-        let lock_enabled = is_tailscale_lock_enabled(&command_runner, Some(&tailscale_state)).unwrap_or(false);
+        let lock_enabled =
+            is_tailscale_lock_enabled(&command_runner, Some(&tailscale_state)).unwrap_or(false);
         debug!("Tailscale lock enabled: {lock_enabled}");
-        debug!("Tailscale lock_output present: {}", tailscale_state.lock_output.is_some());
+        debug!(
+            "Tailscale lock_output present: {}",
+            tailscale_state.lock_output.is_some()
+        );
         if let Some(ref lo) = tailscale_state.lock_output {
             debug!("Tailscale lock_output content: {lo}");
         }
@@ -713,9 +758,9 @@ async fn send_tailscale_actions_simple(
 
                         for node in locked_nodes {
                             debug!("Adding sign action for node: {}", &node.node_key);
-                            let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignLockedNode(
-                                node.node_key,
-                            )));
+                            let _ = tx.send(ActionType::Tailscale(
+                                TailscaleAction::SignLockedNode(node.node_key),
+                            ));
                         }
                     }
                 }
@@ -932,5 +977,3 @@ async fn send_tor_actions(
         total_elapsed
     );
 }
-
-

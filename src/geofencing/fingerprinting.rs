@@ -131,7 +131,11 @@ async fn scan_wifi_signatures(privacy_mode: PrivacyMode) -> Result<BTreeSet<Netw
                                 };
 
                                 // Parse frequency - remove " MHz" suffix if present
-                                let frequency = match freq_str.replace(" MHz", "").trim().parse::<u32>() {
+                                let frequency = match freq_str
+                                    .replace(" MHz", "")
+                                    .trim()
+                                    .parse::<u32>()
+                                {
                                     Ok(f) => f,
                                     Err(_) => {
                                         debug!("⚠️  Failed to parse frequency '{}', using default 2412", freq_str);

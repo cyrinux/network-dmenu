@@ -3,22 +3,20 @@
 //! Runs in the background to continuously monitor location changes
 //! and automatically execute zone-based actions.
 
+#[cfg(feature = "ml")]
+use super::LocationChange;
 use super::{
     ipc::{DaemonCommand, DaemonIpcServer, DaemonResponse, DaemonStatus},
     zones::ZoneManager,
     GeofencingConfig, Result, ZoneActions,
 };
-#[cfg(feature = "ml")]
-use super::{
-    LocationChange,
-};
 
+#[cfg(feature = "ml")]
+use crate::ml_integration::MlManager;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
-#[cfg(feature = "ml")]
-use crate::ml_integration::MlManager;
 
 // Import network functions from the main codebase
 use crate::command::{CommandRunner, RealCommandRunner};
@@ -120,12 +118,7 @@ impl GeofencingDaemon {
             let should_shutdown = Arc::clone(&should_shutdown);
 
             tokio::spawn(async move {
-                Self::event_driven_monitoring_loop(
-                    zone_manager,
-                    status,
-                    should_shutdown,
-                )
-                .await;
+                Self::event_driven_monitoring_loop(zone_manager, status, should_shutdown).await;
             })
         };
 
@@ -171,9 +164,6 @@ impl GeofencingDaemon {
         Ok(())
     }
 
-
-
-
     /// Event-driven location monitoring using D-Bus signals (battery efficient)
     async fn event_driven_monitoring_loop(
         zone_manager: Arc<Mutex<ZoneManager>>,
@@ -215,9 +205,14 @@ impl GeofencingDaemon {
 
                 match manager.detect_location_change().await {
                     Ok(Some(change)) => {
-                        info!("📍 Event-triggered zone change: {} -> {}",
-                              change.from.map(|z| z.name).unwrap_or_else(|| "None".to_string()),
-                              change.to.name);
+                        info!(
+                            "📍 Event-triggered zone change: {} -> {}",
+                            change
+                                .from
+                                .map(|z| z.name)
+                                .unwrap_or_else(|| "None".to_string()),
+                            change.to.name
+                        );
 
                         // Update status
                         {
@@ -227,11 +222,21 @@ impl GeofencingDaemon {
                         }
 
                         // Execute zone actions
-                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                        let notification_manager = NotificationManager::new(
+                            crate::notifications::NotificationConfig::default(),
+                        );
+                        if let Err(e) = Self::execute_zone_actions_static(
+                            &change.suggested_actions,
+                            &notification_manager,
+                        )
+                        .await
+                        {
                             warn!("Failed to execute zone actions: {}", e);
                         } else {
-                            debug!("Successfully executed actions for zone '{}'", change.to.name);
+                            debug!(
+                                "Successfully executed actions for zone '{}'",
+                                change.to.name
+                            );
                         }
                     }
                     Ok(None) => {
@@ -286,9 +291,14 @@ impl GeofencingDaemon {
             let mut manager = zone_manager.lock().await;
             match manager.detect_location_change().await {
                 Ok(Some(change)) => {
-                    info!("📍 Polling detected zone change: {} -> {}",
-                          change.from.map(|z| z.name).unwrap_or_else(|| "None".to_string()),
-                          change.to.name);
+                    info!(
+                        "📍 Polling detected zone change: {} -> {}",
+                        change
+                            .from
+                            .map(|z| z.name)
+                            .unwrap_or_else(|| "None".to_string()),
+                        change.to.name
+                    );
 
                     // Update status
                     {
@@ -298,11 +308,21 @@ impl GeofencingDaemon {
                     }
 
                     // Execute zone actions
-                    let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                    if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
+                    let notification_manager = NotificationManager::new(
+                        crate::notifications::NotificationConfig::default(),
+                    );
+                    if let Err(e) = Self::execute_zone_actions_static(
+                        &change.suggested_actions,
+                        &notification_manager,
+                    )
+                    .await
+                    {
                         warn!("Failed to execute zone actions: {}", e);
                     } else {
-                        debug!("Successfully executed actions for zone '{}'", change.to.name);
+                        debug!(
+                            "Successfully executed actions for zone '{}'",
+                            change.to.name
+                        );
                     }
                 }
                 Ok(None) => {
@@ -532,11 +552,24 @@ impl GeofencingDaemon {
                         // Execute zone actions - simplified
                         debug!("Executing zone actions for zone '{}'", change.to.name);
 
-                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
-                            error!("Failed to execute zone actions for zone '{}': {}", change.to.name, e);
+                        let notification_manager = NotificationManager::new(
+                            crate::notifications::NotificationConfig::default(),
+                        );
+                        if let Err(e) = Self::execute_zone_actions_static(
+                            &change.suggested_actions,
+                            &notification_manager,
+                        )
+                        .await
+                        {
+                            error!(
+                                "Failed to execute zone actions for zone '{}': {}",
+                                change.to.name, e
+                            );
                         } else {
-                            debug!("Successfully executed all zone actions for zone '{}'", change.to.name);
+                            debug!(
+                                "Successfully executed all zone actions for zone '{}'",
+                                change.to.name
+                            );
                         }
 
                         // Send notification if enabled
@@ -709,8 +742,6 @@ impl GeofencingDaemon {
         Duration::from_secs(clamped_seconds)
     }
 
-
-
     /// Handle IPC commands from clients - simplified without ML
     async fn handle_ipc_command_simple(
         zone_manager: Arc<Mutex<ZoneManager>>,
@@ -762,7 +793,10 @@ impl GeofencingDaemon {
             DaemonCommand::CreateZone { name, actions } => {
                 debug!("Processing CreateZone command for zone: {}", name);
                 let mut manager = zone_manager.lock().await;
-                match manager.create_zone_from_current_location(name, actions).await {
+                match manager
+                    .create_zone_from_current_location(name, actions)
+                    .await
+                {
                     Ok(zone) => {
                         debug!("Successfully created zone: {} (ID: {})", zone.name, zone.id);
                         DaemonResponse::ZoneCreated { zone }
@@ -839,13 +873,13 @@ impl GeofencingDaemon {
                     Ok(_) => {
                         debug!("Successfully removed zone: {}", zone_id);
                         DaemonResponse::Success
-                    },
+                    }
                     Err(e) => {
                         debug!("Failed to remove zone {}: {}", zone_id, e);
                         DaemonResponse::Error {
                             message: format!("Failed to remove zone: {}", e),
                         }
-                    },
+                    }
                 }
             }
 
@@ -854,18 +888,34 @@ impl GeofencingDaemon {
                 let mut manager = zone_manager.lock().await;
                 match manager.activate_zone(&zone_id) {
                     Ok(change) => {
-                        debug!("Zone '{}' activated successfully, executing actions", change.to.name);
+                        debug!(
+                            "Zone '{}' activated successfully, executing actions",
+                            change.to.name
+                        );
 
                         // Execute zone actions - simplified
-                        let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
-                        if let Err(e) = Self::execute_zone_actions_static(&change.suggested_actions, &notification_manager).await {
-                            warn!("Zone '{}' activated but actions failed: {}", change.to.name, e);
+                        let notification_manager = NotificationManager::new(
+                            crate::notifications::NotificationConfig::default(),
+                        );
+                        if let Err(e) = Self::execute_zone_actions_static(
+                            &change.suggested_actions,
+                            &notification_manager,
+                        )
+                        .await
+                        {
+                            warn!(
+                                "Zone '{}' activated but actions failed: {}",
+                                change.to.name, e
+                            );
                             return DaemonResponse::Error {
                                 message: format!("Zone activated but actions failed: {}", e),
                             };
                         }
 
-                        debug!("Successfully executed all actions for zone '{}'", change.to.name);
+                        debug!(
+                            "Successfully executed all actions for zone '{}'",
+                            change.to.name
+                        );
                         DaemonResponse::ZoneChanged {
                             from_zone_id: change.from.map(|z| z.id),
                             to_zone: change.to,
@@ -883,7 +933,8 @@ impl GeofencingDaemon {
 
             DaemonCommand::ExecuteActions { actions } => {
                 debug!("Processing ExecuteActions command");
-                let notification_manager = NotificationManager::new(crate::notifications::NotificationConfig::default());
+                let notification_manager =
+                    NotificationManager::new(crate::notifications::NotificationConfig::default());
                 match Self::execute_zone_actions_static(&actions, &notification_manager).await {
                     Ok(_) => {
                         debug!("Successfully executed custom actions");
@@ -910,7 +961,9 @@ impl GeofencingDaemon {
             DaemonCommand::GetZoneSuggestions => {
                 debug!("Processing GetZoneSuggestions command");
                 // For now, return empty suggestions as simplified daemon doesn't have ML integration
-                DaemonResponse::ZoneSuggestions { suggestions: vec![] }
+                DaemonResponse::ZoneSuggestions {
+                    suggestions: vec![],
+                }
             }
 
             #[cfg(feature = "ml")]
@@ -1042,9 +1095,11 @@ impl GeofencingDaemon {
         None
     }
 
-
     /// Execute zone actions (connect to WiFi, VPN, etc.) - static version for IPC
-    async fn execute_zone_actions_static(actions: &ZoneActions, notification_manager: &NotificationManager) -> Result<()> {
+    async fn execute_zone_actions_static(
+        actions: &ZoneActions,
+        notification_manager: &NotificationManager,
+    ) -> Result<()> {
         debug!("Starting zone action execution");
         info!("Executing zone actions: {:?}", actions);
         debug!("Action details: WiFi={:?}, VPN={:?}, Tailscale Exit Node={:?}, Tailscale Shields={:?}, {} Bluetooth devices, {} custom commands",
@@ -1404,12 +1459,22 @@ impl GeofencingDaemon {
             info!("Executing custom command: {}", command);
 
             // Check if this is a notify-send command that we can handle with our notification system
-            if notification_manager.parse_notify_send_command(command).is_some() {
-                debug!("Converting notify-send command to native notification: {}", command);
-                let notification_result = notification_manager.execute_notification_command(command);
+            if notification_manager
+                .parse_notify_send_command(command)
+                .is_some()
+            {
+                debug!(
+                    "Converting notify-send command to native notification: {}",
+                    command
+                );
+                let notification_result =
+                    notification_manager.execute_notification_command(command);
                 match notification_result {
                     Ok(()) => {
-                        info!("Successfully sent notification via native system: {}", command);
+                        info!(
+                            "Successfully sent notification via native system: {}",
+                            command
+                        );
                         continue;
                     }
                     Err(e) => {
@@ -1432,7 +1497,6 @@ impl GeofencingDaemon {
 
         Ok(())
     }
-
 
     /// Execute a shell command with proper logging - static version
     async fn execute_shell_command_static(command: &str) {

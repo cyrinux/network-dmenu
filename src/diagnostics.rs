@@ -42,7 +42,7 @@ struct DnsBenchResult {
     total_requests: u32,
     successful_requests: u32,
     successful_requests_percentage: f32,
-    first_duration: DnsDuration,
+    #[serde(alias = "avg_duration")]
     average_duration: DnsDuration,
 }
 
@@ -936,6 +936,47 @@ mod tests {
             extract_latency_stats(no_stats),
             "No latency statistics available"
         );
+    }
+
+    #[test]
+    fn test_parse_dns_bench_avg_duration_output() {
+        let json = r#"[
+            {
+                "name": "Google",
+                "ip": "8.8.8.8",
+                "last_resolved_ip": "172.217.22.206",
+                "total_requests": 50,
+                "successful_requests": 50,
+                "successful_requests_percentage": 100.0,
+                "min_duration": {"succeeded": {"secs": 0, "nanos": 3307766}},
+                "max_duration": {"succeeded": {"secs": 0, "nanos": 9250963}},
+                "avg_duration": {"succeeded": {"secs": 0, "nanos": 5042436}}
+            },
+            {
+                "name": "OpenDNS Home",
+                "ip": "208.67.220.220",
+                "last_resolved_ip": "0.0.0.0",
+                "total_requests": 50,
+                "successful_requests": 0,
+                "successful_requests_percentage": 0.0,
+                "min_duration": {"failed": "No responses"},
+                "max_duration": {"failed": "No responses"},
+                "avg_duration": {"failed": "No responses"}
+            }
+        ]"#;
+
+        let results: Vec<DnsBenchResult> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].name, "Google");
+        match &results[0].average_duration {
+            DnsDuration::Succeeded { succeeded } => assert_eq!(succeeded.to_millis(), 5.042436),
+            DnsDuration::Failed { .. } => panic!("expected successful duration"),
+        }
+        match &results[1].average_duration {
+            DnsDuration::Succeeded { .. } => panic!("expected failed duration"),
+            DnsDuration::Failed { failed } => assert_eq!(failed, "No responses"),
+        }
     }
 
     #[test]

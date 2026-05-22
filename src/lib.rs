@@ -18,8 +18,8 @@ pub mod logger;
 pub mod ml;
 pub mod ml_integration;
 pub mod networkmanager;
-pub mod notifications;
 pub mod nextdns;
+pub mod notifications;
 pub mod port_utils;
 pub mod privilege;
 pub mod rfkill;
@@ -44,7 +44,10 @@ pub use dns_cache::{
     DnsCacheStorage,
 };
 #[cfg(feature = "firewalld")]
-pub use firewalld::{get_firewalld_actions, get_firewalld_actions_async, handle_firewalld_action, FirewalldAction, FirewalldActionResult};
+pub use firewalld::{
+    get_firewalld_actions, get_firewalld_actions_async, handle_firewalld_action, FirewalldAction,
+    FirewalldActionResult,
+};
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
