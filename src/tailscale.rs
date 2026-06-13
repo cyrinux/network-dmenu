@@ -147,7 +147,6 @@ pub struct TailscalePeer {
     pub tags: Vec<String>,
     #[serde(rename = "CapMap", default, skip_serializing_if = "Option::is_none")]
     pub cap_map: Option<HashMap<String, Option<serde_json::Value>>>,
-    // Additional fields for ML predictions
     #[serde(rename = "LastHandshake", default)]
     pub last_handshake: Option<String>,
     #[serde(rename = "LastSeen", default)]
@@ -329,28 +328,6 @@ pub fn get_mullvad_actions(
 
     log::debug!("Found {} peers in Tailscale status", status.peer.len());
 
-    // Get ML predictions for best exit nodes if ML feature is enabled
-    #[cfg(feature = "ml")]
-    let ml_predictions = {
-        let peers: Vec<crate::tailscale::TailscalePeer> = status
-            .peer
-            .values()
-            .filter(|p| p.exit_node_option && p.dns_name.contains("mullvad.ts.net"))
-            .cloned()
-            .collect();
-
-        if !peers.is_empty() {
-            let predictions = crate::ml_integration::predict_best_exit_nodes(&peers, 5);
-            log::debug!("ML predictions for exit nodes: {:?}", predictions);
-            predictions
-        } else {
-            Vec::new()
-        }
-    };
-
-    #[cfg(not(feature = "ml"))]
-    let ml_predictions: Vec<(String, f32)> = Vec::new();
-
     // Group nodes by country and city
     let mut nodes_by_country: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
     let mut nodes_by_city: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
@@ -465,22 +442,19 @@ pub fn get_mullvad_actions(
     // Format the selected nodes for display
     let mut mullvad_actions = Vec::new();
 
-    // Helper to get ML score for a node
-    let get_ml_score = |node_name: &str| -> Option<f32> {
-        ml_predictions
-            .iter()
-            .find(|(name, _)| name == node_name || name.trim_end_matches('.') == node_name)
-            .map(|(_, score)| *score)
-    };
-
-    // Sort nodes by ML score if available
     let mut sorted_nodes: Vec<_> = selected_nodes.into_iter().collect();
-    sorted_nodes.sort_by(|(name_a, _), (name_b, _)| {
-        let score_a = get_ml_score(name_a).unwrap_or(0.0);
-        let score_b = get_ml_score(name_b).unwrap_or(0.0);
-        score_b
-            .partial_cmp(&score_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
+    sorted_nodes.sort_by(|(_, peer_a), (_, peer_b)| {
+        let priority_a = peer_a
+            .location
+            .as_ref()
+            .and_then(|loc| loc.priority)
+            .unwrap_or(-1);
+        let priority_b = peer_b
+            .location
+            .as_ref()
+            .and_then(|loc| loc.priority)
+            .unwrap_or(-1);
+        priority_b.cmp(&priority_a)
     });
 
     for (node_name, peer) in sorted_nodes {
@@ -1008,34 +982,7 @@ pub async fn handle_tailscale_action(
             Ok(status.success())
         }
         TailscaleAction::SetExitNode(node) => {
-            // Record ML action for learning
-            #[cfg(feature = "ml")]
-            {
-                crate::ml_integration::record_user_action(&format!("Select Exit Node: {}", node));
-            }
-
             let success = set_exit_node(command_runner, node).await;
-
-            // Record performance after connection (simplified - would need actual metrics)
-            #[cfg(feature = "ml")]
-            if success {
-                // Clone the node name for the async task
-                let node_name = node.clone();
-                // In a real implementation, you'd measure actual latency/packet loss
-                // For now, just record that the node was selected
-                tokio::spawn(async move {
-                    // Wait a bit for connection to stabilize
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                    // Would measure actual metrics here
-                    let simulated_latency = 30.0; // This would be actual measurement
-                    let simulated_packet_loss = 0.01;
-                    crate::ml_integration::record_exit_node_performance(
-                        &node_name,
-                        simulated_latency,
-                        simulated_packet_loss,
-                    );
-                });
-            }
 
             // Log errors from mullvad check in debug mode but continue execution
             if let Err(_e) = check_mullvad().await {
@@ -1306,16 +1253,6 @@ pub async fn handle_tailscale_action(
                                 error!("Failed to send suggested node notification: {_e}");
                             }
                         }
-
-                        #[cfg(feature = "ml")]
-                        {
-                            // Record performance for ML learning
-                            crate::ml_integration::record_exit_node_performance(
-                                &fresh_node,
-                                0.0,
-                                0.0,
-                            );
-                        }
                     }
 
                     return Ok(success);
@@ -1331,12 +1268,6 @@ pub async fn handle_tailscale_action(
                     }
                     return Ok(false);
                 }
-            }
-
-            // Record ML action for learning
-            #[cfg(feature = "ml")]
-            {
-                crate::ml_integration::record_user_action("Use recommended exit node");
             }
 
             debug!("Setting exit node to suggested node: {}", suggested_node);
@@ -1356,24 +1287,6 @@ pub async fn handle_tailscale_action(
                         #[cfg(debug_assertions)]
                         error!("Failed to send successful connection notification: {_e}");
                     }
-                }
-
-                // Record performance after connection
-                #[cfg(feature = "ml")]
-                {
-                    let node_name = suggested_node.clone();
-                    tokio::spawn(async move {
-                        // Wait for connection to stabilize
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        // In a real implementation, this would measure actual metrics
-                        let simulated_latency = 25.0; // Suggested nodes typically perform well
-                        let simulated_packet_loss = 0.005;
-                        crate::ml_integration::record_exit_node_performance(
-                            &node_name,
-                            simulated_latency,
-                            simulated_packet_loss,
-                        );
-                    });
                 }
             } else if let Some(sender) = notification_sender {
                 if let Err(_e) = sender.send_notification(

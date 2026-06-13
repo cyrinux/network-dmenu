@@ -38,29 +38,7 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdout mode - collect all actions first
     if use_stdout {
-        #[allow(unused_mut)] // Needed for ML feature
-        let mut actions = collect_all_actions(args, config).await?;
-
-        // Apply ML personalization if enabled
-        #[cfg(feature = "ml")]
-        {
-            let action_strings: Vec<String> = actions.iter().map(crate::action_to_string).collect();
-            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
-
-            // Reorder actions based on personalized order
-            let mut reordered = Vec::with_capacity(actions.len());
-            for action_str in personalized {
-                if let Some(pos) = actions
-                    .iter()
-                    .position(|a| crate::action_to_string(a) == action_str)
-                {
-                    reordered.push(actions.remove(pos));
-                }
-            }
-            // Add any remaining actions that weren't in the personalized list
-            reordered.extend(actions);
-            actions = reordered;
-        }
+        let actions = collect_all_actions(args, config).await?;
         for (i, action) in actions.iter().enumerate() {
             println!("{}: {}", i + 1, crate::action_to_string(action));
         }
@@ -69,29 +47,7 @@ pub async fn select_action_from_menu_streaming(
 
     // Handle stdin mode - collect all actions first
     if use_stdin {
-        #[allow(unused_mut)] // Needed for ML feature
-        let mut actions = collect_all_actions(args, config).await?;
-
-        // Apply ML personalization if enabled
-        #[cfg(feature = "ml")]
-        {
-            let action_strings: Vec<String> = actions.iter().map(crate::action_to_string).collect();
-            let personalized = network_dmenu::get_personalized_menu_order(action_strings);
-
-            // Reorder actions based on personalized order
-            let mut reordered = Vec::with_capacity(actions.len());
-            for action_str in personalized {
-                if let Some(pos) = actions
-                    .iter()
-                    .position(|a| crate::action_to_string(a) == action_str)
-                {
-                    reordered.push(actions.remove(pos));
-                }
-            }
-            // Add any remaining actions that weren't in the personalized list
-            reordered.extend(actions);
-            actions = reordered;
-        }
+        let actions = collect_all_actions(args, config).await?;
         use std::io::{self, BufRead};
         let stdin = io::stdin();
         let mut line = String::new();

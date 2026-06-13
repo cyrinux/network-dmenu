@@ -10,13 +10,8 @@ pub mod diagnostics;
 pub mod dns_cache;
 #[cfg(feature = "firewalld")]
 pub mod firewalld;
-#[cfg(feature = "geofencing")]
-pub mod geofencing;
 pub mod iwd;
 pub mod logger;
-#[cfg(feature = "ml")]
-pub mod ml;
-pub mod ml_integration;
 pub mod networkmanager;
 pub mod nextdns;
 pub mod notifications;
@@ -51,12 +46,6 @@ pub use firewalld::{
 pub use iwd::{
     connect_to_iwd_wifi, disconnect_iwd_wifi, get_iwd_networks,
     is_known_network as is_known_iwd_network,
-};
-pub use ml_integration::{
-    analyze_network_issues, force_save_ml_models, get_performance_summary,
-    get_personalized_menu_order, initialize_ml_system, predict_best_exit_nodes,
-    predict_best_wifi_network, record_exit_node_performance, record_user_action,
-    record_wifi_performance,
 };
 pub use networkmanager::{
     connect_to_nm_vpn, connect_to_nm_wifi, disconnect_nm_vpn, disconnect_nm_wifi,

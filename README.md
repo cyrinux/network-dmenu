@@ -13,7 +13,7 @@
 
 ![network-dmenu](https://github.com/user-attachments/assets/d07a6fb4-7558-4cc8-b7cd-9bb1321265c7)
 
-[Features](#-features) • [Geofencing](#-geofencing--location-based-automation) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration) • [Contributing](#-contributing)
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#-configuration) • [Contributing](#-contributing)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## 🎯 Overview
 
-`network-dmenu` is a powerful, dmenu-based network management tool that unifies control over multiple networking subsystems into a single, fast interface. Whether you're managing VPN connections, switching between WiFi networks, controlling Bluetooth devices, running network diagnostics, or setting up automatic location-based network configuration, network-dmenu provides instant access to all these capabilities through a simple menu system.
+`network-dmenu` is a powerful, dmenu-based network management tool that unifies control over multiple networking subsystems into a single, fast interface. Whether you're managing VPN connections, switching between WiFi networks, controlling Bluetooth devices, or running network diagnostics, network-dmenu provides instant access to all these capabilities through a simple menu system.
 
 ### Why network-dmenu?
 
@@ -29,7 +29,6 @@
 - **🎮 Single Interface**: Control WiFi, VPN, Bluetooth, Tailscale, and more from one menu
 - **🔧 Highly Configurable**: Extensive customization options via TOML configuration
 - **🛡️ Security Focused**: Supports Tailscale Lock, secure password prompts, and privilege escalation
-- **📍 Privacy-First Geofencing**: Automatic location-based network configuration without GPS
 - **📊 Comprehensive Diagnostics**: Built-in network troubleshooting tools
 - **🎨 Clean UI**: Intuitive menu organization with emoji indicators and smart filtering
 
@@ -94,164 +93,6 @@
 - 🏎️ Speed tests (multiple providers)
 - 🎯 DNS benchmark testing
 
-### 📍 Geofencing & Location-Based Automation
-
-#### **Privacy-First Location Detection**
-- 📶 WiFi fingerprinting without GPS or location services
-- 🔐 SHA-256 hashing of network identifiers for privacy
-- 🏠 Automatic "home", "office", "coffee shop" zone detection
-- ⚡ Real-time location monitoring with 30-second intervals
-- 🎯 Configurable confidence thresholds (0.8 default)
-
-#### **Zone-Based Network Actions**
-- 🔄 Automatic WiFi network switching per location
-- 🛡️ Location-specific VPN connections
-- 🌐 Tailscale exit node switching based on zones
-- 🎧 Bluetooth device connection automation
-- ⚙️ Custom command execution per zone
-
-#### **Geofencing Daemon**
-- 🚀 Background monitoring service with Unix socket IPC
-- 📊 Zone change statistics and confidence tracking
-- 💾 Persistent zone storage in `~/.local/share/network-dmenu/`
-- 🔔 Native desktop notifications with smart notify-send conversion *(v2.14.0+)*
-- 🎮 Complete CLI management interface
-
-#### **CLI Commands**
-```bash
-# Start background monitoring
-network-dmenu --daemon
-
-# Create zone from current location  
-network-dmenu --create-zone "home"
-
-# Show current location fingerprint
-network-dmenu --where-am-i
-
-# List all configured zones
-network-dmenu --list-zones
-
-# Check daemon status
-network-dmenu --daemon-status
-
-# Stop monitoring
-network-dmenu --stop-daemon
-```
-
-#### **Zone Configuration Examples**
-
-**Basic Home/Work Setup**
-```toml
-[geofencing]
-enabled = true
-privacy_mode = "High"           # Only WiFi, hashed identifiers
-scan_interval_seconds = 30      # Check location every 30 seconds
-confidence_threshold = 0.8      # 80% confidence required
-notifications = true            # Desktop notifications on zone changes
-
-# Home zone - automatically connect to home network and devices
-[[geofencing.zones]]
-name = "Home"
-[geofencing.zones.actions]
-wifi = "HomeWiFi"
-# vpn = null                    # No VPN connection at home
-tailscale_exit_node = "none"    # Direct connection at home
-bluetooth = ["Sony Headphones", "Logitech Mouse"]
-custom_commands = [
-    "systemctl --user start syncthing",
-    "notify-send 'Welcome Home' 'Network configured for home'"
-]
-
-# Work zone - secure corporate setup
-[[geofencing.zones]]
-name = "Office"
-[geofencing.zones.actions]
-wifi = "CorpWiFi"
-vpn = "WorkVPN"                 # Auto-connect to company VPN
-tailscale_exit_node = "office-gateway"
-bluetooth = ["Work Headset"]
-custom_commands = [
-    "systemctl --user stop syncthing",
-    "notify-send 'Work Mode' 'Secure network profile activated'"
-]
-```
-
-**Advanced Multi-Location Setup**
-```toml
-[geofencing]
-enabled = true
-privacy_mode = "Medium"         # WiFi + Bluetooth for better accuracy
-scan_interval_seconds = 15      # More frequent checks
-confidence_threshold = 0.75     # Slightly more sensitive
-notifications = true
-zone_history_size = 50         # Remember more location data
-
-# Coffee shop zone - privacy focused
-[[geofencing.zones]]
-name = "CoffeeShop"
-[geofencing.zones.actions]
-wifi = "CafeWiFi"
-vpn = "PrivateVPN"             # Always use VPN on public WiFi
-tailscale_exit_node = "home-server"  # Route through home
-bluetooth = []                  # Disable Bluetooth for privacy
-custom_commands = [
-    "notify-send 'Public Network' 'VPN activated for security'",
-    "firefox --private-window"
-]
-
-# Mobile/traveling zone - conserve data
-[[geofencing.zones]]
-name = "Mobile"
-[geofencing.zones.actions]
-# wifi = null                   # Use mobile data instead
-# vpn = null                    # No VPN to save mobile data
-tailscale_exit_node = "nearest" # Use nearest exit node
-bluetooth = ["Phone Headphones"]
-custom_commands = [
-    "notify-send 'Mobile Mode' 'Data conservation enabled'"
-]
-
-# Hotel/temporary zone - secure but flexible
-[[geofencing.zones]]
-name = "Hotel"
-[geofencing.zones.actions]
-wifi = "auto"                   # Connect to strongest signal
-vpn = "TravelVPN"              # Secure connection
-tailscale_exit_node = "home-server"
-bluetooth = ["Travel Headphones"]
-custom_commands = [
-    "notify-send 'Travel Mode' 'Secure hotel network setup'"
-]
-```
-
-**Privacy Mode Options**
-```toml
-[geofencing]
-# High privacy: WiFi networks only, all identifiers hashed
-privacy_mode = "High"
-
-# Medium privacy: WiFi + Bluetooth, hashed identifiers  
-privacy_mode = "Medium"
-
-# Low privacy: All available signals, better accuracy
-privacy_mode = "Low"
-
-# Custom privacy settings
-privacy_mode = "Custom"
-[geofencing.privacy]
-use_wifi = true
-use_bluetooth = false
-use_cellular_towers = false    # Requires special permissions
-hash_identifiers = true        # SHA-256 hash all network IDs
-hash_salt = "your-unique-salt" # Optional custom salt
-```
-
-**Important Notes**
-- **VPN actions** must specify actual NetworkManager VPN profile names (e.g., `vpn = "WorkVPN"`), not keywords like "disconnect"
-- **WiFi actions** use SSID names (e.g., `wifi = "MyNetwork"`)  
-- **Tailscale exit nodes** support special values: `"none"` (direct), `"auto"` (automatic), or specific hostnames
-- To disable an action, omit the field or comment it out - don't set it to "disconnect" or "off"
-
 ### 🎛️ System Controls
 
 #### **Radio Management**
@@ -290,44 +131,6 @@ hash_salt = "your-unique-salt" # Optional custom salt
 - **Desktop notifications** for all operations
 - **Secure defaults** with proper data directory isolation
 - **Command availability checking** - only shows relevant actions when commands are installed
-
-### 🔔 Native Notification System *(New in v2.14.0+)*
-
-#### **Enhanced Desktop Notifications**
-- 🎯 **Native API Integration** - Uses `notify-rust` crate instead of shell commands
-- 🔄 **Automatic Migration** - Existing `notify-send` commands in config work seamlessly
-- 🛡️ **Improved Security** - No shell execution for notifications
-- ⚡ **Better Performance** - Direct API calls vs subprocess overhead
-- 🎨 **Consistent Appearance** - Uniform notifications across desktop environments
-
-#### **Smart notify-send Conversion**
-```bash
-# These commands in custom_commands are automatically converted:
-notify-send 'Welcome Home' 'Network configured'
-notify-send 'Security Alert' 'VPN enabled' --urgency=critical
-notify-send "Zone Change" "At Office" --urgency=normal
-```
-
-#### **Configuration Options**
-```toml
-[geofencing.notification_config]
-enabled = true              # Enable/disable notifications globally
-timeout_seconds = 5         # Auto-dismiss after 5 seconds (0 = never)
-default_urgency = "Normal"  # "Low", "Normal", or "Critical"
-app_name = "Network DMenu"  # App name shown in notifications
-icon = "network-wireless"   # System icon or file path
-```
-
-#### **Urgency Levels**
-- **`--urgency=low`** → Minimal interruption, quiet notification
-- **`--urgency=normal`** → Standard notification (default)
-- **`--urgency=critical`** → High priority, persistent until dismissed
-
-#### **Migration & Fallback**
-- ✅ **Zero Breaking Changes** - All existing configs continue to work
-- 🔄 **Automatic Detection** - `notify-send` commands converted transparently
-- 🛟 **Graceful Fallback** - Falls back to shell execution if native fails
-- 🔧 **Easy Testing** - Test notifications work before deploying
 
 ## 📦 Installation
 
@@ -579,7 +382,6 @@ On a typical system with 50+ network interfaces and 100+ Tailscale nodes:
 
 ## 🔧 Running as Systemd Service
 
-For automatic geofencing daemon startup, network-dmenu can be run as a systemd user service.
 
 ### Quick Install
 

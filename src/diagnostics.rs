@@ -4,8 +4,10 @@ use crate::dns_cache::{get_current_network_id, CachedDnsServer, DnsCacheStorage}
 use crate::format_entry;
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::IpAddr;
+use std::process::Output;
 use std::str::FromStr;
 
 /// Network diagnostic actions that can be performed
@@ -23,6 +25,7 @@ pub enum DiagnosticAction {
     SpeedTest,
     SpeedTestFast,
     DnsBenchmark,
+    WhatsMyDnsCheck,
 }
 
 /// Result of a network diagnostic operation
@@ -182,6 +185,8 @@ pub fn get_diagnostic_actions() -> Vec<DiagnosticAction> {
         actions.push(DiagnosticAction::DnsBenchmark);
     }
 
+    actions.push(DiagnosticAction::WhatsMyDnsCheck);
+
     actions
 }
 
@@ -203,6 +208,7 @@ pub async fn handle_diagnostic_action(
         DiagnosticAction::SpeedTest => run_speedtest(command_runner).await,
         DiagnosticAction::SpeedTestFast => run_speedtest_fast(command_runner).await,
         DiagnosticAction::DnsBenchmark => run_dns_benchmark(command_runner).await,
+        DiagnosticAction::WhatsMyDnsCheck => run_whatsmydns_check(command_runner).await,
     }
 }
 
@@ -248,6 +254,9 @@ pub fn diagnostic_action_to_string(action: &DiagnosticAction) -> String {
         }
         DiagnosticAction::DnsBenchmark => {
             format_entry(ACTION_TYPE_DIAGNOSTIC, "🔍", "DNS Benchmark & Optimize")
+        }
+        DiagnosticAction::WhatsMyDnsCheck => {
+            format_entry(ACTION_TYPE_DIAGNOSTIC, "🌐", "WhatsMyDNS DNS Check")
         }
     }
 }
@@ -839,6 +848,279 @@ async fn run_dns_benchmark(
     })
 }
 
+#[derive(Debug, Clone)]
+struct DnsResolver {
+    name: &'static str,
+    address: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DnsCheckResolverResult {
+    name: String,
+    address: String,
+    tool: Option<String>,
+    answers: Vec<String>,
+    error: Option<String>,
+}
+
+async fn run_whatsmydns_check(
+    command_runner: &dyn CommandRunner,
+) -> Result<DiagnosticResult, Box<dyn Error>> {
+    let input = crate::utils::prompt_for_visible_text("Domain and record type (example.com A)")?;
+    let (domain, record_type) = parse_dns_check_input(&input)?;
+    let results: Vec<DnsCheckResolverResult> = default_dns_check_resolvers()
+        .iter()
+        .map(|resolver| query_dns_resolver(command_runner, resolver, &domain, &record_type))
+        .collect();
+    let success = results
+        .iter()
+        .any(|result| result.error.is_none() && !result.answers.is_empty());
+    let output = format_dns_check_report(&domain, &record_type, &results);
+
+    Ok(DiagnosticResult { success, output })
+}
+
+fn default_dns_check_resolvers() -> Vec<DnsResolver> {
+    vec![
+        DnsResolver {
+            name: "Cloudflare",
+            address: "1.1.1.1",
+        },
+        DnsResolver {
+            name: "Google",
+            address: "8.8.8.8",
+        },
+        DnsResolver {
+            name: "Quad9",
+            address: "9.9.9.9",
+        },
+        DnsResolver {
+            name: "OpenDNS",
+            address: "208.67.222.222",
+        },
+        DnsResolver {
+            name: "AdGuard",
+            address: "94.140.14.14",
+        },
+        DnsResolver {
+            name: "ControlD",
+            address: "76.76.2.0",
+        },
+    ]
+}
+
+fn parse_dns_check_input(input: &str) -> Result<(String, String), Box<dyn Error>> {
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("Domain is required".into());
+    }
+
+    let domain = parts[0].trim().trim_end_matches('.').to_string();
+    if domain.is_empty() || domain.contains('/') || domain.contains('@') {
+        return Err("Invalid domain".into());
+    }
+
+    let record_type = parts.get(1).copied().unwrap_or("A").to_uppercase();
+    if !record_type.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid DNS record type".into());
+    }
+
+    Ok((domain, record_type))
+}
+
+fn query_dns_resolver(
+    command_runner: &dyn CommandRunner,
+    resolver: &DnsResolver,
+    domain: &str,
+    record_type: &str,
+) -> DnsCheckResolverResult {
+    let mut errors = Vec::new();
+
+    if is_command_installed("dig") {
+        match query_with_dig(command_runner, resolver, domain, record_type) {
+            Ok(result) if result.error.is_none() => return result,
+            Ok(result) => {
+                if let Some(error) = result.error {
+                    errors.push(format!("dig: {}", error));
+                }
+            }
+            Err(error) => errors.push(format!("dig: {}", error)),
+        }
+    }
+
+    for command in ["dog", "doggo"] {
+        if is_command_installed(command) {
+            match query_with_dog_like(command_runner, resolver, domain, record_type, command) {
+                Ok(result) if result.error.is_none() => return result,
+                Ok(result) => {
+                    if let Some(error) = result.error {
+                        errors.push(format!("{}: {}", command, error));
+                    }
+                }
+                Err(error) => errors.push(format!("{}: {}", command, error)),
+            }
+        }
+    }
+
+    DnsCheckResolverResult {
+        name: resolver.name.to_string(),
+        address: resolver.address.to_string(),
+        tool: None,
+        answers: Vec::new(),
+        error: Some(if errors.is_empty() {
+            "dig, dog, or doggo is required".to_string()
+        } else {
+            errors.join("; ")
+        }),
+    }
+}
+
+fn query_with_dig(
+    command_runner: &dyn CommandRunner,
+    resolver: &DnsResolver,
+    domain: &str,
+    record_type: &str,
+) -> Result<DnsCheckResolverResult, Box<dyn Error>> {
+    let server = format!("@{}", resolver.address);
+    let output = command_runner.run_command(
+        "dig",
+        &[
+            &server,
+            domain,
+            record_type,
+            "+short",
+            "+time=2",
+            "+tries=1",
+        ],
+    )?;
+    Ok(dns_result_from_output(resolver, "dig", output))
+}
+
+fn query_with_dog_like(
+    command_runner: &dyn CommandRunner,
+    resolver: &DnsResolver,
+    domain: &str,
+    record_type: &str,
+    command: &str,
+) -> Result<DnsCheckResolverResult, Box<dyn Error>> {
+    let server = format!("@{}", resolver.address);
+    let output = command_runner.run_command(command, &[domain, record_type, &server, "--short"])?;
+    Ok(dns_result_from_output(resolver, command, output))
+}
+
+fn dns_result_from_output(
+    resolver: &DnsResolver,
+    tool: &str,
+    output: Output,
+) -> DnsCheckResolverResult {
+    let answers = parse_dns_answer_lines(&String::from_utf8_lossy(&output.stdout));
+    let error = if output.status.success() {
+        None
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Some(if stderr.is_empty() {
+            "query failed".to_string()
+        } else {
+            stderr
+        })
+    };
+
+    DnsCheckResolverResult {
+        name: resolver.name.to_string(),
+        address: resolver.address.to_string(),
+        tool: Some(tool.to_string()),
+        answers,
+        error,
+    }
+}
+
+fn parse_dns_answer_lines(output: &str) -> Vec<String> {
+    let mut answers: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with(';'))
+        .map(ToString::to_string)
+        .collect();
+    answers.sort();
+    answers.dedup();
+    answers
+}
+
+fn normalized_dns_answers(answers: &[String]) -> String {
+    let mut normalized: Vec<String> = answers
+        .iter()
+        .map(|answer| answer.trim().trim_end_matches('.').to_lowercase())
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+    normalized.join("|")
+}
+
+fn majority_dns_answers(results: &[DnsCheckResolverResult]) -> Option<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for result in results {
+        if result.error.is_none() && !result.answers.is_empty() {
+            let key = normalized_dns_answers(&result.answers);
+            *counts.entry(key).or_default() += 1;
+        }
+    }
+
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(key, _)| key)
+}
+
+fn format_dns_check_report(
+    domain: &str,
+    record_type: &str,
+    results: &[DnsCheckResolverResult],
+) -> String {
+    let majority = majority_dns_answers(results);
+    let majority_label = majority
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.replace('|', ", "))
+        .unwrap_or_else(|| "No majority answer".to_string());
+    let mut lines = vec![
+        format!("🌐 DNS Check: {} {}", domain, record_type),
+        format!("Majority: {}", majority_label),
+        String::new(),
+    ];
+
+    for result in results {
+        let tool = result.tool.as_deref().unwrap_or("none");
+        if let Some(error) = &result.error {
+            lines.push(format!(
+                "❌ {} ({}) [{}]: {}",
+                result.name, result.address, tool, error
+            ));
+        } else if result.answers.is_empty() {
+            lines.push(format!(
+                "⚪ {} ({}) [{}]: no answer",
+                result.name, result.address, tool
+            ));
+        } else {
+            let normalized = normalized_dns_answers(&result.answers);
+            let icon = if majority.as_deref() == Some(normalized.as_str()) {
+                "✅"
+            } else {
+                "⚠️"
+            };
+            lines.push(format!(
+                "{} {} ({}) [{}]: {}",
+                icon,
+                result.name,
+                result.address,
+                tool,
+                result.answers.join(", ")
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,6 +1170,11 @@ mod tests {
         assert_eq!(
             diagnostic_action_to_string(&DiagnosticAction::DnsBenchmark),
             "diagnostic- 🔍 DNS Benchmark & Optimize"
+        );
+
+        assert_eq!(
+            diagnostic_action_to_string(&DiagnosticAction::WhatsMyDnsCheck),
+            "diagnostic- 🌐 WhatsMyDNS DNS Check"
         );
     }
 
@@ -1020,9 +1307,66 @@ mod tests {
             assert!(actions.contains(&DiagnosticAction::DnsBenchmark));
         }
 
+        assert!(actions.contains(&DiagnosticAction::WhatsMyDnsCheck));
+
         // At least some actions should be available on most systems (ping is very common)
         // If no diagnostic tools are available, actions can be empty
         // This is acceptable behavior
+    }
+
+    #[test]
+    fn test_parse_dns_check_input() {
+        assert_eq!(
+            parse_dns_check_input("example.com").unwrap(),
+            ("example.com".to_string(), "A".to_string())
+        );
+        assert_eq!(
+            parse_dns_check_input("example.com txt").unwrap(),
+            ("example.com".to_string(), "TXT".to_string())
+        );
+        assert!(parse_dns_check_input("").is_err());
+        assert!(parse_dns_check_input("example.com MX;rm").is_err());
+    }
+
+    #[test]
+    fn test_parse_dns_answer_lines() {
+        assert_eq!(
+            parse_dns_answer_lines("93.184.216.34\n\n; ignored\n93.184.216.34\n"),
+            vec!["93.184.216.34".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_format_dns_check_report() {
+        let results = vec![
+            DnsCheckResolverResult {
+                name: "Cloudflare".to_string(),
+                address: "1.1.1.1".to_string(),
+                tool: Some("dig".to_string()),
+                answers: vec!["93.184.216.34".to_string()],
+                error: None,
+            },
+            DnsCheckResolverResult {
+                name: "Google".to_string(),
+                address: "8.8.8.8".to_string(),
+                tool: Some("dog".to_string()),
+                answers: vec!["93.184.216.34".to_string()],
+                error: None,
+            },
+            DnsCheckResolverResult {
+                name: "Quad9".to_string(),
+                address: "9.9.9.9".to_string(),
+                tool: Some("dig".to_string()),
+                answers: vec!["93.184.216.35".to_string()],
+                error: None,
+            },
+        ];
+        let report = format_dns_check_report("example.com", "A", &results);
+
+        assert!(report.contains("Majority: 93.184.216.34"));
+        assert!(report.contains("✅ Cloudflare"));
+        assert!(report.contains("✅ Google"));
+        assert!(report.contains("⚠️ Quad9"));
     }
 
     #[test]
