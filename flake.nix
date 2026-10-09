@@ -27,7 +27,6 @@
           meta.mainProgram = "network-dmenu";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = libs;
-          # cargoBuildOptions = attrs: attrs ++ [ "--features" "gtk-ui" ];
         };
         devShell = with pkgs; mkShell {
           buildInputs = [
@@ -43,7 +42,6 @@
             gnumake
             gobject-introspection
             dbus
-            # GTK4 development dependencies
             pkg-config
             pre-commit
             rust-analyzer

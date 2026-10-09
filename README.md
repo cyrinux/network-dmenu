@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/crates/l/network-dmenu?style=flat-square)](LICENSE.md)
 [![Issues](https://img.shields.io/github/issues-raw/cyrinux/network-dmenu?style=flat-square)](https://github.com/cyrinux/network-dmenu/issues)
 [![Stars](https://img.shields.io/github/stars/cyrinux/network-dmenu?style=flat-square)](https://github.com/cyrinux/network-dmenu)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/cyrinux/network-dmenu/ci.yml?branch=main&style=flat-square)](https://github.com/cyrinux/network-dmenu/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/cyrinux/network-dmenu/rust.yml?branch=main&style=flat-square)](https://github.com/cyrinux/network-dmenu/actions)
 
 **A blazing-fast, feature-rich dmenu-based network manager for power users**
 
@@ -146,6 +146,7 @@ Optional dependencies based on features you want:
 - `iwd` - IWD WiFi support
 - `bluetoothctl` - Bluetooth support
 - `tailscale` - Tailscale VPN support
+- `firewall-cmd` - firewalld zone and panic mode control
 - `pinentry-gnome3` - Secure password prompts
 - `ping` - Connectivity diagnostics
 - `traceroute` - Network path tracing
@@ -170,6 +171,18 @@ git clone https://github.com/cyrinux/network-dmenu.git
 cd network-dmenu
 cargo build --release
 sudo cp target/release/network-dmenu /usr/local/bin/
+```
+
+### Cargo Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `tailscale` | yes | Tailscale, Mullvad exit nodes and Tailscale Lock actions |
+| `firewalld` | yes | firewalld zone switching and panic mode (requires `firewall-cmd`) |
+
+```bash
+# Minimal build without Tailscale and firewalld support
+cargo install network-dmenu --no-default-features
 ```
 
 ### Arch Linux (AUR)
@@ -380,45 +393,6 @@ On a typical system with 50+ network interfaces and 100+ Tailscale nodes:
 - **Audit Logging**: All privileged operations logged
 - **Input Validation**: All user input sanitized
 
-## 🔧 Running as Systemd Service
-
-
-### Quick Install
-
-```bash
-# Install systemd service files
-./init/install-systemd-service.sh
-
-# Manual management
-systemctl --user status network-dmenu.service
-journalctl --user -u network-dmenu.service -f
-```
-
-### Service Files Included
-
-- **`init/systemd/network-dmenu.service`** - Standard version (recommended)
-- **`init/systemd/network-dmenu-privileged.service`** - Enhanced permissions version
-- **`init/install-systemd-service.sh`** - Automated installation script
-
-The privileged version grants additional system capabilities and should only be used if the standard version fails with permission errors.
-
-### Service Management
-
-```bash
-# Start/stop service
-systemctl --user start network-dmenu.service
-systemctl --user stop network-dmenu.service
-
-# Enable/disable autostart
-systemctl --user enable network-dmenu.service  
-systemctl --user disable network-dmenu.service
-
-# View logs
-journalctl --user -u network-dmenu.service -f
-```
-
-See [init/README.md](init/README.md) for detailed systemd configuration and troubleshooting.
-
 ## 🛠️ Troubleshooting
 
 ### Common Issues
@@ -450,7 +424,7 @@ RUST_LOG=debug network-dmenu
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please check our [Contributing Guidelines](CONTRIBUTING.md).
+Contributions are welcome! Open an issue or a pull request on GitHub.
 
 ### Development Setup
 
@@ -473,7 +447,7 @@ cargo clippy
 
 ## 📄 License
 
-This project is licensed under the ISC License - see the [LICENSE](LICENSE.md) file for details.
+This project is licensed under the ISC License - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## 🙏 Acknowledgments
 
@@ -482,20 +456,3 @@ This project is licensed under the ISC License - see the [LICENSE](LICENSE.md) f
 - dmenu/rofi developers for menu systems
 - All contributors and users
 
-## 📊 Statistics
-
-- **Language**: Rust 🦀
-- **Lines of Code**: ~5000
-- **Dependencies**: Minimal, security-audited
-- **Test Coverage**: > 90%
-- **Platform Support**: Linux (primary), BSD (experimental)
-
----
-
-<div align="center">
-
-Made with ❤️ by [cyrinux](https://github.com/cyrinux) and [contributors](https://github.com/cyrinux/network-dmenu/graphs/contributors)
-
-[Report Bug](https://github.com/cyrinux/network-dmenu/issues) • [Request Feature](https://github.com/cyrinux/network-dmenu/issues) • [Documentation](https://docs.rs/network-dmenu)
-
-</div>

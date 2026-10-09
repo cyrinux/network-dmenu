@@ -2,3 +2,6 @@
 TODO.md
 .direnv
 report.*
+.serena/
+.pi/
+.claude/settings.local.json
