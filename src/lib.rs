@@ -82,7 +82,6 @@ pub use utils::{
     check_captive_portal, convert_network_strength, prompt_for_password, prompt_for_ssid,
 };
 
-use notify_rust::Notification;
 use std::error::Error;
 
 /// Enum representing various action types supported by the application
@@ -141,15 +140,6 @@ pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
     } else {
         format!("{:<10}- {} {}", action, icon, text)
     }
-}
-
-/// Sends a notification about the connection.
-pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
-    Notification::new()
-        .summary(summary)
-        .body(&format!("Connected to {name}"))
-        .show()?;
-    Ok(())
 }
 
 /// Parses a VPN action string to extract the connection name.

@@ -961,8 +961,11 @@ mod tests {
 
         let panic_toggle = FirewalldAction::TogglePanicMode;
         assert!(panic_toggle
-            .to_display_string(None)
-            .contains("Toggle panic mode"));
+            .to_display_string_with_panic(None, Some(false))
+            .contains("Enable panic mode"));
+        assert!(panic_toggle
+            .to_display_string_with_panic(None, Some(true))
+            .contains("Disable panic mode"));
 
         let current_zone = FirewalldAction::GetCurrentZone;
         assert!(current_zone
@@ -995,9 +998,9 @@ mod tests {
     #[test]
     fn test_is_panic_mode_enabled() {
         let mock_runner_on = MockCommandRunner::new(true, "");
-        assert_eq!(is_panic_mode_enabled(&mock_runner_on).unwrap(), true);
+        assert!(is_panic_mode_enabled(&mock_runner_on).unwrap());
 
         let mock_runner_off = MockCommandRunner::new(false, "");
-        assert_eq!(is_panic_mode_enabled(&mock_runner_off).unwrap(), false);
+        assert!(!is_panic_mode_enabled(&mock_runner_off).unwrap());
     }
 }

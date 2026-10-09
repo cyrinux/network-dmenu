@@ -1465,6 +1465,7 @@ fn parse_locked_node_line(line: &str) -> Option<LockedNode> {
     };
 
     let hostname = hostname.trim();
+    let rest = rest.trim_start();
 
     let (ip_addresses, machine_name) = if let Some(tab_pos) = rest.find('\t') {
         let ips = rest[..tab_pos].trim().to_string();
@@ -2506,17 +2507,25 @@ mod tests {
             stderr: vec![],
         };
 
-        let mock_runner = MockCommandRunner::new("tailscale", &["lock"], lock_output);
-
-        let signing_key_result = get_signing_key(&mock_runner, None);
-        assert!(signing_key_result.is_ok());
-        assert_eq!(
-            signing_key_result.unwrap(),
-            "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30"
-        );
-
+        let signing_key = "tlpub:2cf55e11a9f652206c8a8145bed240907c1fcac690f1aee845e5a2446d1a0c30";
         let node_key = "nodekey:38e0e68cc940b9a51719e4d4cf06a01221b8d861779b46651e1fb74acc350a48";
-        let _ = sign_locked_node(node_key, &mock_runner, None);
+        let ok = || Output {
+            status: ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
+        };
+
+        // sign_locked_node runs `tailscale lock` twice (can_sign_nodes, get_signing_key)
+        // and then `tailscale lock sign <nodekey> <signing key>`.
+        let mock_runner = MockCommandRunner::with_multiple_calls(vec![
+            ("tailscale", &["lock"], lock_output.clone()),
+            ("tailscale", &["lock"], lock_output),
+            ("tailscale", &["lock", "sign", node_key, signing_key], ok()),
+        ]);
+
+        let result = sign_locked_node(node_key, &mock_runner, None);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
     // Disabled test because it needs to be updated for TailscaleState implementation

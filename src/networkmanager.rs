@@ -496,7 +496,7 @@ mod tests {
         let mock_runner =
             MockCommandRunner::new("nmcli", &["connection", "down", "TestVPN"], output);
 
-        let result = disconnect_nm_vpn("TestVPN", &mock_runner);
+        let result = disconnect_nm_vpn("vpn       - ✅ TestVPN", &mock_runner);
         assert!(result.is_ok());
         assert!(result.unwrap());
     }

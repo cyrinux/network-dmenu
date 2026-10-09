@@ -174,6 +174,41 @@ pub fn prompt_for_visible_text(description: &str) -> Result<String, Box<dyn std:
     Ok(value.trim().to_string())
 }
 
+/// Get WiFi interface name with fallback detection
+pub fn get_wifi_interface(provided: Option<&str>) -> String {
+    if let Some(interface) = provided {
+        debug!("Using provided WiFi interface: {}", interface);
+        return interface.to_string();
+    }
+
+    // Fallback to common names
+    let fallback_interfaces = ["wlan0", "wlp3s0", "wlo1"];
+    for interface in &fallback_interfaces {
+        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
+            debug!("Found fallback WiFi interface: {}", interface);
+            return interface.to_string();
+        }
+    }
+
+    debug!("No WiFi interface found, using default: wlan0");
+    "wlan0".to_string()
+}
+
+/// Get Ethernet interface name with fallback detection
+pub fn get_ethernet_interface() -> String {
+    // Fallback to common names
+    let fallback_interfaces = ["eth0", "enp0s3", "eno1", "ens3"];
+    for interface in &fallback_interfaces {
+        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
+            debug!("Found fallback Ethernet interface: {}", interface);
+            return interface.to_string();
+        }
+    }
+
+    debug!("No Ethernet interface found, using default: eth0");
+    "eth0".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,39 +315,4 @@ mod tests {
         // In a real implementation, we would mock the command execution
         // Test passed - function signature is correct
     }
-}
-
-/// Get WiFi interface name with fallback detection
-pub fn get_wifi_interface(provided: Option<&str>) -> String {
-    if let Some(interface) = provided {
-        debug!("Using provided WiFi interface: {}", interface);
-        return interface.to_string();
-    }
-
-    // Fallback to common names
-    let fallback_interfaces = ["wlan0", "wlp3s0", "wlo1"];
-    for interface in &fallback_interfaces {
-        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
-            debug!("Found fallback WiFi interface: {}", interface);
-            return interface.to_string();
-        }
-    }
-
-    debug!("No WiFi interface found, using default: wlan0");
-    "wlan0".to_string()
-}
-
-/// Get Ethernet interface name with fallback detection
-pub fn get_ethernet_interface() -> String {
-    // Fallback to common names
-    let fallback_interfaces = ["eth0", "enp0s3", "eno1", "ens3"];
-    for interface in &fallback_interfaces {
-        if std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists() {
-            debug!("Found fallback Ethernet interface: {}", interface);
-            return interface.to_string();
-        }
-    }
-
-    debug!("No Ethernet interface found, using default: eth0");
-    "eth0".to_string()
 }

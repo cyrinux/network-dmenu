@@ -13,9 +13,10 @@ pub fn is_port_listening(port: u16) -> bool {
     let ipv4_addr = format!("127.0.0.1:{}", port);
     let ipv6_addr = format!("[::1]:{}", port);
 
-    // If we can't bind to the port, it means something else is using it
-    let ipv4_in_use = TcpListener::bind(&ipv4_addr).is_err();
-    let ipv6_in_use = TcpListener::bind(&ipv6_addr).is_err();
+    // Only an AddrInUse error means something is listening; other errors
+    // (e.g. IPv6 loopback unavailable) must not be mistaken for a listener.
+    let ipv4_in_use = is_addr_in_use(&ipv4_addr);
+    let ipv6_in_use = is_addr_in_use(&ipv6_addr);
 
     let is_listening = ipv4_in_use || ipv6_in_use;
 
@@ -25,6 +26,12 @@ pub fn is_port_listening(port: u16) -> bool {
     );
 
     is_listening
+}
+
+/// True only when the bind fails because the address is already taken.
+/// Other errors (e.g. no IPv6 loopback) must not count as "in use".
+fn is_addr_in_use(addr: &str) -> bool {
+    matches!(TcpListener::bind(addr), Err(e) if e.kind() == std::io::ErrorKind::AddrInUse)
 }
 
 /// Check if a process is listening on any of the specified ports
@@ -42,18 +49,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_port_checking_with_invalid_port() {
-        // Test with a very high port number that's unlikely to be in use
-        let result = is_port_listening(65432);
-        // This should return false for most systems
-        assert!(!result || result); // Either false or true is acceptable
+    fn test_port_listening_detects_bound_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        assert!(is_port_listening(port));
+        drop(listener);
+        assert!(!is_port_listening(port));
     }
 
     #[test]
-    fn test_multiple_port_checking() {
-        let ports = [65430, 65431, 65432];
-        let result = is_any_port_listening(&ports);
-        // Should return false for these high port numbers
-        assert!(!result || result); // Either false or true is acceptable
+    fn test_any_port_listening() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let free = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        assert!(is_any_port_listening(&[free, port]));
+        assert!(!is_any_port_listening(&[]));
     }
 }

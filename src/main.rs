@@ -2,8 +2,8 @@ mod streaming;
 
 // Import modules from the library crate
 use network_dmenu::{
-    bluetooth, command, constants, diagnostics, iwd, logger, networkmanager, nextdns, rfkill, ssh,
-    utils, SshProxyConfig, TorsocksConfig,
+    bluetooth, command, constants, diagnostics, format_entry, iwd, logger, networkmanager, nextdns,
+    rfkill, ssh, utils, SshProxyConfig, TorsocksConfig,
 };
 
 #[cfg(feature = "firewalld")]
@@ -192,15 +192,6 @@ enum WifiAction {
 enum VpnAction {
     Connect(String),
     Disconnect(String),
-}
-
-/// Formats an entry for display in the menu.
-pub fn format_entry(action: &str, icon: &str, text: &str) -> String {
-    if icon.is_empty() {
-        format!("{action:<10}- {text}")
-    } else {
-        format!("{action:<10}- {icon} {text}")
-    }
 }
 
 /// Helper function for serde default value
@@ -990,49 +981,6 @@ async fn handle_system_action(
     result
 }
 
-/// Parses a VPN action string to extract the connection name.
-pub fn parse_vpn_action(action: &str) -> Result<&str, Box<dyn std::error::Error>> {
-    let emoji_pos = action
-        .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶')
-        .map(|(i, _)| i)
-        .ok_or("Emoji not found in action")?;
-
-    // Use unwrap_or to handle cases where there might not be a next character
-    let first_char = action[emoji_pos..].chars().next().unwrap_or(' ');
-    let name_start = emoji_pos + first_char.len_utf8();
-    let name = action[name_start..].trim();
-
-    if name.is_empty() {
-        return Err("No name found after emoji".into());
-    }
-
-    Ok(name)
-}
-
-/// Parses a Wi-Fi action string to extract the SSID and security type.
-pub fn parse_wifi_action(action: &str) -> Result<(&str, &str), Box<dyn Error>> {
-    let emoji_pos = action
-        .char_indices()
-        .find(|(_, c)| *c == '✅' || *c == '📶' || *c == '❌')
-        .map(|(i, _)| i)
-        .ok_or("Emoji not found in action")?;
-
-    let tab_pos = action[emoji_pos..]
-        .char_indices()
-        .find(|(_, c)| *c == '\t')
-        .map(|(i, _)| i + emoji_pos)
-        .ok_or("Tab character not found in action")?;
-
-    let ssid = action[emoji_pos + 4..tab_pos].trim();
-    let parts: Vec<&str> = action[tab_pos + 1..].split('\t').collect();
-    if parts.len() < 2 {
-        return Err("Action format is incorrect".into());
-    }
-    let security = parts[0].trim();
-    Ok((ssid, security))
-}
-
 /// Handles a VPN action, such as connecting or disconnecting.
 async fn handle_vpn_action(
     action: &VpnAction,
@@ -1359,25 +1307,87 @@ async fn set_action(
     }
 }
 
-/// Sends a notification about the connection.
-pub fn notify_connection(summary: &str, name: &str) -> Result<(), Box<dyn Error>> {
-    let _e = Notification::new()
-        .summary(summary)
-        .body(&format!("Connected to {name}"))
-        .show();
+/// Validate configuration file syntax and structure
+async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    debug!(
+        "🔍 Checking if config file exists: {}",
+        config_path.display()
+    );
 
-    if let Err(ref e) = _e {
-        error!("Failed to show notification: {}", e);
+    if !config_path.exists() {
+        return Err(format!("Configuration file not found: {}", config_path.display()).into());
     }
 
-    // We don't want to propagate notification errors to the caller
-    // as notifications are not critical for functionality
+    debug!("📖 Reading configuration file");
+    let config_content = fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    if config_content.trim().is_empty() {
+        return Err("Configuration file is empty".into());
+    }
+
+    debug!("🔍 Parsing TOML syntax");
+    // First check basic TOML syntax
+    let parsed_toml: toml::Value =
+        toml::from_str(&config_content).map_err(|e| format!("Invalid TOML syntax: {}", e))?;
+
+    debug!("✅ TOML syntax is valid");
+
+    // Try to parse as our Config structure
+    debug!("🔍 Validating configuration structure");
+    let _config: Config = toml::from_str(&config_content)
+        .map_err(|e| format!("Invalid configuration structure: {}", e))?;
+
+    debug!("✅ Configuration structure is valid");
+
+    // Validate custom actions if present
+    if let Some(actions_table) = parsed_toml.get("actions") {
+        if let Some(actions_array) = actions_table.as_array() {
+            debug!("🔍 Validating {} custom actions", actions_array.len());
+            for (i, action) in actions_array.iter().enumerate() {
+                validate_custom_action(action, i)?;
+            }
+        } else {
+            return Err("actions must be an array".into());
+        }
+    }
+
+    println!("✅ Configuration file validation completed successfully");
+    Ok(())
+}
+
+/// Validate a single custom action configuration
+fn validate_custom_action(action: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
+    let action_table = action
+        .as_table()
+        .ok_or_else(|| format!("Action {} must be a table", index))?;
+
+    // Check required fields
+    if !action_table.contains_key("display") {
+        return Err(format!("Action {} missing required 'display' field", index).into());
+    }
+
+    if !action_table.contains_key("cmd") {
+        return Err(format!("Action {} missing required 'cmd' field", index).into());
+    }
+
+    // Validate field types
+    if !action_table.get("display").unwrap().is_str() {
+        return Err(format!("Action {} 'display' field must be a string", index).into());
+    }
+
+    if !action_table.get("cmd").unwrap().is_str() {
+        return Err(format!("Action {} 'cmd' field must be a string", index).into());
+    }
+
+    debug!("✅ Action {} configuration is valid", index);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use network_dmenu::{parse_vpn_action, parse_wifi_action};
 
     #[test]
     fn test_format_entry_with_icon() {
@@ -1478,6 +1488,7 @@ mod tests {
         assert_eq!(result, "system    - 📶 Turn OFF airplane mode");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_set_exit_node() {
         #[cfg(feature = "tailscale")]
@@ -1489,16 +1500,15 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_disable_exit_node() {
-        #[cfg(feature = "tailscale")]
-        {
-            let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
-            let result = action_to_string(&action);
-            assert!(result.contains("Disable exit node"));
-        }
+        let action = ActionType::Tailscale(TailscaleAction::DisableExitNode);
+        let result = action_to_string(&action);
+        assert!(result.contains(TAILSCALE_DISABLE_EXIT_NODE));
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_enable() {
         let action = ActionType::Tailscale(TailscaleAction::SetEnable(true));
@@ -1506,6 +1516,7 @@ mod tests {
         assert_eq!(result, "tailscale - ✅ Enable tailscale");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_disable() {
         let action = ActionType::Tailscale(TailscaleAction::SetEnable(false));
@@ -1513,6 +1524,7 @@ mod tests {
         assert_eq!(result, "tailscale - ❌ Disable tailscale");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_shields_up() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(true));
@@ -1520,6 +1532,7 @@ mod tests {
         assert_eq!(result, "tailscale - 🚫 Block incoming connections");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_shields_down() {
         let action = ActionType::Tailscale(TailscaleAction::SetShields(false));
@@ -1716,6 +1729,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_show_lock_status() {
         let action = ActionType::Tailscale(TailscaleAction::ShowLockStatus);
@@ -1723,6 +1737,7 @@ mod tests {
         assert_eq!(result, "tailscale - 🔒 Show Tailscale Lock Status");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_list_locked_nodes() {
         let action = ActionType::Tailscale(TailscaleAction::ListLockedNodes);
@@ -1730,6 +1745,7 @@ mod tests {
         assert_eq!(result, "tailscale - 📋 List Locked Nodes");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_action_to_string_tailscale_sign_locked_node() {
         let action = ActionType::Tailscale(TailscaleAction::SignLockedNode("abcd1234".to_string()));
@@ -1779,6 +1795,7 @@ mod tests {
         assert_eq!(result, "diagnostic- 🔍 DNS Benchmark & Optimize");
     }
 
+    #[cfg(feature = "tailscale")]
     #[test]
     fn test_exit_node_filter_config_override() {
         // Test that command-line args override config file settings
@@ -1860,81 +1877,4 @@ mod tests {
             _ => panic!("Expected TestConnectivity action"),
         }
     }
-}
-
-/// Validate configuration file syntax and structure
-async fn validate_config_file(config_path: &std::path::Path) -> Result<(), Box<dyn Error>> {
-    debug!(
-        "🔍 Checking if config file exists: {}",
-        config_path.display()
-    );
-
-    if !config_path.exists() {
-        return Err(format!("Configuration file not found: {}", config_path.display()).into());
-    }
-
-    debug!("📖 Reading configuration file");
-    let config_content = fs::read_to_string(config_path)
-        .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-    if config_content.trim().is_empty() {
-        return Err("Configuration file is empty".into());
-    }
-
-    debug!("🔍 Parsing TOML syntax");
-    // First check basic TOML syntax
-    let parsed_toml: toml::Value =
-        toml::from_str(&config_content).map_err(|e| format!("Invalid TOML syntax: {}", e))?;
-
-    debug!("✅ TOML syntax is valid");
-
-    // Try to parse as our Config structure
-    debug!("🔍 Validating configuration structure");
-    let _config: Config = toml::from_str(&config_content)
-        .map_err(|e| format!("Invalid configuration structure: {}", e))?;
-
-    debug!("✅ Configuration structure is valid");
-
-    // Validate custom actions if present
-    if let Some(actions_table) = parsed_toml.get("actions") {
-        if let Some(actions_array) = actions_table.as_array() {
-            debug!("🔍 Validating {} custom actions", actions_array.len());
-            for (i, action) in actions_array.iter().enumerate() {
-                validate_custom_action(action, i)?;
-            }
-        } else {
-            return Err("actions must be an array".into());
-        }
-    }
-
-    println!("✅ Configuration file validation completed successfully");
-    Ok(())
-}
-
-/// Validate a single custom action configuration
-fn validate_custom_action(action: &toml::Value, index: usize) -> Result<(), Box<dyn Error>> {
-    let action_table = action
-        .as_table()
-        .ok_or_else(|| format!("Action {} must be a table", index))?;
-
-    // Check required fields
-    if !action_table.contains_key("display") {
-        return Err(format!("Action {} missing required 'display' field", index).into());
-    }
-
-    if !action_table.contains_key("cmd") {
-        return Err(format!("Action {} missing required 'cmd' field", index).into());
-    }
-
-    // Validate field types
-    if !action_table.get("display").unwrap().is_str() {
-        return Err(format!("Action {} 'display' field must be a string", index).into());
-    }
-
-    if !action_table.get("cmd").unwrap().is_str() {
-        return Err(format!("Action {} 'cmd' field must be a string", index).into());
-    }
-
-    debug!("✅ Action {} configuration is valid", index);
-    Ok(())
 }
