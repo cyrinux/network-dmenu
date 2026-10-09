@@ -333,7 +333,7 @@ pub fn get_mullvad_actions(
     let mut nodes_by_city: HashMap<String, Vec<&TailscalePeer>> = HashMap::new();
 
     // Filter for Mullvad exit nodes
-    for (_, peer) in status.peer.iter() {
+    for peer in status.peer.values() {
         // Basic filter conditions
         if !peer.dns_name.contains("mullvad.ts.net")
             || !peer.exit_node_option
@@ -1458,10 +1458,9 @@ fn parse_locked_node_line(line: &str) -> Option<LockedNode> {
     let (hostname, rest) = if let Some(pos) = before_key.find(".net.") {
         let end = pos + ".net.".len();
         (&before_key[..end], &before_key[end..])
-    } else if let Some(pos) = before_key.find('\t') {
-        (&before_key[..pos], &before_key[pos + 1..])
     } else {
-        return None;
+        let pos = before_key.find('\t')?;
+        (&before_key[..pos], &before_key[pos + 1..])
     };
 
     let hostname = hostname.trim();
@@ -1591,7 +1590,7 @@ pub fn sign_all_locked_nodes(
     let signing_key = get_signing_key(command_runner, state)?;
 
     #[cfg(debug_assertions)]
-    println!("Got signing key: {}", &signing_key);
+    println!("Got signing key: {}", signing_key);
 
     // Get all locked nodes using state if provided
     let locked_nodes = get_locked_nodes(command_runner, state)?;
@@ -1613,7 +1612,7 @@ pub fn sign_all_locked_nodes(
             "Signing node {}/{}: {} ({})",
             _i + 1,
             total_nodes,
-            &node.hostname,
+            node.hostname,
             &node.node_key[..8]
         );
 
@@ -1632,10 +1631,10 @@ pub fn sign_all_locked_nodes(
         if result {
             success_count += 1;
             #[cfg(debug_assertions)]
-            println!("Successfully signed node {}", &node.hostname);
+            println!("Successfully signed node {}", node.hostname);
         } else {
             #[cfg(debug_assertions)]
-            println!("Failed to sign node {}", &node.hostname);
+            println!("Failed to sign node {}", node.hostname);
         }
     }
 
