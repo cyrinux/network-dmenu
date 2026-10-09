@@ -713,7 +713,7 @@ async fn send_tailscale_actions_simple(
                         let _ = tx.send(ActionType::Tailscale(TailscaleAction::SignAllNodes));
 
                         for node in locked_nodes {
-                            debug!("Adding sign action for node: {}", &node.node_key);
+                            debug!("Adding sign action for node: {}", node.node_key);
                             let _ = tx.send(ActionType::Tailscale(
                                 TailscaleAction::SignLockedNode(node.node_key),
                             ));
