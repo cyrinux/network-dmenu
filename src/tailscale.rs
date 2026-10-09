@@ -1,4 +1,4 @@
-use crate::command::{is_command_installed, CommandRunner};
+use crate::command::CommandRunner;
 use crate::constants::{ICON_CHECK, ICON_STAR, MULLVAD_CONNECTED_API, SUGGESTED_CHECK};
 use crate::format_entry;
 use crate::utils::get_flag;
@@ -927,9 +927,9 @@ pub async fn handle_tailscale_action(
     notification_sender: Option<&dyn NotificationSender>,
     tailscale_state: Option<&TailscaleState>,
 ) -> Result<bool, Box<dyn Error>> {
-    if !is_command_installed("tailscale") {
-        return Ok(false);
-    }
+    // Tailscale actions are only offered when the binary is installed
+    // (see streaming.rs), so the handler relies on the CommandRunner alone.
+    // This keeps it testable with a mock runner on hosts without tailscale.
 
     // Only create the state when needed by specific actions
     let need_state = matches!(
