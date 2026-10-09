@@ -2,29 +2,44 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  check:
+    name: Lint and test
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libssl-dev pkg-config
 
-    - name: Setup cross
-      run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-    - name: Build
-      run: cross build --verbose
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-    - name: Run tests
-      run: cross test --verbose
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (no default features)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Test (default features)
+        run: cargo test
+
+      - name: Test (no default features)
+        run: cargo test --no-default-features
